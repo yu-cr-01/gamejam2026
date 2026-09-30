@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Game Jam 首次组会 TodoList</title>
+<style>
+  @page { size: A4; margin: 15mm 14mm 14mm 14mm; }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    font-size: 10.2pt;
+    line-height: 1.62;
+    color: #1f2328;
+    margin: 0;
+  }
+
+  /* ---------- 封面标题 ---------- */
+  .cover {
+    border: 1px solid #d8dee4;
+    border-radius: 6px;
+    padding: 16px 20px 14px;
+    margin-bottom: 16px;
+    background: #fbfcfd;
+  }
+  .cover h1 {
+    font-size: 22pt;
+    margin: 0 0 6px;
+    letter-spacing: 0.5px;
+    color: #0b3b38;
+  }
+  .cover .sub {
+    font-size: 10.5pt;
+    color: #57606a;
+    margin: 0;
+  }
+  .cover .meta {
+    margin-top: 10px;
+    padding-top: 9px;
+    border-top: 1px dashed #d8dee4;
+    font-size: 9.2pt;
+    color: #6b7280;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  /* ---------- 章节 ---------- */
+  h2 {
+    font-size: 13.2pt;
+    margin: 19px 0 8px;
+    padding: 5px 0 5px 10px;
+    border-left: 4px solid #00b3a4;
+    background: linear-gradient(90deg, #eefaf8 0%, rgba(238,250,248,0) 85%);
+    color: #0b3b38;
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  h3 {
+    font-size: 11.2pt;
+    margin: 13px 0 5px;
+    color: #0f6b62;
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* ---------- 勾选列表 ---------- */
+  ul.tasks {
+    list-style: none;
+    margin: 4px 0 6px;
+    padding: 0;
+  }
+  ul.tasks li {
+    position: relative;
+    padding-left: 19px;
+    margin: 2.2px 0;
+    break-inside: avoid;
+  }
+  ul.tasks li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.44em;
+    width: 9px;
+    height: 9px;
+    border: 1.3px solid #7a8794;
+    border-radius: 2px;
+    background: #fff;
+  }
+  ul.tasks li.done::before {
+    background: #00b3a4;
+    border-color: #00b3a4;
+  }
+
+  ul.plain {
+    margin: 4px 0 6px;
+    padding-left: 20px;
+  }
+  ul.plain li { margin: 2px 0; }
+
+  /* ---------- 代码 / 示意图 ---------- */
+  pre {
+    background: #f6f8fa;
+    border: 1px solid #e1e4e8;
+    border-left: 3px solid #b8c2cc;
+    border-radius: 4px;
+    padding: 8px 11px;
+    margin: 7px 0 9px;
+    font-family: Consolas, "Courier New", "Microsoft YaHei", monospace;
+    font-size: 9.1pt;
+    line-height: 1.5;
+    white-space: pre;
+    overflow: visible;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  code {
+    background: #f0f3f6;
+    padding: 0.5px 4px;
+    border-radius: 3px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 9.3pt;
+  }
+
+  /* ---------- 表格 ---------- */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 7px 0 10px;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  th, td {
+    border: 1px solid #d0d7de;
+    padding: 5px 9px;
+    font-size: 9.8pt;
+    text-align: left;
+  }
+  th { background: #eef1f4; font-weight: 600; }
+  tbody tr:nth-child(even) { background: #fafbfc; }
+
+  /* ---------- 引用 / 强调 ---------- */
+  blockquote {
+    margin: 7px 0 9px;
+    padding: 7px 13px;
+    border-left: 3px solid #d0d7de;
+    background: #fafbfc;
+    color: #3d444d;
+    break-inside: avoid;
+  }
+  blockquote p { margin: 0; }
+
+  strong { color: #0b3b38; }
+  .note { color: #57606a; font-size: 9.8pt; margin: 5px 0; }
+
+  /* ---------- 结尾重点框 ---------- */
+  .final {
+    border: 1.5px solid #00b3a4;
+    border-radius: 6px;
+    padding: 12px 16px 10px;
+    margin: 16px 0 10px;
+    background: #f2fbfa;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .final h2 {
+    border-left: none;
+    background: none;
+    padding: 0;
+    margin: 0 0 8px;
+    font-size: 13pt;
+  }
+  .final .quote {
+    margin-top: 10px;
+    padding-top: 9px;
+    border-top: 1px dashed #9fd9d3;
+    font-size: 10.6pt;
+  }
+
+  .agenda-table td:first-child {
+    width: 88px;
+    font-weight: 600;
+    color: #0f6b62;
+    white-space: nowrap;
+  }
+  .warn {
+    background: #fff8e6;
+    border: 1px solid #f2d98a;
+    border-left: 4px solid #e8b53a;
+    border-radius: 4px;
+    padding: 9px 13px;
+    margin: 11px 0;
+    break-inside: avoid;
+  }
+  .warn p { margin: 0; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>Game Jam 首次组会 TodoList</h1>
+  <p class="sub">21 天限时创作 · 团队生产管线搭建清单</p>
+  <div class="meta">
+    <span>会议时长：45～60 分钟</span>
+    <span>核心目标：主题公布前，把管线先搭好</span>
+  </div>
+</div>
+
+<h2>一、团队基本信息</h2>
+
+<h3>1. 确定工作室 / 队伍名称</h3>
+<ul class="tasks">
+  <li>队名 / 工作室名</li>
+  <li>英文名（如需要）</li>
+  <li>Logo / 头像</li>
+  <li>队伍介绍一句话</li>
+  <li>确定队长</li>
+  <li>确定对外统一使用的名称</li>
+</ul>
+
+<h3>2. 确定团队目标</h3>
+<ul class="tasks">
+  <li>这次 Game Jam 想做到什么程度？</li>
+  <li>第一目标：完成一个完整可玩的游戏</li>
+  <li>第二目标：作品质量 / 技术亮点</li>
+  <li>第三目标：作品集 / 后续继续开发</li>
+  <li>明确原则：<strong>先完成 MVP，再追求表现</strong></li>
+</ul>
+
+<h2>二、确定技术栈</h2>
+
+<h3>3. 游戏引擎</h3>
+<ul class="tasks">
+  <li><strong>Unity</strong></li>
+  <li>确认 Unity 具体版本</li>
+  <li>所有人安装相同版本</li>
+  <li>确认渲染管线：Built-in / URP / HDRP</li>
+  <li>确定使用的插件</li>
+  <li>确认插件版本</li>
+  <li>不允许个人私自更换核心版本</li>
+</ul>
+
+<h3>4. 开发工具</h3>
+<ul class="tasks">
+  <li>Visual Studio / Rider</li>
+  <li>Git</li>
+  <li>GitHub / Gitee / GitLab</li>
+  <li>Discord / QQ / 微信群 / 飞书</li>
+  <li>Notion / 飞书多维表格 / Trello / GitHub Projects</li>
+  <li>网盘备用</li>
+</ul>
+
+<h2>三、确定“怎么共享开发”</h2>
+
+<h3>5. 代码协作</h3>
+<ul class="tasks">
+  <li>建立 Git 仓库</li>
+  <li>配置 Unity <code>.gitignore</code></li>
+  <li>所有人 clone 项目</li>
+  <li>所有人成功运行项目</li>
+  <li>测试一次 Pull / Commit / Push</li>
+  <li>测试一次分支合并</li>
+  <li>确定 Git 分支策略</li>
+</ul>
+<p class="note">建议：</p>
+<pre>main
+  │
+  ├── develop
+  │
+  ├── feature/player
+  ├── feature/enemy
+  ├── feature/ui
+  └── feature/system</pre>
+<ul class="tasks">
+  <li><code>main</code> 只放可运行版本</li>
+  <li>每个人尽量在自己的 feature 分支工作</li>
+  <li>完成功能后合并</li>
+  <li>合并前自己测试</li>
+  <li>每天至少提交一次</li>
+</ul>
+
+<h3>6. Unity 资源协作</h3>
+<ul class="tasks">
+  <li>Scene 谁负责</li>
+  <li>Prefab 谁负责</li>
+  <li>Script 谁负责</li>
+  <li>VFX 谁负责</li>
+  <li>Materials 谁负责</li>
+  <li>ScriptableObject 谁负责</li>
+  <li>避免多人同时修改同一个 Scene / Prefab</li>
+  <li>确定资源命名规范</li>
+  <li>确定目录结构</li>
+</ul>
+<p class="note">建议：</p>
+<pre>Assets/
+├── Art/
+├── Characters/
+├── Environment/
+├── VFX/
+├── Materials/
+├── Audio/
+├── Prefabs/
+├── Scenes/
+├── Scripts/
+├── UI/
+└── Resources/</pre>
+
+<h3>7. 电脑 / 编辑器共享</h3>
+<ul class="tasks">
+  <li>平时以 Git 为主</li>
+  <li>需要一起写代码时使用 Live Share</li>
+  <li>看 Unity 编辑器 / Game View 时使用 Discord / 腾讯会议共享屏幕</li>
+  <li>不把 Live Share 当 Git 替代品</li>
+</ul>
+
+<h2>四、美术资源怎么做</h2>
+
+<h3>8. 确定美术生产渠道</h3>
+<p class="note">讨论并确定主要来源：</p>
+<ul class="tasks">
+  <li>自制</li>
+  <li>免费开源素材</li>
+  <li>商用素材包</li>
+  <li>AI 辅助生成</li>
+  <li>Blender / Photoshop / Krita / Substance Painter</li>
+  <li>Asset Store</li>
+  <li>其他资源站</li>
+</ul>
+
+<h3>9. 美术资源管理</h3>
+<ul class="tasks">
+  <li>所有第三方素材记录来源</li>
+  <li>记录许可证 / 商用授权</li>
+  <li>记录下载链接</li>
+  <li>AI 生成素材做好记录</li>
+  <li>确定最终哪些资源进入游戏</li>
+  <li>不允许随便使用来源不明素材</li>
+</ul>
+
+<h3>10. 美术风格统一</h3>
+<ul class="tasks">
+  <li>整体画风</li>
+  <li>色彩方向</li>
+  <li>光照方向</li>
+  <li>UI 风格</li>
+  <li>VFX 风格</li>
+  <li>模型风格</li>
+  <li>是否使用统一参考图</li>
+</ul>
+<p class="note">最好在第一天建立：</p>
+<blockquote><p><strong>Art Bible / 美术规范</strong></p></blockquote>
+<p class="note">哪怕只有一页。</p>
+
+<h2>五、TA 流程怎么做</h2>
+
+<h3>11. TA 负责什么</h3>
+<p class="note">TA 不应该只是“帮忙做特效”。明确 TA 的职责：</p>
+<ul class="tasks">
+  <li>Shader</li>
+  <li>VFX</li>
+  <li>Material</li>
+  <li>美术资源导入规范</li>
+  <li>Prefab 制作</li>
+  <li>参数暴露</li>
+  <li>技术验证</li>
+  <li>性能优化</li>
+  <li>工具开发</li>
+  <li>美术与程序之间的衔接</li>
+</ul>
+
+<h3>12. TA 工作方式</h3>
+<p class="note">建议：</p>
+<pre>策划需求
+↓
+TA拆技术方案
+↓
+快速 Prototype
+↓
+程序接入
+↓
+美术补资源
+↓
+TA整合
+↓
+优化
+↓
+最终效果</pre>
+
+<h3>13. TA 第一优先级</h3>
+<ul class="tasks">
+  <li>不要一开始就做复杂工具</li>
+  <li>先让核心效果跑起来</li>
+  <li>能参数化的参数化</li>
+  <li>能复用的做成 Prefab / Material / ScriptableObject</li>
+  <li>后期统一处理性能</li>
+</ul>
+
+<h2>六、策划框架怎么建立</h2>
+
+<h3>14. 游戏设计文档</h3>
+<p class="note">建立一份最小 GDD：</p>
+<ul class="tasks">
+  <li>游戏一句话介绍</li>
+  <li>核心玩法</li>
+  <li>核心循环</li>
+  <li>玩家目标</li>
+  <li>游戏规则</li>
+  <li>胜负条件</li>
+  <li>关卡流程</li>
+  <li>玩家成长</li>
+  <li>数值</li>
+  <li>UI</li>
+  <li>音频</li>
+  <li>美术需求</li>
+  <li>技术需求</li>
+</ul>
+
+<h3>15. 核心循环必须写清楚</h3>
+<pre>玩家做什么
+↓
+得到什么反馈
+↓
+获得什么奖励 / 结果
+↓
+产生什么新的挑战
+↓
+继续下一轮</pre>
+
+<h3>16. MVP</h3>
+<p class="note">必须明确：</p>
+<ul class="tasks">
+  <li>什么是“没有它游戏就不能玩”</li>
+  <li>什么是“有了更好”</li>
+  <li>什么是“时间够再做”</li>
+</ul>
+<p class="note">分成：</p>
+<pre>P0：必须做
+P1：应该做
+P2：有时间再做</pre>
+
+<h2>七、任务怎么下发</h2>
+
+<h3>17. 建任务看板</h3>
+<p class="note">建议使用：</p>
+<pre>Backlog
+↓
+Todo
+↓
+Doing
+↓
+Review
+↓
+Done</pre>
+
+<h3>18. 每个任务必须包含</h3>
+<ul class="tasks">
+  <li>任务名称</li>
+  <li>负责人</li>
+  <li>截止时间</li>
+  <li>优先级</li>
+  <li>依赖项</li>
+  <li>最终交付物</li>
+  <li>验收标准</li>
+</ul>
+<p class="note">例如：</p>
+<pre>任务：玩家移动
+
+负责人：程序A
+优先级：P0
+截止：明天 14:00
+
+完成标准：
+□ WASD移动
+□ 摄像机跟随
+□ 不穿墙
+□ 可以打包运行</pre>
+
+<h3>19. 任务不要写得太大</h3>
+<p class="note">不要：</p>
+<blockquote><p>“做战斗系统”</p></blockquote>
+<p class="note">拆成：</p>
+<pre>玩家攻击
+敌人受伤
+伤害计算
+死亡
+掉落
+战斗 UI</pre>
+<p class="note">每个任务尽量做到<strong>一个人 0.5～1 天可以完成</strong>。</p>
+
+<h2>八、会议频率</h2>
+
+<h3>20. 正式会议</h3>
+<p class="note">建议：<strong>每天一次 15～30 分钟站会</strong>，只回答三个问题：</p>
+<pre>昨天做了什么？
+今天做什么？
+有没有卡点？</pre>
+
+<h3>21. 阶段会议</h3>
+<p class="note">遇到重要节点再开长会：</p>
+<ul class="tasks">
+  <li>选题会议</li>
+  <li>MVP 确认</li>
+  <li>第一版 Prototype</li>
+  <li>First Playable</li>
+  <li>Alpha</li>
+  <li>Beta</li>
+  <li>最终提交</li>
+</ul>
+
+<h3>22. 紧急会议</h3>
+<p class="note">只有出现以下情况才临时开：</p>
+<ul class="tasks">
+  <li>核心技术卡死</li>
+  <li>玩法大改</li>
+  <li>时间严重不足</li>
+  <li>核心成员任务阻塞</li>
+  <li>发现无法按期完成</li>
+</ul>
+<p class="note">原则：</p>
+<blockquote><p><strong>能在群里解决的问题，不专门开会。</strong></p></blockquote>
+
+<h2>九、明确分工</h2>
+
+<h3>23. 每个人确定主职 + 副职</h3>
+<p class="note">例如：</p>
+<table>
+  <thead>
+    <tr><th style="width:22%">成员</th><th style="width:39%">主职</th><th style="width:39%">副职</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>A</td><td>程序</td><td>系统设计</td></tr>
+    <tr><td>B</td><td>程序</td><td>工具</td></tr>
+    <tr><td>C</td><td>TA / 特效</td><td>Shader</td></tr>
+    <tr><td>D</td><td>3D / 美术</td><td>UI</td></tr>
+    <tr><td>E</td><td>策划</td><td>数值 / 关卡</td></tr>
+  </tbody>
+</table>
+
+<h3>24. 明确负责人制度</h3>
+<p class="note">每个模块必须只有一个最终负责人：</p>
+<pre>战斗系统 → A
+UI → B
+VFX → C
+角色 → D
+关卡 → E</pre>
+<p class="note">其他人可以协助，但：</p>
+<blockquote><p><strong>最后谁负责验收，必须明确。</strong></p></blockquote>
+
+<h2>十、版本与备份</h2>
+
+<h3>25. 每天保留稳定版本</h3>
+<ul class="tasks">
+  <li>main 永远可运行</li>
+  <li>每天至少一个稳定 Build</li>
+  <li>Build 编号</li>
+  <li>重要节点打 Git Tag</li>
+  <li>每天备份项目</li>
+  <li>提交前测试</li>
+  <li>最终提交前冻结版本</li>
+</ul>
+<p class="note">建议：</p>
+<pre>v0.1 Prototype
+v0.2 Core Loop
+v0.5 Alpha
+v0.8 Beta
+v1.0 Final</pre>
+
+<h2>十一、开发规范</h2>
+
+<h3>26. 确定最低规范</h3>
+<ul class="tasks">
+  <li>文件命名</li>
+  <li>GameObject 命名</li>
+  <li>Script 命名</li>
+  <li>Prefab 命名</li>
+  <li>Git Commit 规范</li>
+  <li>文件夹结构</li>
+  <li>TODO 标记方式</li>
+  <li>Bug 提交方式</li>
+</ul>
+
+<h3>27. 禁止事项</h3>
+<ul class="tasks">
+  <li>不提交 Unity 缓存文件</li>
+  <li>不直接覆盖别人工作</li>
+  <li>不偷偷修改核心架构</li>
+  <li>不在最后一天第一次测试</li>
+  <li>不因为“以后可能用到”无限加功能</li>
+</ul>
+
+<h2>十二、项目管理最重要的一条</h2>
+
+<h3>28. 每天都要有一个“可玩的版本”</h3>
+<p class="note">不要：</p>
+<pre>第1周：全部在做资源
+第2周：全部在接系统
+第3周：发现根本没串起来</pre>
+<p class="note">应该：</p>
+<pre>Day 1
+核心玩法 Prototype
+
+Day 3
+最小可玩版本
+
+Day 7
+完整核心循环
+
+Day 12
+Alpha
+
+Day 16
+Beta
+
+最后几天
+只修Bug + 打磨</pre>
+
+<div class="final">
+  <h2>十三、今晚会议最终必须产出的东西</h2>
+  <p class="note">会议结束前，必须确认：</p>
+  <ul class="tasks">
+    <li>队名</li>
+    <li>队长</li>
+    <li>成员名单</li>
+    <li>Unity 版本</li>
+    <li>Git 仓库</li>
+    <li>协作工具</li>
+    <li>美术资源来源渠道</li>
+    <li>TA 工作方式</li>
+    <li>策划文档位置</li>
+    <li>任务看板</li>
+    <li>分工</li>
+    <li>会议频率</li>
+    <li>Git / 资源规范</li>
+    <li>备份方案</li>
+    <li>明天第一批任务</li>
+  </ul>
+  <p class="note">最后每个人必须说清楚</p>
+  <p class="quote"><strong>“我负责什么、明天第一件事做什么、明天结束前交付什么。”</strong></p>
+</div>
+
+<h2>今晚会议推荐顺序</h2>
+<p class="note"><strong>总时长：45～60 分钟</strong></p>
+<table class="agenda-table">
+  <tbody>
+    <tr><td>5 min</td><td>队名 / 队长 / 目标</td></tr>
+    <tr><td>5 min</td><td>Unity / Git / 协作工具</td></tr>
+    <tr><td>10 min</td><td>美术 / TA / 策划流程</td></tr>
+    <tr><td>10 min</td><td>分工</td></tr>
+    <tr><td>10 min</td><td>任务系统</td></tr>
+    <tr><td>5 min</td><td>会议频率</td></tr>
+    <tr><td>5 min</td><td>明天任务</td></tr>
+  </tbody>
+</table>
+
+<div class="warn">
+  <p><strong>不要在今晚花 30 分钟讨论一个还没公布的 Game Jam 主题。</strong></p>
+</div>
+
+<p>主题明天 12:00 才公布，今晚最有价值的是把<strong>团队生产管线搭起来</strong>，这样主题一出来，你们可以直接进入：</p>
+
+<pre>主题
+↓
+头脑风暴
+↓
+选方案
+↓
+MVP
+↓
+任务拆解
+↓
+开工</pre>
+
+</body>
+</html>
