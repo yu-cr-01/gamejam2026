@@ -4,28 +4,31 @@ using GameJam.Data;
 
 namespace GameJam.Prototype
 {
-    /// <summary>游戏阶段。顺序即流程图顺序。</summary>
+    /// <summary>游戏阶段。</summary>
     public enum GameFlowState
     {
-        MainMenu,     // 主菜单
-        DeckSelect,   // 三选一牌组
-        BladeSelect,  // 选刀片
-        TurnStart,    // 回合开始：显示手牌，等玩家选一个
-        Simulating,   // 投放后：模拟运行
-        TurnResult,   // 回合结算
-        LevelEnd,     // 关卡结束
-        LevelResult,  // 关卡结算
+        MainMenu,
+        /// <summary>通用选择环节 —— 关卡声明几个就跑几个，不再为每种选择各写一个状态</summary>
+        Choice,
+        TurnStart,
+        Simulating,
+        TurnResult,
+        LevelEnd,
+        LevelResult,
     }
 
     /// <summary>
     /// 骨架原型：只有文字和按钮，没有图片、动画、音效。
     ///
-    /// 用 IMGUI（OnGUI）而不是 UGUI，好处是：
-    ///   1. 不需要 Canvas / EventSystem / Prefab / 场景，空场景直接能跑
-    ///   2. 整个原型只有代码，版本管理和合并都干净
-    /// 等玩法定下来再换成正式 UI。
+    /// 【这一版的关键改动】
+    /// 旧版状态机里写死了 DeckSelect / BladeSelect 两个状态，
+    /// 换成"五选二食材"就得改状态机。
     ///
-    /// 运行方式见 Assets/Scripts/Prototype/PrototypeBootstrap.cs
+    /// 现在只有一个通用的 Choice 状态：它按顺序遍历 LevelData.choices，
+    /// 每个选择跑完记进 SelectionLog，全部跑完后才由"选择记录"反推出
+    /// 本局要用哪副牌组、哪个刀片 —— 状态机不需要认识"牌组"这个概念。
+    ///
+    /// 用 IMGUI 而不是 UGUI：不需要 Canvas / Prefab / 场景文件，空场景按 Play 就能跑。
     /// </summary>
     [DisallowMultipleComponent]
     public class GameFlow : MonoBehaviour
@@ -34,29 +37,30 @@ namespace GameJam.Prototype
         public GameFlowState State { get; private set; }
 
         private List<Deck> decks;
-        private Deck selectedDeck;
         private LevelData level;
         private TurnState turn;
+        private SelectionLog selections;
+
+        private int choiceIndex;          // 当前跑到第几个选择环节
+        private string pendingPickId;     // 当前选择环节里暂选的项（用于"下一步"确认）
         private string lastPlayed = "";
 
         // ── 界面样式 ──────────────────────────────────────────────────
         private Font cjkFont;
-        private GUIStyle h1, h2, body, btn;
+        private GUIStyle h1, h2, body, btn, btnPicked, dim;
         private Vector2 scroll;
 
         // ─────────────────────────────────────────────────────────────
-        void Awake()
-        {
-            ResetAll();
-        }
+        void Awake() { ResetAll(); }
 
-        /// <summary>回到初始状态。</summary>
         public void ResetAll()
         {
-            decks = FakeData.AllDecks();
-            selectedDeck = null;
-            level = null;
+            decks = FakeData.BuildDecks();
+            level = FakeData.BuildLevel(decks);
             turn = new TurnState();
+            selections = new SelectionLog();
+            choiceIndex = 0;
+            pendingPickId = "";
             lastPlayed = "";
             State = GameFlowState.MainMenu;
             scroll = Vector2.zero;
@@ -68,8 +72,70 @@ namespace GameJam.Prototype
             scroll = Vector2.zero;
         }
 
+        private Choice CurrentChoice { get { return level != null ? level.ChoiceAt(choiceIndex) : null; } }
+
+        // ── 选择流程 ──────────────────────────────────────────────────
+
+        /// <summary>确认当前选择环节的某一项，然后进入下一个环节。</summary>
+        private void ConfirmChoice(string optionId)
+        {
+            Choice c = CurrentChoice;
+            if (c == null) return;
+
+            selections.Record(c.id, 0, optionId);
+            pendingPickId = "";
+            choiceIndex++;
+
+            if (choiceIndex >= level.ChoiceCount)
+            {
+                StartLevelFromSelections();
+                GoTo(GameFlowState.TurnStart);
+            }
+            else
+            {
+                GoTo(GameFlowState.Choice);   // 还有下一个选择环节
+            }
+        }
+
+        /// <summary>
+        /// 所有选择跑完后，从选择记录里反推本局配置。
+        /// 这里不硬编码 "deck_pick" —— 只找"被选中的、带牌组的选项"。
+        /// 所以关卡想改成第 3 个环节才选牌组，这段代码也不用动。
+        /// </summary>
+        private void StartLevelFromSelections()
+        {
+            turn.StartLevel(level, ResolvePickedDeck(), ResolvePickedBlade());
+        }
+
+        private Deck ResolvePickedDeck()
+        {
+            foreach (Choice c in level.choices)
+            {
+                List<string> picks = selections.Picks(c.id);
+                for (int i = 0; i < picks.Count; i++)
+                {
+                    ChoiceOption o = c.Find(picks[i]);
+                    if (o != null && o.deck != null) return o.deck;
+                }
+            }
+            return decks.Count > 0 ? decks[0] : null;   // 兜底
+        }
+
+        private Ingredient ResolvePickedBlade()
+        {
+            foreach (Choice c in level.choices)
+            {
+                List<string> picks = selections.Picks(c.id);
+                for (int i = 0; i < picks.Count; i++)
+                {
+                    ChoiceOption o = c.Find(picks[i]);
+                    if (o != null && o.ingredient != null) return o.ingredient;
+                }
+            }
+            return FakeData.DefaultBlade();              // 兜底：默认铁块
+        }
+
         // ── 样式 / 中文字体 ───────────────────────────────────────────
-        // Unity 内置 GUI 字体不含中文字形，不换字体的话中文会显示成方块。
         private void EnsureStyles()
         {
             if (cjkFont == null)
@@ -84,30 +150,22 @@ namespace GameJam.Prototype
 
             if (h1 == null)
             {
-                h1 = new GUIStyle(GUI.skin.label);
-                h1.fontSize = 30;
-                h1.fontStyle = FontStyle.Bold;
-                h1.wordWrap = true;
+                h1 = new GUIStyle(GUI.skin.label)  { fontSize = 30, fontStyle = FontStyle.Bold, wordWrap = true };
+                h2 = new GUIStyle(GUI.skin.label)  { fontSize = 21, fontStyle = FontStyle.Bold, wordWrap = true };
+                body = new GUIStyle(GUI.skin.label){ fontSize = 17, wordWrap = true };
+                dim  = new GUIStyle(GUI.skin.label){ fontSize = 15, wordWrap = true };
+                dim.normal.textColor = new Color(0.62f, 0.66f, 0.74f);
 
-                h2 = new GUIStyle(GUI.skin.label);
-                h2.fontSize = 22;
-                h2.fontStyle = FontStyle.Bold;
-
-                body = new GUIStyle(GUI.skin.label);
-                body.fontSize = 18;
-                body.wordWrap = true;
-
-                btn = new GUIStyle(GUI.skin.button);
-                btn.fontSize = 19;
-                btn.wordWrap = true;
-
-                btn.alignment = TextAnchor.MiddleLeft;
-                btn.padding = new RectOffset(16, 16, 8, 8);
+                btn = new GUIStyle(GUI.skin.button) { fontSize = 18, wordWrap = true,
+                                                      alignment = TextAnchor.MiddleLeft,
+                                                      padding = new RectOffset(16, 16, 8, 8) };
+                btnPicked = new GUIStyle(btn);
+                btnPicked.normal.textColor = new Color(0.35f, 0.95f, 0.60f);
 
                 if (cjkFont != null)
                 {
-                    h1.font = cjkFont; h2.font = cjkFont;
-                    body.font = cjkFont; btn.font = cjkFont;
+                    h1.font = cjkFont; h2.font = cjkFont; body.font = cjkFont;
+                    dim.font = cjkFont; btn.font = cjkFont; btnPicked.font = cjkFont;
                 }
             }
         }
@@ -117,8 +175,7 @@ namespace GameJam.Prototype
             switch (s)
             {
                 case GameFlowState.MainMenu:    return "主菜单";
-                case GameFlowState.DeckSelect:  return "三选一牌组";
-                case GameFlowState.BladeSelect: return "选刀片";
+                case GameFlowState.Choice:      return "选择环节";
                 case GameFlowState.TurnStart:   return "回合开始";
                 case GameFlowState.Simulating:  return "模拟中";
                 case GameFlowState.TurnResult:  return "回合结算";
@@ -133,19 +190,20 @@ namespace GameJam.Prototype
         {
             EnsureStyles();
 
-            float w = Mathf.Max(520f, Screen.width - 60f);
+            float w = Mathf.Max(560f, Screen.width - 60f);
             float h = Mathf.Max(400f, Screen.height - 60f);
             GUILayout.BeginArea(new Rect(30f, 30f, w, h));
             scroll = GUILayout.BeginScrollView(scroll);
 
-            GUILayout.Label("【当前阶段】" + StateLabel(State), h2);
+            GUILayout.Label("【当前阶段】" + StateLabel(State)
+                            + (State == GameFlowState.Choice && level != null
+                               ? "　（第 " + (choiceIndex + 1) + " / " + level.ChoiceCount + " 个）" : ""), h2);
             GUILayout.Space(14f);
 
             switch (State)
             {
                 case GameFlowState.MainMenu:    DrawMainMenu();    break;
-                case GameFlowState.DeckSelect:  DrawDeckSelect();  break;
-                case GameFlowState.BladeSelect: DrawBladeSelect(); break;
+                case GameFlowState.Choice:      DrawChoice();      break;
                 case GameFlowState.TurnStart:   DrawTurnStart();   break;
                 case GameFlowState.Simulating:  DrawSimulating();  break;
                 case GameFlowState.TurnResult:  DrawTurnResult();  break;
@@ -162,80 +220,73 @@ namespace GameJam.Prototype
         private void DrawMainMenu()
         {
             GUILayout.Label("主菜单", h1);
-            GUILayout.Label("骨架原型：只验证流程能否走通，数值和结算都是假的。", body);
-            GUILayout.Space(24f);
+            GUILayout.Label("骨架原型：只验证流程，数值和结算都是假的。", body);
+            GUILayout.Space(10f);
+            GUILayout.Label("关卡：" + level.name + "　目标分 " + level.targetScore
+                            + "　选择环节 " + level.ChoiceCount + " 个", dim);
+            GUILayout.Space(20f);
 
             if (GUILayout.Button("开始游戏", btn, GUILayout.Height(52f)))
             {
-                GoTo(GameFlowState.DeckSelect);
+                choiceIndex = 0;
+                pendingPickId = "";
+                GoTo(GameFlowState.Choice);
             }
         }
 
-        private void DrawDeckSelect()
+        /// <summary>通用选择界面 —— 任何 Choice 都用它渲染。</summary>
+        private void DrawChoice()
         {
-            GUILayout.Label("三选一牌组", h1);
-            GUILayout.Space(10f);
+            Choice c = CurrentChoice;
+            if (c == null) { GUILayout.Label("（没有更多选择环节）", body); return; }
 
-            for (int i = 0; i < decks.Count; i++)
+            GUILayout.Label(c.prompt, h1);
+            if (!string.IsNullOrEmpty(c.hint)) GUILayout.Label(c.hint, dim);
+            GUILayout.Space(14f);
+
+            ChoiceOption def = c.DefaultOption;
+
+            for (int i = 0; i < c.options.Count; i++)
             {
-                Deck d = decks[i];
-                GUILayout.Label(d.deckName, h2);
-                GUILayout.Label("    食材：" + IngredientNames(d.ingredients), body);
-                if (d.speedModule != null)
+                ChoiceOption o = c.options[i];
+                if (o == null) continue;
+
+                bool picked = (o.id == pendingPickId) || (string.IsNullOrEmpty(pendingPickId) && def == o);
+                string label = (picked ? "▶ " : "　") + o.title
+                               + (string.IsNullOrEmpty(o.subtitle) ? "" : "\n　　" + o.subtitle);
+
+                GUIStyle st = picked ? btnPicked : btn;
+                if (GUILayout.Button(label, st, GUILayout.Height(string.IsNullOrEmpty(o.subtitle) ? 46f : 62f)))
                 {
-                    GUILayout.Label("    变速模块：" + d.speedModule.name
-                                    + "（" + d.speedModule.description + "）", body);
+                    ConfirmChoice(o.id);   // 点一下即确认并进入下一环节
+                    return;
                 }
-                GUILayout.Space(4f);
+            }
 
-                if (GUILayout.Button("选牌组 " + d.deckName.Replace("牌组 ", ""), btn, GUILayout.Height(46f)))
+            // 有默认项时，允许直接"下一步"接受默认（任务书要求：选刀片，默认铁块 → 下一步）
+            if (def != null)
+            {
+                GUILayout.Space(12f);
+                if (GUILayout.Button("下一步（当前：" + def.title + "）", btn, GUILayout.Height(52f)))
                 {
-                    selectedDeck = d.Clone();
-                    level = FakeData.BuildLevel(selectedDeck);
-                    turn.StartLevel(level, selectedDeck, FakeData.IronBlock());
-                    GoTo(GameFlowState.BladeSelect);
+                    ConfirmChoice(def.id);
                 }
-                GUILayout.Space(18f);
-            }
-        }
-
-        private void DrawBladeSelect()
-        {
-            GUILayout.Label("选刀片，默认铁块", h1);
-            GUILayout.Label("当前刀片：" + turn.BladeName()
-                            + "（硬度 " + (turn.currentBlade != null ? turn.currentBlade.hardness : 0) + "）", body);
-            if (turn.speedModule != null)
-            {
-                GUILayout.Label("变速模块：" + turn.speedModule.name
-                                + " → " + turn.speedModule.description, body);
-            }
-            GUILayout.Space(12f);
-
-            DrawDataPanel();
-
-            GUILayout.Space(16f);
-            if (GUILayout.Button("下一步", btn, GUILayout.Height(52f)))
-            {
-                GoTo(GameFlowState.TurnStart);
             }
         }
 
         private void DrawTurnStart()
         {
             GUILayout.Label("回合 " + turn.turnNumber + "，手牌：" + turn.HandNames(), h1);
-            GUILayout.Label("刀片：" + turn.BladeName()
-                            + "    杯内：" + turn.CupNames()
-                            + "    得分：" + turn.currentScore, body);
+            GUILayout.Label("刀片：" + turn.BladeName() + "（实际硬度 " + turn.BladeHardness() + "）"
+                            + "　　杯内：" + turn.CupNames()
+                            + "　　得分：" + turn.score, body);
             GUILayout.Space(14f);
 
             if (turn.hand.Count == 0)
             {
                 GUILayout.Label("手牌已空。", body);
                 GUILayout.Space(10f);
-                if (GUILayout.Button("下一回合", btn, GUILayout.Height(52f)))
-                {
-                    GoTo(GameFlowState.LevelEnd);
-                }
+                if (GUILayout.Button("下一回合", btn, GUILayout.Height(52f))) GoTo(GameFlowState.LevelEnd);
                 return;
             }
 
@@ -245,13 +296,13 @@ namespace GameJam.Prototype
             for (int i = 0; i < turn.hand.Count; i++)
             {
                 Ingredient ing = turn.hand[i];
-                if (GUILayout.Button(Describe(ing), btn, GUILayout.Height(46f)))
+                string label = ing.name + "\n　　" + ing.attrs.DescribeAll();
+                if (GUILayout.Button(label, btn, GUILayout.Height(64f)))
                 {
-                    turn.hand.RemoveAt(i);
-                    turn.cupIngredients.Add(ing);
-                    lastPlayed = ing.name;
+                    Ingredient played = turn.PlayFromHand(i);
+                    lastPlayed = played != null ? played.name : "";
                     GoTo(GameFlowState.Simulating);
-                    break;   // 列表已被修改，必须立刻跳出
+                    return;
                 }
             }
 
@@ -263,39 +314,26 @@ namespace GameJam.Prototype
         {
             GUILayout.Label("模拟中…", h1);
             GUILayout.Label("本回合打出：" + lastPlayed, body);
-            GUILayout.Label("今天不做真实模拟，点一下直接进结算。", body);
+            GUILayout.Label("今天不做真实模拟，点一下直接进结算。", dim);
             GUILayout.Space(24f);
 
-            if (GUILayout.Button("回合结束", btn, GUILayout.Height(52f)))
-            {
-                GoTo(GameFlowState.TurnResult);
-            }
+            if (GUILayout.Button("回合结束", btn, GUILayout.Height(52f))) GoTo(GameFlowState.TurnResult);
         }
 
         private void DrawTurnResult()
         {
-            GUILayout.Label("回合结算，得分 " + turn.currentScore, h1);
+            GUILayout.Label("回合结算，得分 " + turn.score, h1);
             GUILayout.Label("本回合得分固定为 0（今天不做数值）。", body);
             GUILayout.Label("剩余手牌：" + turn.HandNames(), body);
             GUILayout.Label("杯内食材：" + turn.CupNames(), body);
             GUILayout.Space(18f);
 
-            if (turn.IsHandEmpty)
-            {
-                GUILayout.Label("手牌已空 —— 再点一次将结束本关。", body);
-            }
+            if (turn.IsHandEmpty) GUILayout.Label("手牌已空 —— 再点一次将结束本关。", body);
 
             if (GUILayout.Button("下一回合", btn, GUILayout.Height(52f)))
             {
-                if (turn.IsHandEmpty)
-                {
-                    GoTo(GameFlowState.LevelEnd);
-                }
-                else
-                {
-                    turn.NextTurn();
-                    GoTo(GameFlowState.TurnStart);
-                }
+                if (turn.IsHandEmpty) GoTo(GameFlowState.LevelEnd);
+                else { turn.NextTurn(); GoTo(GameFlowState.TurnStart); }
             }
         }
 
@@ -304,71 +342,62 @@ namespace GameJam.Prototype
             GUILayout.Label("关卡结束", h1);
             GUILayout.Label("手牌已空。", body);
             GUILayout.Space(24f);
-
-            if (GUILayout.Button("查看结算", btn, GUILayout.Height(52f)))
-            {
-                GoTo(GameFlowState.LevelResult);
-            }
+            if (GUILayout.Button("查看结算", btn, GUILayout.Height(52f))) GoTo(GameFlowState.LevelResult);
         }
 
         private void DrawLevelResult()
         {
-            bool passed = turn.currentScore >= turn.targetScore;
-            GUILayout.Label("总分 " + turn.currentScore + " / 目标分 " + turn.targetScore
+            bool passed = turn.score >= turn.targetScore;
+            GUILayout.Label("总分 " + turn.score + " / 目标分 " + turn.targetScore
                             + "，" + (passed ? "通过" : "失败"), h1);
-            GUILayout.Space(24f);
+            GUILayout.Space(18f);
 
-            if (GUILayout.Button("回主菜单", btn, GUILayout.Height(52f)))
-            {
-                ResetAll();
-            }
+            DrawSelectionLog();
+
+            GUILayout.Space(18f);
+            if (GUILayout.Button("回主菜单", btn, GUILayout.Height(52f))) ResetAll();
         }
 
-        // ── 辅助 ─────────────────────────────────────────────────────
-
-        /// <summary>食材的完整属性，用于"能看到假数据"。</summary>
-        private static string Describe(Ingredient ing)
-        {
-            return ing.name
-                 + "    硬度 " + ing.hardness
-                 + " · 温度 " + ing.temperature
-                 + " · 酸性 " + ing.acidity
-                 + " · 糖分 " + ing.sugar
-                 + " · 油脂 " + ing.oil
-                 + " · 水分 " + ing.water;
-        }
-
-        private static string IngredientNames(Ingredient[] arr)
-        {
-            if (arr == null || arr.Length == 0) return "（空）";
-            List<string> names = new List<string>();
-            foreach (Ingredient i in arr) { if (i != null) names.Add(i.name); }
-            return string.Join("、", names.ToArray());
-        }
+        // ── 数据面板（演示解耦后的结构）───────────────────────────────
 
         private void DrawDataPanel()
         {
-            if (selectedDeck == null) return;
+            GUILayout.Label("── 当前数据 ──", h2);
 
-            GUILayout.Label("── 假数据 ──", h2);
-            GUILayout.Label("所选牌组：" + selectedDeck.deckName, body);
-
-            if (selectedDeck.ingredients != null)
+            Deck d = ResolvePickedDeck();
+            if (d != null)
             {
-                foreach (Ingredient ing in selectedDeck.ingredients)
+                GUILayout.Label("牌组：" + d.name + "　（" + d.DescribeIngredients() + "）", body);
+                for (int i = 0; i < d.modules.Count; i++)
                 {
-                    if (ing != null) GUILayout.Label("    " + Describe(ing), body);
+                    SpeedModule m = d.modules[i];
+                    GUILayout.Label("　变速模块：" + m.name + "　效果组合 → " + m.Description(), body);
                 }
             }
-            if (selectedDeck.speedModule != null)
+
+            if (!turn.activeEffects.IsEmpty)
+                GUILayout.Label("本局效果组合：" + turn.activeEffects.Describe(), body);
+        }
+
+        private void DrawSelectionLog()
+        {
+            GUILayout.Label("── 选择记录（SelectionLog）──", h2);
+            if (selections.Count == 0) { GUILayout.Label("（无）", dim); return; }
+
+            for (int i = 0; i < selections.records.Count; i++)
             {
-                SpeedModule m = selectedDeck.speedModule;
-                GUILayout.Label("    变速模块：" + m.name
-                                + "    影响属性：" + m.targetAttribute
-                                + "    数值：" + m.value, body);
+                ChoiceRecord r = selections.records[i];
+                if (r == null) continue;
+                Choice c = level.FindChoice(r.choiceId);
+                string names = "";
+                for (int k = 0; k < r.pickedOptionIds.Count; k++)
+                {
+                    ChoiceOption o = c != null ? c.Find(r.pickedOptionIds[k]) : null;
+                    if (k > 0) names += "、";
+                    names += (o != null ? o.title : r.pickedOptionIds[k]);
+                }
+                GUILayout.Label("　" + (c != null ? c.prompt : r.choiceId) + " → " + names, body);
             }
-            GUILayout.Label("关卡：" + (level != null ? level.levelName : "—")
-                            + "    目标分：" + (level != null ? level.targetScore : 0), body);
         }
     }
 }
