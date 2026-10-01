@@ -72,17 +72,19 @@ namespace GameJam.Data
             return null;
         }
 
-        /// <summary>默认候选。没配 defaultOptionId 时退回第一个可选项。</summary>
+        /// <summary>
+        /// 默认候选 —— 只认显式配置的 defaultOptionId。
+        ///
+        /// 【注意】没配就是没配，不要退回第一个可选项。
+        /// 之前退回第一个，导致"三选一牌组"这种没有默认项的选择
+        /// 也会把牌组 A 标成已选，界面看起来像只有它被选上了。
+        /// </summary>
         public ChoiceOption DefaultOption
         {
             get
             {
-                ChoiceOption d = Find(defaultOptionId);
-                if (d != null) return d;
-                if (options != null)
-                    for (int i = 0; i < options.Count; i++)
-                        if (options[i] != null && options[i].enabled) return options[i];
-                return null;
+                if (string.IsNullOrEmpty(defaultOptionId)) return null;
+                return Find(defaultOptionId);
             }
         }
 

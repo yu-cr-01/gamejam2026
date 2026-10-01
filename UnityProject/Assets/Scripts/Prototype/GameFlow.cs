@@ -42,7 +42,7 @@ namespace GameJam.Prototype
         private SelectionLog selections;
 
         private int choiceIndex;          // 当前跑到第几个选择环节
-        private string pendingPickId;     // 当前选择环节里暂选的项（用于"下一步"确认）
+        private List<string> pendingPicks = new List<string>();  // 本环节已勾选项（单选也会先放进来再确认）
         private string lastPlayed = "";
 
         // ── 界面样式 ──────────────────────────────────────────────────
@@ -60,7 +60,7 @@ namespace GameJam.Prototype
             turn = new TurnState();
             selections = new SelectionLog();
             choiceIndex = 0;
-            pendingPickId = "";
+            pendingPicks.Clear();
             lastPlayed = "";
             State = GameFlowState.MainMenu;
             scroll = Vector2.zero;
@@ -76,14 +76,14 @@ namespace GameJam.Prototype
 
         // ── 选择流程 ──────────────────────────────────────────────────
 
-        /// <summary>确认当前选择环节的某一项，然后进入下一个环节。</summary>
-        private void ConfirmChoice(string optionId)
+        /// <summary>确认当前选择环节，然后进入下一个环节。多选时传多个 id。</summary>
+        private void ConfirmChoice(params string[] optionIds)
         {
             Choice c = CurrentChoice;
             if (c == null) return;
 
-            selections.Record(c.id, 0, optionId);
-            pendingPickId = "";
+            selections.Record(c.id, 0, optionIds);
+            pendingPicks.Clear();
             choiceIndex++;
 
             if (choiceIndex >= level.ChoiceCount)
@@ -95,6 +95,27 @@ namespace GameJam.Prototype
             {
                 GoTo(GameFlowState.Choice);   // 还有下一个选择环节
             }
+        }
+
+        /// <summary>点一个候选项。单选=选中并立即确认；多选=切换勾选状态。</summary>
+        private void OnOptionClicked(Choice c, ChoiceOption o)
+        {
+            if (c.pickCount <= 1)
+            {
+                ConfirmChoice(o.id);
+                return;
+            }
+
+            if (pendingPicks.Contains(o.id)) pendingPicks.Remove(o.id);
+            else if (pendingPicks.Count < c.pickCount) pendingPicks.Add(o.id);
+        }
+
+        /// <summary>这个候选项当前是否处于"已选"状态。</summary>
+        private bool IsPicked(Choice c, ChoiceOption o)
+        {
+            if (pendingPicks.Contains(o.id)) return true;
+            if (pendingPicks.Count > 0) return false;    // 已有手选，就不再显示默认态
+            return c.DefaultOption == o;
         }
 
         /// <summary>
@@ -229,7 +250,7 @@ namespace GameJam.Prototype
             if (GUILayout.Button("开始游戏", btn, GUILayout.Height(52f)))
             {
                 choiceIndex = 0;
-                pendingPickId = "";
+                pendingPicks.Clear();
                 GoTo(GameFlowState.Choice);
             }
         }
@@ -240,36 +261,57 @@ namespace GameJam.Prototype
             Choice c = CurrentChoice;
             if (c == null) { GUILayout.Label("（没有更多选择环节）", body); return; }
 
+            bool multi = c.pickCount > 1;
+
             GUILayout.Label(c.prompt, h1);
             if (!string.IsNullOrEmpty(c.hint)) GUILayout.Label(c.hint, dim);
+            GUILayout.Label(multi
+                ? "需要选 " + c.pickCount + " 项　已选 " + pendingPicks.Count + " 项"
+                : "单选 —— 点一项即确认进入下一步", dim);
             GUILayout.Space(14f);
-
-            ChoiceOption def = c.DefaultOption;
 
             for (int i = 0; i < c.options.Count; i++)
             {
                 ChoiceOption o = c.options[i];
                 if (o == null) continue;
 
-                bool picked = (o.id == pendingPickId) || (string.IsNullOrEmpty(pendingPickId) && def == o);
-                string label = (picked ? "▶ " : "　") + o.title
+                // 每一项都有标记：单选 ○/●，多选 □/■
+                // （用几何符号而不是 ☐☑，后者在中文字体里常常缺字形会显示成方块）
+                bool picked = IsPicked(c, o);
+                string mark = multi ? (picked ? "■ " : "□ ") : (picked ? "● " : "○ ");
+                string label = mark + o.title
                                + (string.IsNullOrEmpty(o.subtitle) ? "" : "\n　　" + o.subtitle);
 
                 GUIStyle st = picked ? btnPicked : btn;
-                if (GUILayout.Button(label, st, GUILayout.Height(string.IsNullOrEmpty(o.subtitle) ? 46f : 62f)))
+                if (GUILayout.Button(label, st, GUILayout.Height(string.IsNullOrEmpty(o.subtitle) ? 46f : 64f)))
                 {
-                    ConfirmChoice(o.id);   // 点一下即确认并进入下一环节
-                    return;
+                    OnOptionClicked(c, o);
+                    return;   // 状态可能已变，本帧不再继续绘制
                 }
             }
 
-            // 有默认项时，允许直接"下一步"接受默认（任务书要求：选刀片，默认铁块 → 下一步）
-            if (def != null)
+            GUILayout.Space(12f);
+
+            // 单选且配了默认项：允许直接接受默认
+            // （任务书要求：选刀片，默认铁块 → 点"下一步"即可）
+            ChoiceOption def = c.DefaultOption;
+            if (!multi && def != null && pendingPicks.Count == 0)
             {
-                GUILayout.Space(12f);
                 if (GUILayout.Button("下一步（当前：" + def.title + "）", btn, GUILayout.Height(52f)))
-                {
                     ConfirmChoice(def.id);
+            }
+
+            // 多选：选满才允许确认
+            if (multi)
+            {
+                if (pendingPicks.Count == c.pickCount)
+                {
+                    if (GUILayout.Button("下一步（已选 " + pendingPicks.Count + " 项）", btn, GUILayout.Height(52f)))
+                        ConfirmChoice(pendingPicks.ToArray());
+                }
+                else
+                {
+                    GUILayout.Label("还需选 " + (c.pickCount - pendingPicks.Count) + " 项才能继续", dim);
                 }
             }
         }
