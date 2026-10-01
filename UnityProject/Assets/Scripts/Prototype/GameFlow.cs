@@ -42,9 +42,15 @@ namespace GameJam.Prototype
         private SelectionLog selections;
 
         private int choiceIndex;          // 当前跑到第几个选择环节
-        private int highlightIndex;       // ↑↓ 光标所在项
+        private int highlightIndex;       // 当前选中项（键盘光标 / 鼠标悬停 / 点击 都改它）
         private List<string> pendingPicks = new List<string>();  // 本环节已勾选项（多选时用）
         private string lastPlayed = "";
+
+        // 鼠标悬停判定用：IMGUI 拿不到"当前帧的矩形"，只能记录上一帧的，
+        // 这是 IMGUI 里做 hover 的标准做法。
+        private Rect[] optionRects = new Rect[0];
+        private Vector2 lastMousePos = new Vector2(-1f, -1f);
+        private bool mouseMoved;
 
         // ── 界面样式 ──────────────────────────────────────────────────
         private Font cjkFont;
@@ -120,8 +126,11 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
-        /// 处理 ↑↓ / Enter 键盘操作。
-        /// 返回 true 表示状态已变，调用方应立即停止本帧绘制。
+        /// 处理键盘：↑↓ 只移动光标，Enter / 空格 才确认。
+        ///
+        /// 返回 true 表示这次按键产生了状态变化。
+        /// 注意 DrawChoice 拿到返回值也不会提前 return —— 提前返回会让本帧绘制的
+        /// 元素数量和 Layout/Repaint 不一致，IMGUI 会报 GUILayout 不匹配。
         /// </summary>
         private bool HandleChoiceKeys(Choice c)
         {
@@ -148,12 +157,20 @@ namespace GameJam.Prototype
             if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter ||
                 e.keyCode == KeyCode.Space)
             {
-                if (highlightIndex < 0 || highlightIndex >= n) return false;
-                ChoiceOption o = c.options[highlightIndex];
-                if (o == null) return false;
-
                 e.Use();
-                OnOptionClicked(c, o);
+
+                if (c.pickCount <= 1)
+                {
+                    // 单选：确认光标所在项
+                    if (highlightIndex < 0 || highlightIndex >= n) return false;
+                    ChoiceOption o = c.options[highlightIndex];
+                    if (o != null) ConfirmChoice(o.id);
+                }
+                else if (pendingPicks.Count == c.pickCount)
+                {
+                    // 多选：勾满才允许确认
+                    ConfirmChoice(pendingPicks.ToArray());
+                }
                 return true;
             }
             return false;
@@ -311,28 +328,59 @@ namespace GameJam.Prototype
             }
         }
 
-        /// <summary>通用选择界面 —— 任何 Choice 都用它渲染。支持 ↑↓ + Enter 与鼠标点击。</summary>
+        /// <summary>
+        /// 通用选择界面。
+        ///
+        /// 选中：↑↓ 移动 / 鼠标悬停 / 鼠标点击 —— 三者改的都是同一个 highlightIndex，
+        ///       也就是"鼠标挪到哪就选中哪，不用再按一次才选中"。
+        /// 确认：Enter 或「下一步」按钮。
+        /// </summary>
         private void DrawChoice()
         {
             Choice c = CurrentChoice;
             if (c == null) { GUILayout.Label("（没有更多选择环节）", body); return; }
 
             bool multi = c.pickCount > 1;
+            int n = c.options.Count;
+
+            // ── 鼠标是否移动过 ──
+            // 只在 Repaint 事件里比较一次鼠标位置。这样"悬停改选中"只在鼠标真的动了的时候生效，
+            // 否则鼠标停在某一项上不动时，键盘 ↑↓ 会被悬停判定不断拽回去。
+            if (Event.current.type == EventType.Repaint)
+            {
+                mouseMoved = (Event.current.mousePosition != lastMousePos);
+                lastMousePos = Event.current.mousePosition;
+            }
+
+            // ── 悬停改选中 ──
+            // IMGUI 在 Layout 阶段拿不到矩形，所以用上一帧记录的矩形做判定，这是标准做法。
+            if (mouseMoved && Event.current.type != EventType.Layout && optionRects.Length == n)
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    if (optionRects[i].Contains(Event.current.mousePosition))
+                    {
+                        if (highlightIndex != i) highlightIndex = i;
+                        break;
+                    }
+                }
+            }
 
             GUILayout.Label(c.prompt, h1);
             if (!string.IsNullOrEmpty(c.hint)) GUILayout.Label(c.hint, dim);
 
-            // 先处理键盘。注意这里不 return —— 提前返回会让本帧绘制的元素数量
-            // 和 Layout/Repaint 不一致，IMGUI 会报 GUILayout 不匹配。
-            // 状态变化在下一个事件（Repaint）里自然生效。
+            // 键盘只移动光标，不直接跳转 —— 跳转交给确认动作
             HandleChoiceKeys(c);
 
             GUILayout.Label(multi
-                ? "□/■ 勾选　需选 " + c.pickCount + " 项（已选 " + pendingPicks.Count + "）"
-                : "↑↓ 切换　Enter 确认　也可以直接鼠标点击", dim);
+                ? "鼠标移到哪就选哪　↑↓ 移动　　□■ 勾选，需选 " + c.pickCount
+                  + " 项（已选 " + pendingPicks.Count + "）　　Enter 确认"
+                : "鼠标移到哪就选哪　↑↓ 移动　　Enter / 点击 确认", dim);
             GUILayout.Space(14f);
 
-            for (int i = 0; i < c.options.Count; i++)
+            if (optionRects.Length != n) optionRects = new Rect[n];
+
+            for (int i = 0; i < n; i++)
             {
                 ChoiceOption o = c.options[i];
                 if (o == null) continue;
@@ -350,7 +398,10 @@ namespace GameJam.Prototype
 
                 GUIStyle st = (multi ? isChecked : isCursor) ? btnPicked : btn;
 
-                if (GUILayout.Button(label, st, GUILayout.Height(string.IsNullOrEmpty(o.subtitle) ? 46f : 64f)))
+                float hgt = string.IsNullOrEmpty(o.subtitle) ? 46f : 64f;
+                optionRects[i] = GUILayoutUtility.GetRect(0f, hgt, GUILayout.ExpandWidth(true));
+
+                if (GUI.Button(optionRects[i], label, st))
                 {
                     highlightIndex = i;
                     GUI.FocusControl(null);      // 清掉按钮焦点，否则 Space/Enter 会二次触发
@@ -361,18 +412,7 @@ namespace GameJam.Prototype
 
             GUILayout.Space(12f);
 
-            // 单选且配了默认项：允许直接接受默认
-            ChoiceOption def = c.DefaultOption;
-            if (!multi && def != null && pendingPicks.Count == 0)
-            {
-                if (GUILayout.Button("下一步（当前：" + def.title + "）", btn, GUILayout.Height(52f)))
-                {
-                    GUI.FocusControl(null);
-                    ConfirmChoice(def.id);
-                }
-            }
-
-            // 多选：选满才允许确认
+            // ── 确认按钮 ──
             if (multi)
             {
                 if (pendingPicks.Count == c.pickCount)
@@ -386,6 +426,22 @@ namespace GameJam.Prototype
                 else
                 {
                     GUILayout.Label("还需选 " + (c.pickCount - pendingPicks.Count) + " 项才能继续", dim);
+                }
+            }
+            else
+            {
+                ChoiceOption def = c.DefaultOption;
+                ChoiceOption cur = (highlightIndex >= 0 && highlightIndex < n) ? c.options[highlightIndex] : def;
+                if (cur != null)
+                {
+                    string tag = (def != null && cur == def)
+                               ? "（默认：" + cur.title + "）"
+                               : "（当前：" + cur.title + "）";
+                    if (GUILayout.Button("下一步" + tag, btn, GUILayout.Height(52f)))
+                    {
+                        GUI.FocusControl(null);
+                        ConfirmChoice(cur.id);
+                    }
                 }
             }
         }
