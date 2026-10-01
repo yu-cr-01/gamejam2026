@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>流程原型预览 · 骨架版</title>
+<style>
+  :root{
+    --bg:#12141a; --panel:#1b1e26; --line:#2c313d; --fg:#e8eaf0; --dim:#8b93a7;
+    --accent:#4ea1ff; --accent2:#2d7dd2; --warn:#ffb454; --ok:#4ade80;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100vh; background:var(--bg); color:var(--fg);
+    font-family:"Microsoft YaHei","PingFang SC",system-ui,-apple-system,sans-serif;
+    display:flex; flex-direction:column; align-items:center; padding:24px 16px 48px;
+  }
+  .wrap{width:100%;max-width:760px}
+  .bar{
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    font-size:13px;color:var(--dim);margin-bottom:14px;
+  }
+  .badge{
+    background:#232733;border:1px solid var(--line);border-radius:999px;
+    padding:3px 12px;font-size:12px;color:var(--accent);
+  }
+  .panel{
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:26px 26px 22px;
+  }
+  h1{font-size:24px;margin:0 0 6px;line-height:1.35}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 22px;line-height:1.7}
+  button{
+    display:block;width:100%;text-align:left;margin:8px 0;
+    background:#232733;color:var(--fg);border:1px solid var(--line);
+    border-radius:10px;padding:14px 16px;font-size:15px;line-height:1.5;
+    font-family:inherit;cursor:pointer;transition:.12s;
+  }
+  button:hover{background:#2b3140;border-color:var(--accent);transform:translateX(2px)}
+  button:active{transform:translateX(2px) scale(.995)}
+  button.primary{background:var(--accent2);border-color:var(--accent)}
+  button.primary:hover{background:var(--accent)}
+  .deck{margin:14px 0 6px;padding:14px 16px;background:#1f232d;border-radius:10px;border:1px solid var(--line)}
+  .deck h3{margin:0 0 8px;font-size:16px;color:var(--accent)}
+  .deck p{margin:3px 0;font-size:13.5px;color:var(--dim);line-height:1.6}
+  .card{
+    display:flex;justify-content:space-between;gap:12px;align-items:center;
+    background:#232733;border:1px solid var(--line);border-radius:10px;
+    padding:12px 16px;margin:8px 0;cursor:pointer;transition:.12s;
+  }
+  .card:hover{background:#2b3140;border-color:var(--accent)}
+  .card .nm{font-size:15px;font-weight:600}
+  .card .st{font-size:12.5px;color:var(--dim);text-align:right;line-height:1.6}
+  .data{margin-top:20px;padding-top:16px;border-top:1px dashed var(--line)}
+  .data h4{margin:0 0 8px;font-size:13px;color:var(--dim);font-weight:600;letter-spacing:.5px}
+  .data p{margin:3px 0;font-size:12.5px;color:var(--dim);font-family:ui-monospace,Consolas,monospace}
+  .fail{color:var(--warn)}
+  .pass{color:var(--ok)}
+  .foot{margin-top:20px;font-size:12px;color:var(--dim);text-align:center;line-height:1.8}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="bar">
+    <span class="badge" id="stateBadge">主菜单</span>
+    <span id="turnBadge"></span>
+    <span style="margin-left:auto">骨架原型 · 仅验证流程</span>
+  </div>
+
+  <div class="panel" id="panel"></div>
+
+  <div class="foot">
+    对应任务：搭建项目骨架 + 定义数据结构 + 跑通状态切换<br>
+    无图片 / 动画 / 音效，结算固定为 0
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// 1. 数据结构（与 Unity 版 Assets/Scripts/Data/ 一一对应）
+// ═══════════════════════════════════════════════════════════
+const F = (name, hardness, temperature, acidity, sugar, oil, water) =>
+  ({ name, hardness, temperature, acidity, sugar, oil, water });
+
+// 名字 硬度 温度 酸性 糖分 油脂 水分
+const ING = {
+  铁块:   F("铁块",   10,   0,  0,  0,  0,  0),
+  冰块:   F("冰块",    8, -15,  0,  0,  0, 10),
+  柠檬:   F("柠檬",    3,  20,  9,  0,  0,  8),
+  巧克力: F("巧克力",  4,  25,  1,  7,  6,  2),
+  辣椒:   F("辣椒",    3,  22,  3,  2,  1,  7),
+  硬糖:   F("硬糖",    9,  20,  1, 10,  0,  1),
+  牛奶:   F("牛奶",    1,   5,  2,  4,  4, 10),
+  咖啡豆: F("咖啡豆",  8,  20,  5,  1,  3,  2),
+  黄油:   F("黄油",    2,  10,  1,  1, 10,  3),
+};
+const igo = n => Object.assign({}, ING[n]);          // 深拷贝
+const copy = o => JSON.parse(JSON.stringify(o));
+
+// 变速模块
+const HIGH_SPEED = () => ({
+  name: "高速模块", description: "刀片硬度 +2",
+  targetAttribute: "硬度", value: 2
+});
+
+// 牌组
+const DECKS = [
+  { deckName:"牌组 A", ingredients:["铁块","冰块","柠檬"].map(igo),   speedModule:HIGH_SPEED() },
+  { deckName:"牌组 B", ingredients:["巧克力","辣椒","硬糖"].map(igo), speedModule:HIGH_SPEED() },
+  { deckName:"牌组 C", ingredients:["牛奶","咖啡豆","黄油"].map(igo), speedModule:HIGH_SPEED() },
+];
+
+const LEVEL = { levelName:"第 1 关", targetScore:1000 };
+
+// ═══════════════════════════════════════════════════════════
+// 2. 运行时状态
+// ═══════════════════════════════════════════════════════════
+let S = {};                       // 全局状态
+function resetAll(){
+  S = {
+    state:"MainMenu",
+    decks: copy(DECKS),
+    selectedDeck:null,
+    level:copy(LEVEL),
+    turnNumber:1,
+    hand:[], cup:[], blade:null,
+    currentScore:0, targetScore:1000,
+    lastPlayed:"",
+  };
+}
+
+// ═══════════════════════════════════════════════════════════
+// 3. 状态机
+// ═══════════════════════════════════════════════════════════
+const LABEL = {
+  MainMenu:"主菜单", DeckSelect:"三选一牌组", BladeSelect:"选刀片",
+  TurnStart:"回合开始", Simulating:"模拟中", TurnResult:"回合结算",
+  LevelEnd:"关卡结束", LevelResult:"关卡结算",
+};
+const go = s => { S.state = s; render(); window.scrollTo(0,0); };
+
+function startLevel(deck){
+  S.selectedDeck = copy(deck);
+  S.hand = S.selectedDeck.ingredients.map(copy);
+  S.cup = [];
+  S.blade = igo("铁块");            // 任务要求：默认铁块
+  S.turnNumber = 1;
+  S.currentScore = 0;
+  S.targetScore = S.level.targetScore;
+  S.lastPlayed = "";
+}
+const handNames = () => S.hand.length ? S.hand.map(i=>i.name).join("、") : "（空）";
+const cupNames  = () => S.cup.length  ? S.cup.map(i=>i.name).join("、")  : "（空）";
+
+// ═══════════════════════════════════════════════════════════
+// 4. 渲染
+// ═══════════════════════════════════════════════════════════
+const $ = id => document.getElementById(id);
+const stats = i => `硬度 ${i.hardness} · 温度 ${i.temperature} · 酸性 ${i.acidity} · 糖分 ${i.sugar} · 油脂 ${i.oil} · 水分 ${i.water}`;
+
+function dataPanel(){
+  if(!S.selectedDeck) return "";
+  const d = S.selectedDeck;
+  return `
+  <div class="data">
+    <h4>—— 假数据 ——</h4>
+    <p>所选牌组：${d.deckName}</p>
+    ${d.ingredients.map(i=>`<p>&nbsp;&nbsp;${i.name}　${stats(i)}</p>`).join("")}
+    <p>&nbsp;&nbsp;变速模块：${d.speedModule.name}　影响属性：${d.speedModule.targetAttribute}　数值：${d.speedModule.value}</p>
+    <p>关卡：${S.level.levelName}　目标分：${S.level.targetScore}</p>
+  </div>`;
+}
+
+function render(){
+  $("stateBadge").textContent = LABEL[S.state];
+  $("turnBadge").textContent = ["TurnStart","Simulating","TurnResult"].includes(S.state)
+    ? `回合 ${S.turnNumber}` : "";
+  let h = "";
+
+  switch(S.state){
+
+    case "MainMenu":
+      h = `<h1>主菜单</h1>
+           <p class="sub">骨架原型：只验证流程能否走通，数值和结算都是假的。</p>
+           <button class="primary" onclick="go('DeckSelect')">开始游戏</button>`;
+      break;
+
+    case "DeckSelect":
+      h = `<h1>三选一牌组</h1><p class="sub">选一副牌组，决定初始手牌和变速模块。</p>`;
+      S.decks.forEach((d,i)=>{
+        h += `<div class="deck">
+                <h3>${d.deckName}</h3>
+                <p>食材：${d.ingredients.map(x=>x.name).join("、")}</p>
+                <p>变速模块：${d.speedModule.name}（${d.speedModule.description}）</p>
+              </div>
+              <button onclick="pickDeck(${i})">选牌组 ${d.deckName.replace("牌组 ","")}</button>`;
+      });
+      break;
+
+    case "BladeSelect":
+      h = `<h1>选刀片，默认铁块</h1>
+           <p class="sub">当前刀片：${S.blade.name}（硬度 ${S.blade.hardness}）<br>
+              变速模块：${S.selectedDeck.speedModule.name} → ${S.selectedDeck.speedModule.description}</p>
+           ${dataPanel()}
+           <button class="primary" style="margin-top:18px" onclick="go('TurnStart')">下一步</button>`;
+      break;
+
+    case "TurnStart":
+      h = `<h1>回合 ${S.turnNumber}，手牌：${handNames()}</h1>
+           <p class="sub">刀片：${S.blade.name}　　杯内：${cupNames()}　　得分：${S.currentScore}</p>`;
+      if(S.hand.length === 0){
+        h += `<p class="sub">手牌已空。</p>
+              <button class="primary" onclick="go('LevelEnd')">下一回合</button>`;
+      } else {
+        h += `<p class="sub" style="margin-bottom:10px">点击手牌打出：</p>`;
+        S.hand.forEach((ing,i)=>{
+          h += `<div class="card" onclick="playCard(${i})">
+                  <span class="nm">${ing.name}</span>
+                  <span class="st">${stats(ing)}</span>
+                </div>`;
+        });
+        h += dataPanel();
+      }
+      break;
+
+    case "Simulating":
+      h = `<h1>模拟中…</h1>
+           <p class="sub">本回合打出：${S.lastPlayed}<br>今天不做真实模拟，点一下直接进结算。</p>
+           <button class="primary" onclick="go('TurnResult')">回合结束</button>`;
+      break;
+
+    case "TurnResult":
+      h = `<h1>回合结算，得分 ${S.currentScore}</h1>
+           <p class="sub">本回合得分固定为 0（今天不做数值）。<br>
+              剩余手牌：${handNames()}<br>杯内食材：${cupNames()}</p>`
+        + (S.hand.length === 0 ? `<p class="sub">手牌已空 —— 再点一次将结束本关。</p>` : "")
+        + `<button class="primary" onclick="endTurn()">下一回合</button>`;
+      break;
+
+    case "LevelEnd":
+      h = `<h1>关卡结束</h1>
+           <p class="sub">手牌已空。</p>
+           <button class="primary" onclick="go('LevelResult')">查看结算</button>`;
+      break;
+
+    case "LevelResult": {
+      const pass = S.currentScore >= S.targetScore;
+      h = `<h1>总分 ${S.currentScore} / 目标分 ${S.targetScore}，<span class="${pass?'pass':'fail'}">${pass?'通过':'失败'}</span></h1>
+           <button class="primary" style="margin-top:20px" onclick="backToMenu()">回主菜单</button>`;
+      break;
+    }
+  }
+  $("panel").innerHTML = h;
+}
+
+// ═══════════════════════════════════════════════════════════
+// 5. 交互
+// ═══════════════════════════════════════════════════════════
+function pickDeck(i){ startLevel(S.decks[i]); go("BladeSelect"); }
+function playCard(i){
+  const ing = S.hand.splice(i,1)[0];
+  S.cup.push(ing);
+  S.lastPlayed = ing.name;
+  go("Simulating");
+}
+function endTurn(){
+  if(S.hand.length === 0){ go("LevelEnd"); return; }
+  S.turnNumber++;
+  S.cup = [];
+  go("TurnStart");
+}
+function backToMenu(){ resetAll(); go("MainMenu"); }
+
+resetAll();
+render();
+</script>
+</body>
+</html>

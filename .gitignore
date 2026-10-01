@@ -1,13 +1,15 @@
 # Unity 生成目录
-/[Ll]ibrary/
-/[Tt]emp/
-/[Oo]bj/
-/[Bb]uild/
-/[Bb]uilds/
-/[Ll]ogs/
-/[Uu]ser[Ss]ettings/
-/[Mm]emoryCaptures/
-/[Rr]ecordings/
+# 注意：这里不写前导 "/"，让规则在任意层级生效 ——
+# Unity 工程在 UnityProject/ 子目录里，UnityProject/Library 必须也被忽略。
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
 
 # Unity 工程里的构建产物
 *.apk
