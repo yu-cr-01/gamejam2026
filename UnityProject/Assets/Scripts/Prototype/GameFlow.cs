@@ -51,6 +51,8 @@ namespace GameJam.Prototype
         private Rect[] optionRects = new Rect[0];
         private Vector2 lastMousePos = new Vector2(-1f, -1f);
         private bool mouseMoved;
+        private Vector2 posAtLastKey = new Vector2(-999f, -999f);   // 上次按 ↑↓ 时的鼠标位置
+        private bool showDebug = true;                              // 调试显示，排查完关掉
 
         // ── 界面样式 ──────────────────────────────────────────────────
         private Font cjkFont;
@@ -145,12 +147,14 @@ namespace GameJam.Prototype
             if (e.keyCode == KeyCode.UpArrow)
             {
                 highlightIndex = (highlightIndex - 1 + n) % n;   // 到顶就回到底部
-                e.Use();
+                posAtLastKey = e.mousePosition;                  // 记住此刻鼠标位置，
+                e.Use();                                         // 鼠标不动就不让悬停把选中拽回去
                 return true;
             }
             if (e.keyCode == KeyCode.DownArrow)
             {
                 highlightIndex = (highlightIndex + 1) % n;
+                posAtLastKey = e.mousePosition;
                 e.Use();
                 return true;
             }
@@ -176,7 +180,7 @@ namespace GameJam.Prototype
             return false;
         }
 
-        /// <summary>点一个候选项。单选=选中并立即确认；多选=切换勾选状态。</summary>
+        /// <summary>点一个候选项。单选=选中并立即确认；多选=切换勾选，选满自动确认。</summary>
         private void OnOptionClicked(Choice c, ChoiceOption o)
         {
             if (c.pickCount <= 1)
@@ -187,6 +191,9 @@ namespace GameJam.Prototype
 
             if (pendingPicks.Contains(o.id)) pendingPicks.Remove(o.id);
             else if (pendingPicks.Count < c.pickCount) pendingPicks.Add(o.id);
+
+            // 选满就自动进入下一环节，不需要再点确认按钮
+            if (pendingPicks.Count == c.pickCount) ConfirmChoice(pendingPicks.ToArray());
         }
 
         /// <summary>
@@ -344,26 +351,44 @@ namespace GameJam.Prototype
             int n = c.options.Count;
 
             // ── 鼠标是否移动过 ──
-            // 只在 Repaint 事件里比较一次鼠标位置。这样"悬停改选中"只在鼠标真的动了的时候生效，
-            // 否则鼠标停在某一项上不动时，键盘 ↑↓ 会被悬停判定不断拽回去。
+            // 只在 Repaint 事件里比较一次鼠标位置。
+            Vector2 mp = Event.current.mousePosition;
             if (Event.current.type == EventType.Repaint)
             {
-                mouseMoved = (Event.current.mousePosition != lastMousePos);
-                lastMousePos = Event.current.mousePosition;
+                mouseMoved = (mp != lastMousePos);
+                lastMousePos = mp;
             }
 
             // ── 悬停改选中 ──
-            // IMGUI 在 Layout 阶段拿不到矩形，所以用上一帧记录的矩形做判定，这是标准做法。
-            if (mouseMoved && Event.current.type != EventType.Layout && optionRects.Length == n)
+            // 用上一帧记录的矩形判定（IMGUI 在 Layout 阶段拿不到本帧矩形）。
+            // 只有鼠标确实移动过、且不是"刚按完 ↑↓ 还没动鼠标"时才生效 ——
+            // 否则鼠标停在某一项上不动时，悬停判定会每帧把选中拽回去，键盘 ↑↓ 就失效了。
+            bool mouseActive = mouseMoved && mp != posAtLastKey;
+            if (mouseActive && Event.current.type != EventType.Layout && optionRects.Length == n)
             {
                 for (int i = 0; i < n; i++)
                 {
-                    if (optionRects[i].Contains(Event.current.mousePosition))
+                    if (optionRects[i].Contains(mp))
                     {
                         if (highlightIndex != i) highlightIndex = i;
                         break;
                     }
                 }
+            }
+
+            // ── 临时调试显示（排查悬停失效用，定位后删掉）──
+            if (showDebug)
+            {
+                string ri = "";
+                for (int i = 0; i < optionRects.Length; i++)
+                    ri += " [" + i + "]" + optionRects[i].x.ToString("F0") + "," + optionRects[i].y.ToString("F0")
+                        + " " + optionRects[i].width.ToString("F0") + "x" + optionRects[i].height.ToString("F0");
+                GUILayout.Label("DBG evt=" + Event.current.type
+                                + "　mouse=" + mp.x.ToString("F0") + "," + mp.y.ToString("F0")
+                                + "　moved=" + mouseMoved
+                                + "　active=" + mouseActive
+                                + "　hl=" + highlightIndex
+                                + "　rects=" + ri, dim);
             }
 
             GUILayout.Label(c.prompt, h1);
@@ -373,9 +398,8 @@ namespace GameJam.Prototype
             HandleChoiceKeys(c);
 
             GUILayout.Label(multi
-                ? "鼠标移到哪就选哪　↑↓ 移动　　□■ 勾选，需选 " + c.pickCount
-                  + " 项（已选 " + pendingPicks.Count + "）　　Enter 确认"
-                : "鼠标移到哪就选哪　↑↓ 移动　　Enter / 点击 确认", dim);
+                ? "鼠标移到哪就选哪　↑↓ 移动　　□ 勾选，选满 " + c.pickCount + " 项自动继续"
+                : "鼠标移到哪就选哪　↑↓ 移动　　点击 / Enter 确认", dim);
             GUILayout.Space(14f);
 
             if (optionRects.Length != n) optionRects = new Rect[n];
@@ -399,9 +423,14 @@ namespace GameJam.Prototype
                 GUIStyle st = (multi ? isChecked : isCursor) ? btnPicked : btn;
 
                 float hgt = string.IsNullOrEmpty(o.subtitle) ? 46f : 64f;
-                optionRects[i] = GUILayoutUtility.GetRect(0f, hgt, GUILayout.ExpandWidth(true));
+                Rect r = GUILayoutUtility.GetRect(0f, hgt, GUILayout.ExpandWidth(true));
 
-                if (GUI.Button(optionRects[i], label, st))
+                // ★ 只在 Repaint 事件里记录矩形。
+                // Layout 阶段 GetRect 返回的是占位值 —— 带 ExpandWidth 时宽度还没解析，是 0，
+                // 坐标也是 0。记录下来会让悬停判定永远命中不了（三个矩形全是 0x64）。
+                if (Event.current.type == EventType.Repaint) optionRects[i] = r;
+
+                if (GUI.Button(r, label, st))
                 {
                     highlightIndex = i;
                     GUI.FocusControl(null);      // 清掉按钮焦点，否则 Space/Enter 会二次触发
@@ -410,39 +439,14 @@ namespace GameJam.Prototype
                 }
             }
 
-            GUILayout.Space(12f);
-
-            // ── 确认按钮 ──
-            if (multi)
+            // 不再提供「下一步」按钮 ——
+            // 单选：点一下就确认进入下一环节
+            // 多选：选满自动进入下一环节
+            // 这里只留一行状态提示。
+            if (multi && pendingPicks.Count < c.pickCount)
             {
-                if (pendingPicks.Count == c.pickCount)
-                {
-                    if (GUILayout.Button("下一步（已选 " + pendingPicks.Count + " 项）", btn, GUILayout.Height(52f)))
-                    {
-                        GUI.FocusControl(null);
-                        ConfirmChoice(pendingPicks.ToArray());
-                    }
-                }
-                else
-                {
-                    GUILayout.Label("还需选 " + (c.pickCount - pendingPicks.Count) + " 项才能继续", dim);
-                }
-            }
-            else
-            {
-                ChoiceOption def = c.DefaultOption;
-                ChoiceOption cur = (highlightIndex >= 0 && highlightIndex < n) ? c.options[highlightIndex] : def;
-                if (cur != null)
-                {
-                    string tag = (def != null && cur == def)
-                               ? "（默认：" + cur.title + "）"
-                               : "（当前：" + cur.title + "）";
-                    if (GUILayout.Button("下一步" + tag, btn, GUILayout.Height(52f)))
-                    {
-                        GUI.FocusControl(null);
-                        ConfirmChoice(cur.id);
-                    }
-                }
+                GUILayout.Space(10f);
+                GUILayout.Label("还需选 " + (c.pickCount - pendingPicks.Count) + " 项，选满自动继续", dim);
             }
         }
 

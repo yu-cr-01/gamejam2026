@@ -10,6 +10,10 @@ namespace GameJam.Prototype
     ///   2. 场景文件是 YAML，多人同时改极易冲突，能不碰就不碰
     ///   3. 游戏逻辑与场景解耦，将来换成正式 UI 时这份代码直接删掉即可
     ///
+    /// 这一份只负责 Flow2D（IMGUI 文字流程原型）；
+    /// 3D 桌面原型由 TablePrototypeBootstrap 负责。
+    /// 两套靠 PrototypeMode.Current 二选一。
+    ///
     /// 如果你更想手动控制，把下面整个方法注释掉，
     /// 然后在场景里新建空物体、挂上 GameFlow 组件即可。
     /// </summary>
@@ -18,6 +22,8 @@ namespace GameJam.Prototype
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void Boot()
         {
+            if (PrototypeMode.Current != PrototypeMode.Kind.Flow2D) return;
+
             // 场景里已经手动挂了就不再重复创建
             if (Object.FindObjectOfType<GameFlow>() != null) return;
 
