@@ -42,7 +42,8 @@ namespace GameJam.Prototype
         private SelectionLog selections;
 
         private int choiceIndex;          // 当前跑到第几个选择环节
-        private List<string> pendingPicks = new List<string>();  // 本环节已勾选项（单选也会先放进来再确认）
+        private int highlightIndex;       // ↑↓ 光标所在项
+        private List<string> pendingPicks = new List<string>();  // 本环节已勾选项（多选时用）
         private string lastPlayed = "";
 
         // ── 界面样式 ──────────────────────────────────────────────────
@@ -60,6 +61,7 @@ namespace GameJam.Prototype
             turn = new TurnState();
             selections = new SelectionLog();
             choiceIndex = 0;
+            highlightIndex = 0;
             pendingPicks.Clear();
             lastPlayed = "";
             State = GameFlowState.MainMenu;
@@ -93,8 +95,68 @@ namespace GameJam.Prototype
             }
             else
             {
-                GoTo(GameFlowState.Choice);   // 还有下一个选择环节
+                ResetHighlightForCurrent();   // 换到下一个选择环节，光标归位
+                GoTo(GameFlowState.Choice);
             }
+        }
+
+        /// <summary>
+        /// 把 ↑↓ 光标放到当前选择环节的默认项上；
+        /// 没配默认项就放第一项。
+        /// </summary>
+        private void ResetHighlightForCurrent()
+        {
+            highlightIndex = 0;
+            Choice c = CurrentChoice;
+            if (c == null || c.options == null) return;
+
+            ChoiceOption def = c.DefaultOption;
+            if (def == null) return;
+
+            for (int i = 0; i < c.options.Count; i++)
+            {
+                if (c.options[i] == def) { highlightIndex = i; break; }
+            }
+        }
+
+        /// <summary>
+        /// 处理 ↑↓ / Enter 键盘操作。
+        /// 返回 true 表示状态已变，调用方应立即停止本帧绘制。
+        /// </summary>
+        private bool HandleChoiceKeys(Choice c)
+        {
+            Event e = Event.current;
+            if (e == null || c == null || c.options == null) return false;
+
+            int n = c.options.Count;
+            if (n == 0) return false;
+
+            if (e.type != EventType.KeyDown) return false;
+
+            if (e.keyCode == KeyCode.UpArrow)
+            {
+                highlightIndex = (highlightIndex - 1 + n) % n;   // 到顶就回到底部
+                e.Use();
+                return true;
+            }
+            if (e.keyCode == KeyCode.DownArrow)
+            {
+                highlightIndex = (highlightIndex + 1) % n;
+                e.Use();
+                return true;
+            }
+            if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter ||
+                e.keyCode == KeyCode.Space)
+            {
+                if (highlightIndex < 0 || highlightIndex >= n) return false;
+                ChoiceOption o = c.options[highlightIndex];
+                if (o == null) return false;
+
+                e.Use();
+                OnOptionClicked(c, o);
+                return true;
+            }
+            return false;
         }
 
         /// <summary>点一个候选项。单选=选中并立即确认；多选=切换勾选状态。</summary>
@@ -108,14 +170,6 @@ namespace GameJam.Prototype
 
             if (pendingPicks.Contains(o.id)) pendingPicks.Remove(o.id);
             else if (pendingPicks.Count < c.pickCount) pendingPicks.Add(o.id);
-        }
-
-        /// <summary>这个候选项当前是否处于"已选"状态。</summary>
-        private bool IsPicked(Choice c, ChoiceOption o)
-        {
-            if (pendingPicks.Contains(o.id)) return true;
-            if (pendingPicks.Count > 0) return false;    // 已有手选，就不再显示默认态
-            return c.DefaultOption == o;
         }
 
         /// <summary>
@@ -251,11 +305,13 @@ namespace GameJam.Prototype
             {
                 choiceIndex = 0;
                 pendingPicks.Clear();
+                GUI.FocusControl(null);
+                ResetHighlightForCurrent();
                 GoTo(GameFlowState.Choice);
             }
         }
 
-        /// <summary>通用选择界面 —— 任何 Choice 都用它渲染。</summary>
+        /// <summary>通用选择界面 —— 任何 Choice 都用它渲染。支持 ↑↓ + Enter 与鼠标点击。</summary>
         private void DrawChoice()
         {
             Choice c = CurrentChoice;
@@ -265,9 +321,15 @@ namespace GameJam.Prototype
 
             GUILayout.Label(c.prompt, h1);
             if (!string.IsNullOrEmpty(c.hint)) GUILayout.Label(c.hint, dim);
+
+            // 先处理键盘。注意这里不 return —— 提前返回会让本帧绘制的元素数量
+            // 和 Layout/Repaint 不一致，IMGUI 会报 GUILayout 不匹配。
+            // 状态变化在下一个事件（Repaint）里自然生效。
+            HandleChoiceKeys(c);
+
             GUILayout.Label(multi
-                ? "需要选 " + c.pickCount + " 项　已选 " + pendingPicks.Count + " 项"
-                : "单选 —— 点一项即确认进入下一步", dim);
+                ? "□/■ 勾选　需选 " + c.pickCount + " 项（已选 " + pendingPicks.Count + "）"
+                : "↑↓ 切换　Enter 确认　也可以直接鼠标点击", dim);
             GUILayout.Space(14f);
 
             for (int i = 0; i < c.options.Count; i++)
@@ -275,30 +337,39 @@ namespace GameJam.Prototype
                 ChoiceOption o = c.options[i];
                 if (o == null) continue;
 
-                // 每一项都有标记：单选 ○/●，多选 □/■
-                // （用几何符号而不是 ☐☑，后者在中文字体里常常缺字形会显示成方块）
-                bool picked = IsPicked(c, o);
-                string mark = multi ? (picked ? "■ " : "□ ") : (picked ? "● " : "○ ");
+                bool isChecked = pendingPicks.Contains(o.id);
+                bool isCursor  = (i == highlightIndex);
+
+                // 单选：光标即选中，用 ●/○
+                // 多选：光标和勾选是两件事，用 ■/□ 表示勾选，光标靠绿色区分
+                string mark = multi ? (isChecked ? "■ " : "□ ")
+                                    : (isCursor  ? "● " : "○ ");
+
                 string label = mark + o.title
                                + (string.IsNullOrEmpty(o.subtitle) ? "" : "\n　　" + o.subtitle);
 
-                GUIStyle st = picked ? btnPicked : btn;
+                GUIStyle st = (multi ? isChecked : isCursor) ? btnPicked : btn;
+
                 if (GUILayout.Button(label, st, GUILayout.Height(string.IsNullOrEmpty(o.subtitle) ? 46f : 64f)))
                 {
+                    highlightIndex = i;
+                    GUI.FocusControl(null);      // 清掉按钮焦点，否则 Space/Enter 会二次触发
                     OnOptionClicked(c, o);
-                    return;   // 状态可能已变，本帧不再继续绘制
+                    return;
                 }
             }
 
             GUILayout.Space(12f);
 
             // 单选且配了默认项：允许直接接受默认
-            // （任务书要求：选刀片，默认铁块 → 点"下一步"即可）
             ChoiceOption def = c.DefaultOption;
             if (!multi && def != null && pendingPicks.Count == 0)
             {
                 if (GUILayout.Button("下一步（当前：" + def.title + "）", btn, GUILayout.Height(52f)))
+                {
+                    GUI.FocusControl(null);
                     ConfirmChoice(def.id);
+                }
             }
 
             // 多选：选满才允许确认
@@ -307,7 +378,10 @@ namespace GameJam.Prototype
                 if (pendingPicks.Count == c.pickCount)
                 {
                     if (GUILayout.Button("下一步（已选 " + pendingPicks.Count + " 项）", btn, GUILayout.Height(52f)))
+                    {
+                        GUI.FocusControl(null);
                         ConfirmChoice(pendingPicks.ToArray());
+                    }
                 }
                 else
                 {
