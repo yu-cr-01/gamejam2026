@@ -52,7 +52,7 @@ namespace GameJam.Prototype
         private Vector2 lastMousePos = new Vector2(-1f, -1f);
         private bool mouseMoved;
         private Vector2 posAtLastKey = new Vector2(-999f, -999f);   // 上次按 ↑↓ 时的鼠标位置
-        private bool showDebug = true;                              // 调试显示，排查完关掉
+        private bool showDebug = false;                             // 调试显示，排查完关掉
 
         // ── 界面样式 ──────────────────────────────────────────────────
         private Font cjkFont;
