@@ -36,6 +36,12 @@ namespace GameJam.Data
         /// <summary>默认选中项的 id。刀片那种"默认铁块"就用它。</summary>
         public string defaultOptionId;
 
+        /// <summary>
+        /// 界面形态。默认通用列表；三选一牌组用 DeckCards，选刀片用 BladeSwap。
+        /// 状态机只看这个字段决定画法，不认识"牌组""刀片"这些业务概念。
+        /// </summary>
+        public ChoiceView view = ChoiceView.List;
+
         /// <summary>候选项</summary>
         public List<ChoiceOption> options = new List<ChoiceOption>();
 
@@ -52,6 +58,9 @@ namespace GameJam.Data
         public Choice WithHint(string h) { hint = h; return this; }
 
         public Choice WithDefault(string optionId) { defaultOptionId = optionId; return this; }
+
+        /// <summary>指定界面形态，例如 .WithView(ChoiceView.DeckCards)</summary>
+        public Choice WithView(ChoiceView v) { view = v; return this; }
 
         public Choice AddOptions(params ChoiceOption[] items)
         {
@@ -104,6 +113,7 @@ namespace GameJam.Data
             c.hint = hint;
             c.allowSkip = allowSkip;
             c.defaultOptionId = defaultOptionId;
+            c.view = view;
             c.options = new List<ChoiceOption>();
             if (options != null)
             {

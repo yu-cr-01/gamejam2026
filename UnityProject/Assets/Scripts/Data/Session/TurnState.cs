@@ -43,25 +43,86 @@ namespace GameJam.Data
 
         // ── 生命周期 ──────────────────────────────────────────────────
 
-        /// <summary>开始一关。手牌从牌组深拷贝而来。</summary>
+        /// <summary>开始一关。等价于 PrepareLoadout，保留旧名字方便调用方不动。</summary>
         public void StartLevel(LevelData level, Deck deck, Ingredient defaultBlade = null)
+        {
+            PrepareLoadout(level, deck, defaultBlade);
+        }
+
+        /// <summary>
+        /// 准备开局配置 —— 牌组里指定的那张牌装到刀片槽，其余全部进手牌。
+        ///
+        /// 【规则来自策划文档】
+        ///   牌组「硫硝爆燃」= 外星合金 / 水 / 硝石 / 硫磺
+        ///   开局外星合金当刀片（H=20），手牌 = 水、硝石、硫磺
+        /// 也就是"初始刀片是牌组里的一张牌，不是额外的第六张"。
+        ///
+        /// 【兜底】牌组为空时用 fallbackBlade（配置里的铁块），手牌留空。
+        /// 这样"铁块"作为系统默认刀座始终存在，但正常的牌组不会用到它。
+        /// </summary>
+        public void PrepareLoadout(LevelData level, Deck deck, Ingredient fallbackBlade = null)
         {
             Reset();
             targetScore = level != null ? level.targetScore : 0;
-
-            if (deck != null && deck.ingredients != null)
-                for (int i = 0; i < deck.ingredients.Count; i++)
-                    if (deck.ingredients[i] != null) hand.Add(deck.ingredients[i].Clone());
 
             // 本局效果 = 关卡规则 组合 牌组模块效果
             activeEffects = new EffectGroup("本局效果");
             if (level != null) activeEffects.Append(level.rules);
             if (deck != null) activeEffects.Append(deck.CombinedModuleEffects());
 
-            // 刀片：优先用指定的默认刀片，否则取手牌第一张
-            if (defaultBlade != null)        blade = defaultBlade.Clone();
-            else if (hand.Count > 0)         blade = hand[0].Clone();
+            if (hand == null) hand = new List<Ingredient>();
+
+            // 牌组为空（或没配）→ 只放兜底刀片
+            if (deck == null || deck.ingredients == null || deck.ingredients.Count == 0)
+            {
+                blade = fallbackBlade != null ? fallbackBlade.Clone() : null;
+                return;
+            }
+
+            int bladeIndex = deck.InitialBladeIndex();
+            Ingredient initial = bladeIndex >= 0 ? deck.ingredients[bladeIndex] : null;
+
+            // 刀片：牌组指定的那张 → 没找到才用兜底
+            if (initial != null)             blade = initial.Clone();
+            else if (fallbackBlade != null)  blade = fallbackBlade.Clone();
             else                             blade = null;
+
+            // 手牌 = 除初始刀片外的全部牌
+            for (int i = 0; i < deck.ingredients.Count; i++)
+            {
+                if (i == bladeIndex) continue;
+                if (deck.ingredients[i] != null) hand.Add(deck.ingredients[i].Clone());
+            }
+        }
+
+        /// <summary>
+        /// 把手牌第 index 张换上来当刀片，原刀片回到手牌**同一个位置**。
+        ///
+        /// 【为什么用"原位替换"而不是"移除 + 追加"】
+        /// 移除+追加要分别动两个列表，任何一步异常都会留下
+        /// "手牌少一张"或"刀片凭空消失"的脏状态。
+        /// 原位替换只有两次赋值，天然不会重复、不会丢失，
+        /// 所以铁块被换下后一定出现在手牌里，也能再次被换回去。
+        ///
+        /// 返回 false 表示这次交换没发生（下标越界 / 手牌空 / 刀片为空）。
+        /// </summary>
+        public bool SwapBladeWithHand(int index)
+        {
+            if (hand == null || blade == null) return false;
+            if (index < 0 || index >= hand.Count) return false;
+
+            Ingredient picked = hand[index];
+            if (picked == null) return false;
+
+            hand[index] = blade;    // 原刀片（可能是铁块，也可能是上一次换下的食材）回手牌原位
+            blade = picked;         // 被点的那张成为新刀片
+            return true;
+        }
+
+        /// <summary>手牌里还能不能换刀片（至少要有一张食材）。</summary>
+        public bool CanSwapBlade
+        {
+            get { return blade != null && hand != null && hand.Count > 0; }
         }
 
         /// <summary>清空一切。</summary>
@@ -136,7 +197,13 @@ namespace GameJam.Data
         /// <summary>刀片实际硬度 —— 走的是效果组合，不是读死字段。</summary>
         public int BladeHardness()
         {
-            return BladeResolvedAttrs().Get(AttrId.Hardness);
+            return BladeResolvedAttrs().Get(AttrId.Salt);
+        }
+
+        /// <summary>刀片实际属性，带字母标签，例如 "H 盐性 20 · D 汞性 0 · V 硫性 3"。</summary>
+        public string BladeAttrLine()
+        {
+            return BladeResolvedAttrs().DescribeLabeled();
         }
     }
 }

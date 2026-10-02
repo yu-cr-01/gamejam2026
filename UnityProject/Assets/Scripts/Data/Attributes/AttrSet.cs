@@ -109,6 +109,32 @@ namespace GameJam.Data
             return string.Join(" · ", parts.ToArray());
         }
 
+        /// <summary>
+        /// 列出全部属性并带上字母代号，例如 "H 盐性 20 · D 汞性 0 · V 硫性 3"。
+        /// 三属性体系下界面统一用这个 —— 玩家和策划都按 H/D/V 沟通。
+        /// </summary>
+        public string DescribeLabeled()
+        {
+            List<string> parts = new List<string>();
+            foreach (AttrDef def in AttrCatalog.All())
+            {
+                parts.Add(def.FormatLabeled(Get(def.id)));
+            }
+            return parts.Count > 0 ? string.Join(" · ", parts.ToArray()) : "（无属性）";
+        }
+
+        /// <summary>只列出非零属性并带字母代号，例如 "H 盐性 20 · V 硫性 3"。</summary>
+        public string DescribeLabeledNonZero()
+        {
+            List<string> parts = new List<string>();
+            foreach (AttrDef def in AttrCatalog.All())
+            {
+                int v = Get(def.id);
+                if (v != 0) parts.Add(def.FormatLabeled(v));
+            }
+            return parts.Count > 0 ? string.Join(" · ", parts.ToArray()) : "（无属性）";
+        }
+
         public override string ToString() { return DescribeNonZero(); }
     }
 }

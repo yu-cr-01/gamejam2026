@@ -1,0 +1,85 @@
+{
+  "_comment": "《破壁机计划》配置表。策划改这个文件即可，不用碰代码。改完重新 Play 生效。",
+  "_attrNote": "属性三列固定为 H 盐性(固体倾向) / D 汞性(液体倾向) / V 硫性(气体倾向)。范围 0-99。",
+  "_bladeNote": "每副牌组的 initialBladeId 决定开局哪张牌装到刀片槽，其余牌进手牌。",
+
+  "ingredients": [
+    { "id": "iron_block",   "name": "铁块",     "h": 10, "d": 0, "v": 0 },
+
+    { "id": "alien_alloy",  "name": "外星合金", "h": 20, "d": 0, "v": 0 },
+    { "id": "water",        "name": "水",       "h": 1,  "d": 9, "v": 1 },
+    { "id": "saltpeter",    "name": "硝石",     "h": 3,  "d": 4, "v": 8 },
+    { "id": "sulfur",       "name": "硫磺",     "h": 2,  "d": 1, "v": 9 },
+
+    { "id": "mithril_ingot","name": "秘银锭",   "h": 16, "d": 2, "v": 0 },
+    { "id": "brine",        "name": "卤水",     "h": 1,  "d": 9, "v": 2 },
+    { "id": "alum",         "name": "明矾",     "h": 4,  "d": 7, "v": 1 },
+    { "id": "vinegar",      "name": "醋酸",     "h": 1,  "d": 8, "v": 3 },
+
+    { "id": "tiw_block",    "name": "钛钨胚",   "h": 26, "d": 0, "v": 0 },
+    { "id": "quartz_sand",  "name": "石英砂",   "h": 8,  "d": 2, "v": 1 },
+    { "id": "clay",         "name": "黏土",     "h": 6,  "d": 5, "v": 1 },
+    { "id": "graphite",     "name": "石墨",     "h": 9,  "d": 1, "v": 2 }
+  ],
+
+  "decks": [
+    {
+      "id": "deck_sulfur_niter",
+      "name": "硫硝爆燃",
+      "initialBladeId": "alien_alloy",
+      "ingredientIds": [ "alien_alloy", "water", "saltpeter", "sulfur" ],
+      "modules": [
+        {
+          "id": "mod_overload_fuse",
+          "name": "过载引信",
+          "effects": [ { "attr": "V", "op": "Add", "value": 3 } ]
+        }
+      ]
+    },
+    {
+      "id": "deck_mercury_etch",
+      "name": "盐汞蚀刻",
+      "initialBladeId": "mithril_ingot",
+      "ingredientIds": [ "mithril_ingot", "brine", "alum", "vinegar" ],
+      "modules": [
+        {
+          "id": "mod_catalyst_chamber",
+          "name": "催化腔",
+          "effects": [ { "attr": "D", "op": "Add", "value": 3 } ]
+        }
+      ]
+    },
+    {
+      "id": "deck_inert_wall",
+      "name": "惰性护壁",
+      "initialBladeId": "tiw_block",
+      "ingredientIds": [ "tiw_block", "quartz_sand", "clay", "graphite" ],
+      "modules": [
+        {
+          "id": "mod_damping_base",
+          "name": "阻尼基座",
+          "effects": [ { "attr": "H", "op": "Add", "value": 4 } ]
+        }
+      ]
+    }
+  ],
+
+  "defaultBladeId": "iron_block",
+
+  "level": {
+    "id": "level_1",
+    "name": "第 1 关",
+    "targetScore": 1000
+  },
+
+  "texts": {
+    "deckTitle": "选择你的初始牌组",
+    "deckConfirm": "确认选择该卡组",
+    "deckCancel": "取消",
+    "deckHint": "点击卡片查看详情　｜　每副牌组 = 4 张食材牌 + 1 个变速模块",
+    "bladeTitle": "选择你的刀片",
+    "bladeConfirm": "确认刀片，进入关卡",
+    "bladeHint": "点击手牌里的食材即与当前刀片交换，可反复换　｜　模块不能作为刀片",
+    "moduleRejected": "模块不能作为刀片"
+  }
+}

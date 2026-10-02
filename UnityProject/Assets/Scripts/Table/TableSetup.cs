@@ -171,10 +171,25 @@ namespace GameJam.Prototype
         // ── 发牌 ──────────────────────────────────────────────────────
         private void DealHand()
         {
-            FakeData.EnsureCatalog();
+            // 手牌来自配置表里第一副牌组的"初始手牌"——
+            // 也就是牌组里除了开局刀片以外的那些牌。
+            // 3D 桌面原型只是把同一份配置换个画法，不另建一套数据。
+            GameConfig.EnsureLoaded();
 
-            List<Ingredient> data = IngredientCatalog.CreateMany(
-                FakeData.IronBlockId, FakeData.IceCubeId, FakeData.LemonId);
+            List<Deck> decks = GameConfig.Decks();
+            Deck deck = decks.Count > 0 ? decks[0] : null;
+
+            List<Ingredient> data = deck != null
+                ? deck.InitialHandIngredients()
+                : new List<Ingredient>();
+
+            // 兜底：配置表空掉了也至少有一张牌可摆
+            if (data.Count == 0)
+            {
+                Ingredient fallback = GameConfig.DefaultBlade();
+                if (fallback != null) data.Add(fallback);
+            }
+            if (data.Count == 0) return;
 
             const float z = -0.58f;
             const float gap = 0.30f;

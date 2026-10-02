@@ -21,6 +21,16 @@ namespace GameJam.Data
         /// <summary>初始手牌用的食材</summary>
         public List<Ingredient> ingredients = new List<Ingredient>();
 
+        /// <summary>
+        /// 开局自动装到刀片槽上的那张牌的 id。
+        ///
+        /// 【为什么要做成配置而不是写死"第一张"】
+        /// 策划文档里牌组是「外星合金、水、硝石、硫磺」，开局外星合金当刀片。
+        /// 但把"第一张当刀片"写进代码，将来想让水开局当刀片就得改代码。
+        /// 留成配置项：填了就按填的来；没填才退回第一张；牌组为空才用兜底铁块。
+        /// </summary>
+        public string initialBladeId;
+
         /// <summary>附带的变速模块。结构上是列表，方便以后一副牌带多个模块。</summary>
         public List<SpeedModule> modules = new List<SpeedModule>();
 
@@ -30,6 +40,57 @@ namespace GameJam.Data
         {
             this.id = id;
             this.name = name;
+        }
+
+        /// <summary>指定哪张牌开局当刀片（传食材 id）。</summary>
+        public Deck WithInitialBlade(string ingredientId)
+        {
+            initialBladeId = ingredientId;
+            return this;
+        }
+
+        /// <summary>
+        /// 算出开局当刀片的那张牌在 ingredients 里的下标。
+        ///
+        /// 查找顺序：
+        ///   1. initialBladeId 指定的那张
+        ///   2. 找不到就退回第一张
+        ///   3. 牌组为空返回 -1（由调用方决定用兜底刀片）
+        /// </summary>
+        public int InitialBladeIndex()
+        {
+            if (ingredients == null || ingredients.Count == 0) return -1;
+
+            if (!string.IsNullOrEmpty(initialBladeId))
+            {
+                for (int i = 0; i < ingredients.Count; i++)
+                {
+                    if (ingredients[i] != null && ingredients[i].id == initialBladeId) return i;
+                }
+            }
+            return 0;
+        }
+
+        /// <summary>开局当刀片的那张牌（没找到返回 null）。</summary>
+        public Ingredient InitialBlade()
+        {
+            int i = InitialBladeIndex();
+            return i >= 0 ? ingredients[i] : null;
+        }
+
+        /// <summary>开局进手牌的那些牌（即除了初始刀片以外的全部）。</summary>
+        public List<Ingredient> InitialHandIngredients()
+        {
+            List<Ingredient> result = new List<Ingredient>();
+            if (ingredients == null) return result;
+
+            int skip = InitialBladeIndex();
+            for (int i = 0; i < ingredients.Count; i++)
+            {
+                if (i == skip) continue;
+                if (ingredients[i] != null) result.Add(ingredients[i].Clone());
+            }
+            return result;
         }
 
         public Deck WithIngredients(params Ingredient[] items)
@@ -92,6 +153,7 @@ namespace GameJam.Data
         public Deck Clone()
         {
             Deck d = new Deck(id, name);
+            d.initialBladeId = initialBladeId;
             d.ingredients = new List<Ingredient>();
             d.modules = new List<SpeedModule>();
 

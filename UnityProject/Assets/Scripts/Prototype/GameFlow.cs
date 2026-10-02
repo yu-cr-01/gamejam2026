@@ -46,6 +46,16 @@ namespace GameJam.Prototype
         private List<string> pendingPicks = new List<string>();  // 本环节已勾选项（多选时用）
         private string lastPlayed = "";
 
+        // 三选一牌组：展开详情的那张卡片下标，-1 表示还没展开
+        private int deckDetailIndex = -1;
+
+        // 刀片 + 手牌是否已经初始化过（进入"选刀片"环节时初始化一次）
+        private bool loadoutReady;
+
+        // 一次性提示条（"模块不能作为刀片"），到时间自动消失
+        private string toast = "";
+        private float toastUntil;
+
         // 鼠标悬停判定用：IMGUI 拿不到"当前帧的矩形"，只能记录上一帧的，
         // 这是 IMGUI 里做 hover 的标准做法。
         private Rect[] optionRects = new Rect[0];
@@ -56,7 +66,7 @@ namespace GameJam.Prototype
 
         // ── 界面样式 ──────────────────────────────────────────────────
         private Font cjkFont;
-        private GUIStyle h1, h2, body, btn, btnPicked, dim;
+        private GUIStyle h1, h2, body, btn, btnPicked, dim, toastStyle;
         private Vector2 scroll;
 
         // ─────────────────────────────────────────────────────────────
@@ -64,14 +74,23 @@ namespace GameJam.Prototype
 
         public void ResetAll()
         {
-            decks = FakeData.BuildDecks();
-            level = FakeData.BuildLevel(decks);
+            // 每次回主菜单都重读配置表 —— 策划改完 JSON 不用重启 Unity，
+            // 退回主菜单再进一次就生效，调试期很省事。
+            GameConfig.Reload();
+            GameConfig.EnsureLoaded();
+
+            decks = GameConfig.Decks();
+            level = GameConfig.Level();
             turn = new TurnState();
             selections = new SelectionLog();
             choiceIndex = 0;
             highlightIndex = 0;
             pendingPicks.Clear();
             lastPlayed = "";
+            deckDetailIndex = -1;
+            loadoutReady = false;
+            toast = "";
+            toastUntil = 0f;
             State = GameFlowState.MainMenu;
             scroll = Vector2.zero;
         }
@@ -92,20 +111,54 @@ namespace GameJam.Prototype
             Choice c = CurrentChoice;
             if (c == null) return;
 
+            // 「选刀片」环节比较特殊：玩家已经在 turn 上把刀片换来换去，
+            // 这里没有"候选项"可选，只需要把最终刀片记进选择记录然后前进。
+            if (c.view == ChoiceView.BladeSwap)
+            {
+                selections.Record(c.id, 0,
+                    turn.blade != null ? new string[] { turn.blade.id } : new string[0]);
+                FinishChoiceFlow();
+                return;
+            }
+
             selections.Record(c.id, 0, optionIds);
             pendingPicks.Clear();
             choiceIndex++;
 
-            if (choiceIndex >= level.ChoiceCount)
-            {
-                StartLevelFromSelections();
-                GoTo(GameFlowState.TurnStart);
-            }
+            if (choiceIndex >= level.ChoiceCount) FinishChoiceFlow();
             else
             {
                 ResetHighlightForCurrent();   // 换到下一个选择环节，光标归位
                 GoTo(GameFlowState.Choice);
             }
+        }
+
+        /// <summary>
+        /// 全部选择跑完，进入回合循环。
+        ///
+        /// 如果刚跑的是「换刀片」环节，turn 里已经有玩家换好的刀片和手牌，
+        /// 直接用；否则（关卡没有换刀片环节）从选择记录里反推后初始化一次。
+        /// </summary>
+        private void FinishChoiceFlow()
+        {
+            if (!loadoutReady)
+            {
+                turn.PrepareLoadout(level, ResolvePickedDeck(), ResolvePickedBlade());
+                loadoutReady = true;
+            }
+            GoTo(GameFlowState.TurnStart);
+        }
+
+        /// <summary>
+        /// 进入「选刀片」环节前把刀片和手牌准备好。
+        /// 牌组里指定的那张牌装到刀片槽，其余进手牌 —— 手牌里没有铁块，
+        /// 铁块只有在它当刀片被换下时才回到手上。
+        /// </summary>
+        private void EnsureLoadout()
+        {
+            if (loadoutReady) return;
+            turn.PrepareLoadout(level, ResolvePickedDeck(), ResolvePickedBlade());
+            loadoutReady = true;
         }
 
         /// <summary>
@@ -197,15 +250,10 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
-        /// 所有选择跑完后，从选择记录里反推本局配置。
+        /// 从选择记录里反推玩家选了哪副牌组。
         /// 这里不硬编码 "deck_pick" —— 只找"被选中的、带牌组的选项"。
         /// 所以关卡想改成第 3 个环节才选牌组，这段代码也不用动。
         /// </summary>
-        private void StartLevelFromSelections()
-        {
-            turn.StartLevel(level, ResolvePickedDeck(), ResolvePickedBlade());
-        }
-
         private Deck ResolvePickedDeck()
         {
             foreach (Choice c in level.choices)
@@ -231,7 +279,7 @@ namespace GameJam.Prototype
                     if (o != null && o.ingredient != null) return o.ingredient;
                 }
             }
-            return FakeData.DefaultBlade();              // 兜底：默认铁块
+            return GameConfig.DefaultBlade();            // 兜底：配置表里的默认刀片（铁块）
         }
 
         // ── 样式 / 中文字体 ───────────────────────────────────────────
@@ -261,10 +309,20 @@ namespace GameJam.Prototype
                 btnPicked = new GUIStyle(btn);
                 btnPicked.normal.textColor = new Color(0.35f, 0.95f, 0.60f);
 
+                // 一次性提示条（"模块不能作为刀片"）
+                toastStyle = new GUIStyle(GUI.skin.box)
+                {
+                    fontSize = 19, wordWrap = true,
+                    alignment = TextAnchor.MiddleLeft,
+                    padding = new RectOffset(14, 14, 10, 10)
+                };
+                toastStyle.normal.textColor = new Color(1f, 0.72f, 0.25f);
+
                 if (cjkFont != null)
                 {
                     h1.font = cjkFont; h2.font = cjkFont; body.font = cjkFont;
                     dim.font = cjkFont; btn.font = cjkFont; btnPicked.font = cjkFont;
+                    toastStyle.font = cjkFont;
                 }
             }
         }
@@ -336,17 +394,34 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
-        /// 通用选择界面。
+        /// 选择环节总入口 —— 按 Choice.view 分派画法。
         ///
-        /// 选中：↑↓ 移动 / 鼠标悬停 / 鼠标点击 —— 三者改的都是同一个 highlightIndex，
-        ///       也就是"鼠标挪到哪就选中哪，不用再按一次才选中"。
-        /// 确认：Enter 或「下一步」按钮。
+        /// 状态机这边仍然只有一个"选择环节"状态，它不认识牌组和刀片，
+        /// 只是照着环节自己声明的形态去画。
+        /// 想加新形态（比如"五选二食材"），加一个 ChoiceView 分支即可。
         /// </summary>
         private void DrawChoice()
         {
             Choice c = CurrentChoice;
             if (c == null) { GUILayout.Label("（没有更多选择环节）", body); return; }
 
+            switch (c.view)
+            {
+                case ChoiceView.DeckCards: DrawChoiceDeckCards(c); return;
+                case ChoiceView.BladeSwap: DrawChoiceBladeSwap(c); return;
+                default:                   DrawChoiceList(c);      return;
+            }
+        }
+
+        /// <summary>
+        /// 通用竖排列表。
+        ///
+        /// 选中：↑↓ 移动 / 鼠标悬停 / 鼠标点击 —— 三者改的都是同一个 highlightIndex，
+        ///       也就是"鼠标挪到哪就选中哪，不用再按一次才选中"。
+        /// 确认：Enter 或点一下候选项。
+        /// </summary>
+        private void DrawChoiceList(Choice c)
+        {
             bool multi = c.pickCount > 1;
             int n = c.options.Count;
 
@@ -447,6 +522,265 @@ namespace GameJam.Prototype
             {
                 GUILayout.Space(10f);
                 GUILayout.Label("还需选 " + (c.pickCount - pendingPicks.Count) + " 项，选满自动继续", dim);
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  三选一牌组界面（ChoiceView.DeckCards）
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 三张牌组卡横排。每张卡显示：牌组名 / 全部食材牌的名称与属性 / 变速模块名与效果。
+        /// 点卡片标题展开详情，详情下方才是「确认选择该卡组」和「取消」。
+        ///
+        /// 用 GUILayout.BeginHorizontal + 固定宽度来实现"横排三等分"：
+        /// 卡片数量不是写死的 3，跟着 options.Count 走，策划给 4 副牌也不会排版崩。
+        /// </summary>
+        private void DrawChoiceDeckCards(Choice c)
+        {
+            TextDto t = GameConfig.Texts();
+            int n = c.options.Count;
+
+            GUILayout.Label(c.prompt, h1);
+            if (!string.IsNullOrEmpty(c.hint)) GUILayout.Label(c.hint, dim);
+            GUILayout.Space(12f);
+
+            // 三等分宽度。窗口太窄时给个下限，避免卡片被压成一条线。
+            float avail = Mathf.Max(660f, Screen.width - 60f - 24f);
+            const float gap = 12f;
+            float cardW = n > 0 ? Mathf.Max(200f, (avail - gap * (n - 1)) / n) : avail;
+
+            GUILayout.BeginHorizontal();
+
+            for (int i = 0; i < n; i++)
+            {
+                ChoiceOption o = c.options[i];
+                if (o == null) continue;
+
+                Deck d = o.deck;
+                bool selected = (i == deckDetailIndex);
+
+                GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(cardW));
+
+                // 卡片标题本身就是按钮 —— "点击卡组查看详细信息"
+                if (GUILayout.Button((selected ? "▣ " : "▢ ") + o.title,
+                                     selected ? btnPicked : btn, GUILayout.Height(46f)))
+                {
+                    GUI.FocusControl(null);
+                    deckDetailIndex = selected ? -1 : i;   // 再点一次收起
+                }
+
+                GUILayout.Space(6f);
+
+                if (d != null)
+                {
+                    GUILayout.Label("食材牌 " + d.ingredients.Count + " 张", dim);
+                    for (int k = 0; k < d.ingredients.Count; k++)
+                    {
+                        Ingredient ing = d.ingredients[k];
+                        if (ing == null) continue;
+
+                        bool isBlade = (ing.id == d.initialBladeId);
+                        GUILayout.Label("　" + ing.name + (isBlade ? "　[开局刀片]" : ""), body);
+                        GUILayout.Label("　　　" + ing.attrs.DescribeLabeled(), dim);
+                    }
+
+                    GUILayout.Space(6f);
+
+                    for (int k = 0; k < d.modules.Count; k++)
+                    {
+                        SpeedModule m = d.modules[k];
+                        if (m == null) continue;
+                        GUILayout.Label("变速模块：" + m.name, body);
+                        GUILayout.Label("　　　" + m.Description(), dim);
+                    }
+                }
+                else
+                {
+                    GUILayout.Label("（这副牌组没有解析出数据）", dim);
+                }
+
+                GUILayout.EndVertical();
+
+                if (i < n - 1) GUILayout.Space(gap);
+            }
+
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(16f);
+
+            // ── 详情区（没展开就只提示一句）──
+            if (deckDetailIndex < 0 || deckDetailIndex >= n || c.options[deckDetailIndex] == null)
+            {
+                GUILayout.Label("点击上面的卡片查看详细信息。", dim);
+                return;
+            }
+
+            ChoiceOption sel = c.options[deckDetailIndex];
+            DrawDeckDetail(sel);
+
+            GUILayout.Space(14f);
+            GUILayout.BeginHorizontal();
+
+            if (GUILayout.Button(t.deckConfirm + "：" + sel.title, btn, GUILayout.Height(56f)))
+            {
+                GUI.FocusControl(null);
+                ConfirmChoice(sel.id);
+                return;
+            }
+
+            GUILayout.Space(10f);
+
+            if (GUILayout.Button(t.deckCancel, btn, GUILayout.Width(150f), GUILayout.Height(56f)))
+            {
+                GUI.FocusControl(null);
+                deckDetailIndex = -1;      // 收起详情，回到三卡总览
+            }
+
+            GUILayout.EndHorizontal();
+        }
+
+        /// <summary>牌组详情：每张牌标出它开局是进刀片槽还是进手牌，并附三属性含义。</summary>
+        private void DrawDeckDetail(ChoiceOption o)
+        {
+            Deck d = o.deck;
+            GUILayout.Label("详情　" + o.title, h2);
+            if (d == null) return;
+
+            GUILayout.BeginVertical(GUI.skin.box);
+
+            for (int k = 0; k < d.ingredients.Count; k++)
+            {
+                Ingredient ing = d.ingredients[k];
+                if (ing == null) continue;
+
+                bool isBlade = (ing.id == d.initialBladeId);
+                GUILayout.Label("· " + ing.name
+                                + (isBlade ? "　【开局装在刀片槽】" : "　【开局进手牌】"), body);
+                GUILayout.Label("　　" + ing.attrs.DescribeLabeled(), dim);
+            }
+
+            for (int k = 0; k < d.modules.Count; k++)
+            {
+                SpeedModule m = d.modules[k];
+                if (m == null) continue;
+                GUILayout.Label("· 变速模块：" + m.name + "　→　" + m.Description(), body);
+            }
+
+            GUILayout.Space(8f);
+            GUILayout.Label("—— 三属性含义 ——", dim);
+            foreach (AttrDef def in AttrCatalog.All())
+            {
+                GUILayout.Label("　" + def.Label + "（" + def.tendency + "）：" + def.description, dim);
+            }
+
+            GUILayout.EndVertical();
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  选刀片界面（ChoiceView.BladeSwap）
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 上方当前刀片（名称 + 全部三属性），下方手牌。
+        ///
+        /// 点手牌里的**食材** → 立刻与当前刀片交换，原刀片回到手牌同一个位置。
+        /// 点**模块** → 不交换，弹一句"模块不能作为刀片"。
+        ///
+        /// 这个界面没有任何"候选项"——玩家手上的牌就是候选项，
+        /// 所以它不需要 Choice.options，走得是 turn 上的刀片 + 手牌。
+        /// </summary>
+        private void DrawChoiceBladeSwap(Choice c)
+        {
+            EnsureLoadout();
+
+            TextDto t = GameConfig.Texts();
+            Deck deck = ResolvePickedDeck();
+
+            GUILayout.Label(c.prompt, h1);
+            if (!string.IsNullOrEmpty(c.hint)) GUILayout.Label(c.hint, dim);
+            GUILayout.Space(12f);
+
+            // ── 一次性提示（"模块不能作为刀片"）──
+            if (!string.IsNullOrEmpty(toast) && Time.realtimeSinceStartup < toastUntil)
+            {
+                GUILayout.Label("⚠ " + toast, toastStyle);
+                GUILayout.Space(10f);
+            }
+
+            // ── 当前刀片 ──
+            GUILayout.Label("当前刀片", h2);
+            GUILayout.BeginVertical(GUI.skin.box);
+
+            if (turn.blade == null)
+            {
+                GUILayout.Label("（没有刀片）", body);
+            }
+            else
+            {
+                GUILayout.Label(turn.blade.name, h2);
+
+                // 挂上本局效果之后的实际属性 —— 界面上看到的就是真正会用来结算的值
+                AttrSet resolved = turn.BladeResolvedAttrs();
+                foreach (AttrDef def in AttrCatalog.All())
+                {
+                    GUILayout.Label("　" + def.FormatLabeled(resolved.Get(def.id))
+                                    + "　（" + def.tendency + "）", body);
+                }
+            }
+
+            GUILayout.EndVertical();
+            GUILayout.Space(16f);
+
+            // ── 手牌 ──
+            GUILayout.Label("手牌（点击食材即换成刀片，可反复换）", h2);
+            GUILayout.Space(6f);
+
+            if (turn.hand == null || turn.hand.Count == 0)
+            {
+                // 正常不会有这种情况（牌组至少 4 张），留着保证代码健壮
+                GUILayout.Label("手牌里没有食材，无法更换刀片。", dim);
+            }
+
+            for (int i = 0; i < turn.hand.Count; i++)
+            {
+                Ingredient ing = turn.hand[i];
+                if (ing == null) continue;
+
+                string label = "【食材】" + ing.name + "\n　　" + ing.attrs.DescribeLabeled();
+                if (GUILayout.Button(label, btn, GUILayout.Height(64f)))
+                {
+                    GUI.FocusControl(null);
+                    toast = "";                        // 换成功就把上次的提示清掉
+                    turn.SwapBladeWithHand(i);
+                    return;                            // 布局已经变了，本帧到此为止
+                }
+            }
+
+            // 模块也列在手牌区里，但有类型标签、点了不换
+            if (deck != null && deck.modules != null)
+            {
+                for (int i = 0; i < deck.modules.Count; i++)
+                {
+                    SpeedModule m = deck.modules[i];
+                    if (m == null) continue;
+
+                    string label = "【模块】" + m.name + "\n　　" + m.Description();
+                    if (GUILayout.Button(label, btn, GUILayout.Height(64f)))
+                    {
+                        GUI.FocusControl(null);
+                        toast = t.moduleRejected;
+                        toastUntil = Time.realtimeSinceStartup + 2.5f;
+                    }
+                }
+            }
+
+            GUILayout.Space(18f);
+
+            if (GUILayout.Button(t.bladeConfirm, btn, GUILayout.Height(56f)))
+            {
+                GUI.FocusControl(null);
+                ConfirmChoice();
             }
         }
 
