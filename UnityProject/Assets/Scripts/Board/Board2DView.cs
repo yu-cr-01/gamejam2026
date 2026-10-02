@@ -38,6 +38,17 @@ namespace GameJam.Prototype
         private readonly List<Ingredient> hand   = new List<Ingredient>();
         private readonly List<Ingredient> played = new List<Ingredient>();
 
+        // ── 界面状态 ──────────────────────────────────────────────────
+        /// <summary>先开场界面，翻开书之后才进棋盘。</summary>
+        /// <remarks>
+        /// ★ 枚举名不能叫 Screen —— 那会遮蔽 UnityEngine.Screen，
+        ///   之后所有 Screen.width / Screen.height 都会去枚举里找，编译不过。
+        /// </remarks>
+        private enum UiScreen { Title, Board }
+
+        private UiScreen screen = UiScreen.Title;
+        private readonly TitleScreen titleScreen = new TitleScreen();
+
         private int score;
         private int target = 1000;
 
@@ -59,8 +70,20 @@ namespace GameJam.Prototype
         private float shownLevel;
 
         // ── 拖动状态 ──────────────────────────────────────────────────
-        /// <summary>正在被拖的是手牌第几张。-1 = 没在拖</summary>
+        /// <summary>正在被拖的是手牌第几张。-1 = 没从手牌拖</summary>
         private int dragIndex = -1;
+
+        /// <summary>
+        /// 正在被拖的是打出区第几张。-1 = 没从打出区拖。
+        ///
+        /// 【为什么要两个下标】
+        /// 牌有两个来源：手牌、打出区已经摆好的牌。
+        /// 用 "dragIndex >= 0" 表示前者、"dragFromSlot >= 0" 表示后者，
+        /// 松手时才好判断该从哪里摘掉、又该插到哪里去。
+        /// </summary>
+        private int dragFromSlot = -1;
+
+        private bool IsDragging { get { return dragIndex >= 0 || dragFromSlot >= 0; } }
 
         /// <summary>抓取点相对卡牌左上角的偏移 —— 抓哪拎哪，卡不会"跳"到鼠标中心</summary>
         private Vector2 dragGrab;
@@ -74,8 +97,14 @@ namespace GameJam.Prototype
         private Rect  flyTo;
         private float flyT = -1f;
 
-        /// <summary>飞到哪个槽（≥0）；-1 表示没拖到槽位、要飞回手牌</summary>
+        /// <summary>飞到哪个槽（≥0）；-1 表示没拖到槽位、要退回手牌</summary>
         private int flySlot = -1;
+
+        /// <summary>落到打出区时，插到第几个位置</summary>
+        private int flyInsertAt;
+
+        /// <summary>退回手牌时插回第几位（-1 = 追加到末尾）</summary>
+        private int flyBackIndex = -1;
 
         private const float FlyDuration = 0.22f;
 
@@ -131,6 +160,9 @@ namespace GameJam.Prototype
 
         private void Update()
         {
+            // 开场界面期间不跑棋盘的逻辑
+            if (screen == UiScreen.Title) return;
+
             // 液面平滑追赶
             float want = Mathf.Clamp01(target > 0 ? (float)score / target : 0f);
             if (Mathf.Abs(shownLevel - want) > 0.0005f)
@@ -146,9 +178,11 @@ namespace GameJam.Prototype
         /// <summary>
         /// 飞牌动画推进。
         ///
-        /// ★ 牌飞到位只是"摆好"，**不结算** ——
-        ///   结算要等玩家按「确认打出」。
-        ///   一松手就执行的话，放错了没法反悔。
+        /// ★ 牌飞到位只是"摆好"，**不结算** —— 结算要等玩家按「确认打出」。
+        ///
+        /// 落位规则（换顺序就靠这里）：
+        ///   落在槽位 → 插到该下标；超出槽位数时把末尾那张挤回手牌
+        ///   没落槽位 → 退回手牌（从打出区拖出来的话，这就是"取消打出"）
         /// </summary>
         private void AdvanceFly()
         {
@@ -157,15 +191,31 @@ namespace GameJam.Prototype
             flyT += Time.deltaTime;
             if (flyT < FlyDuration) return;
 
-            if (flySlot >= 0 && flyCard != null)
+            if (flyCard != null)
             {
-                if (played.Count >= PlaySlots) played.RemoveAt(0);   // 打满了挤掉最早那张
-                played.Add(flyCard);
+                if (flySlot >= 0)
+                {
+                    played.Insert(Mathf.Clamp(flyInsertAt, 0, played.Count), flyCard);
+
+                    // 超出手牌位就把末尾挤回手牌。
+                    // 直接丢掉会让玩家莫名其妙少一张牌 —— 手牌是唯一的归宿。
+                    while (played.Count > PlaySlots)
+                    {
+                        int last = played.Count - 1;
+                        hand.Add(played[last]);
+                        played.RemoveAt(last);
+                    }
+                }
+                else
+                {
+                    int at = (flyBackIndex >= 0) ? Mathf.Clamp(flyBackIndex, 0, hand.Count) : hand.Count;
+                    hand.Insert(at, flyCard);
+                }
             }
 
-            // flySlot < 0 是回弹 —— 牌一直留在 hand 里没动过，什么都不用做
             flyCard = null;
             flySlot = -1;
+            flyBackIndex = -1;
             flyT = -1f;
         }
 
@@ -296,6 +346,16 @@ namespace GameJam.Prototype
 
             float W = Screen.width;
             float H = Screen.height;
+
+            // ── 开场界面 ──
+            // 它自己画满屏并处理点击，这里直接 return，棋盘的东西一律不碰 ——
+            // 否则开场的鼠标事件会被下面的拖拽逻辑顺手吃掉。
+            if (screen == UiScreen.Title)
+            {
+                titleScreen.Draw(new Rect(0f, 0f, W, H));
+                if (titleScreen.StartRequested) screen = UiScreen.Board;
+                return;
+            }
 
             // 纯 2D 视图，先把整屏压成深色底 ——
             // 不然背后空场景的天空盒会透出来，和面板的深色调子打架
@@ -505,7 +565,12 @@ namespace GameJam.Prototype
 
                 if (i < played.Count && played[i] != null)
                 {
-                    DrawCardFace(s, played[i], true);
+                    // 正在被拖的那张不在这里画（它跟着鼠标走）
+                    if (i != dragFromSlot)
+                    {
+                        HandleStagedMouseDown(i, s);
+                        DrawCardFace(s, played[i], true);
+                    }
                 }
                 else
                 {
@@ -514,7 +579,7 @@ namespace GameJam.Prototype
 
                 // 拖动时把"要落进去的那个槽"描一圈琥珀色 ——
                 // 玩家松手之前就知道会落到哪，不用试错
-                if (dragIndex >= 0 && i == HoveredSlot())
+                if (IsDragging && i == HoveredSlot())
                     DrawFrame(s, new Color(1.00f, 0.76f, 0.26f), 3f);
             }
             y += slotH + 18f;
@@ -689,8 +754,27 @@ namespace GameJam.Prototype
             if (!rect.Contains(e.mousePosition)) return;
 
             dragIndex = index;
+            dragFromSlot = -1;
             dragMouse = e.mousePosition;
             dragGrab  = e.mousePosition - new Vector2(rect.x, rect.y);   // 抓哪拎哪
+            e.Use();
+        }
+
+        /// <summary>
+        /// 打出区里按下 → 开始拖。这是"换顺序"的入口：
+        /// 拖到别的槽就插到那里，拖出打出区就退回手牌。
+        /// </summary>
+        private void HandleStagedMouseDown(int slot, Rect rect)
+        {
+            Event e = Event.current;
+            if (e == null) return;
+            if (e.type != EventType.MouseDown || e.button != 0) return;
+            if (!rect.Contains(e.mousePosition)) return;
+
+            dragFromSlot = slot;
+            dragIndex = -1;
+            dragMouse = e.mousePosition;
+            dragGrab  = e.mousePosition - new Vector2(rect.x, rect.y);
             e.Use();
         }
 
@@ -698,7 +782,7 @@ namespace GameJam.Prototype
         private void HandleDragGlobal()
         {
             Event e = Event.current;
-            if (e == null || dragIndex < 0) return;
+            if (e == null || !IsDragging) return;
 
             dragMouse = e.mousePosition;
 
@@ -707,6 +791,25 @@ namespace GameJam.Prototype
                 BeginFly(HoveredSlot());
                 e.Use();
             }
+        }
+
+        /// <summary>正在拖的是哪张牌（不管来自手牌还是打出区）。</summary>
+        private Ingredient DragCard()
+        {
+            if (dragFromSlot >= 0 && dragFromSlot < played.Count) return played[dragFromSlot];
+            if (dragIndex >= 0 && dragIndex < hand.Count)        return hand[dragIndex];
+            return null;
+        }
+
+        /// <summary>正在拖的牌原来在哪个矩形里 —— 飞行动画的起点。</summary>
+        private Rect DragSourceRect()
+        {
+            if (dragFromSlot >= 0 && dragFromSlot < slotRects.Length) return slotRects[dragFromSlot];
+            if (dragIndex >= 0 && dragIndex < handRects.Count)        return handRects[dragIndex];
+
+            float w = handRects.Count > 0 ? handRects[0].width : 120f;
+            float h = handRects.Count > 0 ? handRects[0].height : 120f;
+            return new Rect(dragMouse.x - dragGrab.x, dragMouse.y - dragGrab.y, w, h);
         }
 
         /// <summary>
@@ -728,24 +831,32 @@ namespace GameJam.Prototype
             return -1;
         }
 
-        /// <summary>松手 → 起一段飞牌动画。落位和回弹只差一个目标矩形。</summary>
+        /// <summary>松手 → 起一段飞牌动画。落位、换位、退手牌只差一个目标矩形。</summary>
         private void BeginFly(int slot)
         {
-            if (dragIndex < 0 || dragIndex >= hand.Count) { dragIndex = -1; return; }
+            Ingredient card = DragCard();
+            if (card == null) { dragIndex = -1; dragFromSlot = -1; return; }
 
-            flyCard = hand[dragIndex];
-            flyFrom = new Rect(dragMouse.x - dragGrab.x, dragMouse.y - dragGrab.y,
-                               handRects.Count > dragIndex ? handRects[dragIndex].width  : 120f,
-                               handRects.Count > dragIndex ? handRects[dragIndex].height : 120f);
+            Rect src = DragSourceRect();
+            flyFrom = new Rect(dragMouse.x - dragGrab.x, dragMouse.y - dragGrab.y, src.width, src.height);
 
-            flySlot = slot;
-            flyTo = (slot >= 0 && slot < slotRects.Length) ? slotRects[slot] : flyFrom;
+            int fromSlot = dragFromSlot;
+            int fromHand = dragIndex;
 
-            // 落进槽位：现在就把它从手牌摘掉（动画期间由 flyCard 代表它）
-            // 回弹：牌一直留在 hand 里，动画结束什么都不用做
-            if (slot >= 0) hand.RemoveAt(dragIndex);
+            // ★ 先摘牌、再算插入位置，顺序不能反。
+            //   如果先插后摘，目标下标会因为"还没腾出位置"而错一位 ——
+            //   表现出来就是"拖到第 3 格结果落在第 2 格"。
+            if (fromSlot >= 0) played.RemoveAt(fromSlot);
+            else               hand.RemoveAt(fromHand);
+
+            flyCard   = card;
+            flySlot   = slot;
+            flyTo     = (slot >= 0 && slot < slotRects.Length) ? slotRects[slot] : src;
+            flyInsertAt = slot;
+            flyBackIndex = (fromSlot >= 0) ? -1 : fromHand;   // 手牌来的退回原位，打出区来的追加到末尾
 
             dragIndex = -1;
+            dragFromSlot = -1;
             flyT = 0f;
         }
 
@@ -769,16 +880,17 @@ namespace GameJam.Prototype
         /// <summary>拖动中的那张牌：跟着鼠标，并且抬起来一点（画得稍大 + 描边）</summary>
         private void DrawDraggingCard()
         {
-            if (dragIndex < 0 || dragIndex >= hand.Count) return;
+            Ingredient card = DragCard();
+            if (card == null) return;
 
-            Rect hr = handRects.Count > dragIndex ? handRects[dragIndex] : new Rect(0, 0, 120, 120);
-            Rect r = new Rect(dragMouse.x - dragGrab.x, dragMouse.y - dragGrab.y, hr.width, hr.height);
+            Rect src = DragSourceRect();
+            Rect r = new Rect(dragMouse.x - dragGrab.x, dragMouse.y - dragGrab.y, src.width, src.height);
 
             // 抬起效果：往外扩 6 像素 + 琥珀描边，看着像"拎起来了"
             DrawFrame(new Rect(r.x - 6f, r.y - 6f, r.width + 12f, r.height + 12f),
                       new Color(1.00f, 0.76f, 0.26f, 0.85f), 3f);
 
-            DrawCardFace(r, hand[dragIndex], false);
+            DrawCardFace(r, card, false);
         }
 
         // ══════════════════════════════════════════════════════════════

@@ -392,6 +392,96 @@ namespace GameJam.Prototype
         }
 
         // ══════════════════════════════════════════════════════════════
+        //  烛光（开场界面用）
+        // ══════════════════════════════════════════════════════════════
+
+        private static Texture2D glowTex;
+        private static Texture2D flameTex;
+
+        /// <summary>
+        /// 径向辉光：中心白、向外平滑衰减到全透明。
+        /// 用 GUI.color 染成暖琥珀色就是烛光，拉扁拉长就是火苗的外焰 ——
+        /// 只做一张白图，靠染色和拉伸派生出多种用法。
+        /// </summary>
+        public static Texture2D RadialGlow()
+        {
+            if (glowTex != null) return glowTex;
+
+            const int S = 128;
+            Color32[] px = new Color32[S * S];
+            float half = S * 0.5f;
+
+            for (int y = 0; y < S; y++)
+            {
+                float py = (y + 0.5f - half) / half;
+                for (int x = 0; x < S; x++)
+                {
+                    float pxx = (x + 0.5f - half) / half;
+                    float d = Mathf.Sqrt(pxx * pxx + py * py);
+
+                    // ★ 平方衰减。
+                    //   线性衰减会在边界上留一圈看得见的硬边，
+                    //   平方之后是"越往外越快地淡掉"，才像光。
+                    float a = Mathf.Clamp01(1f - d);
+                    a = a * a;
+
+                    px[y * S + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+                }
+            }
+
+            glowTex = NewTex(S, S);
+            glowTex.SetPixels32(px);
+            glowTex.Apply(false, false);
+            return glowTex;
+        }
+
+        /// <summary>
+        /// 火苗：上尖下圆的水滴形，从底部的近白芯过渡到顶端的橙红。
+        /// 贴图本身是静态的 —— 抖动交给调用方用位移和缩放做，那样才像在跳。
+        /// </summary>
+        public static Texture2D Flame()
+        {
+            if (flameTex != null) return flameTex;
+
+            const int W = 64, H = 96;
+            Color32[] px = new Color32[W * H];
+
+            Color hot  = new Color(1.00f, 0.96f, 0.82f);
+            Color mid  = new Color(1.00f, 0.68f, 0.22f);
+            Color cool = new Color(0.92f, 0.36f, 0.09f);
+
+            for (int y = 0; y < H; y++)
+            {
+                float v = (float)y / (H - 1);          // 0 = 底，1 = 顶
+
+                // 水滴廓形：底部最宽，往上收成尖
+                float widthAt = Mathf.Sin(Mathf.Pow(v, 0.62f) * Mathf.PI) * 0.92f + 0.08f;
+                float halfW = W * 0.5f * widthAt;
+
+                for (int x = 0; x < W; x++)
+                {
+                    float dx = Mathf.Abs((x + 0.5f) - W * 0.5f);
+
+                    float ax = Mathf.Clamp01(1f - dx / Mathf.Max(0.5f, halfW));
+                    float ay = Mathf.Clamp01(1f - Mathf.Pow(v, 2.4f));
+                    float a = Mathf.Pow(ax, 0.85f) * ay;
+
+                    Color c = v < 0.45f
+                        ? Color.Lerp(hot, mid, v / 0.45f)
+                        : Color.Lerp(mid, cool, (v - 0.45f) / 0.55f);
+
+                    c.a = Mathf.Pow(Mathf.Clamp01(a), 1.35f);
+                    px[y * W + x] = c;
+                }
+            }
+
+            flameTex = NewTex(W, H);
+            flameTex.SetPixels32(px);
+            flameTex.Apply(false, false);
+            return flameTex;
+        }
+
+        // ══════════════════════════════════════════════════════════════
         //  工具
         // ══════════════════════════════════════════════════════════════
 
