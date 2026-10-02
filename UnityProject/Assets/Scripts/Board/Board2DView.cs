@@ -52,6 +52,9 @@ namespace GameJam.Prototype
         /// <summary>这一轮动画结算后要加的分数（动画演完才真正加上去）</summary>
         private int pendingScore;
 
+        /// <summary>动画演完后是否把打出区的牌清掉（它们被破壁机吃掉了）</summary>
+        private bool pendingClear;
+
         /// <summary>液面平滑值（0..1），别让杯子里的水位瞬间跳</summary>
         private float shownLevel;
 
@@ -141,9 +144,11 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
-        /// 飞牌动画推进。飞到了才真正把牌并进打出区、并启动破壁机动画 ——
-        /// 这样"牌飞过去 → 破壁机压它 → 爆浆 → 分数入杯"是一条顺序链，
-        /// 不会出现牌还在半路、机器已经压完了的错位。
+        /// 飞牌动画推进。
+        ///
+        /// ★ 牌飞到位只是"摆好"，**不结算** ——
+        ///   结算要等玩家按「确认打出」。
+        ///   一松手就执行的话，放错了没法反悔。
         /// </summary>
         private void AdvanceFly()
         {
@@ -156,15 +161,32 @@ namespace GameJam.Prototype
             {
                 if (played.Count >= PlaySlots) played.RemoveAt(0);   // 打满了挤掉最早那张
                 played.Add(flyCard);
-
-                // 分数先记账，等破壁机动画演完再加
-                PlayBlend(ScoreOf(flyCard));
             }
 
             // flySlot < 0 是回弹 —— 牌一直留在 hand 里没动过，什么都不用做
             flyCard = null;
             flySlot = -1;
             flyT = -1f;
+        }
+
+        /// <summary>打出区当前摆着的牌一共值多少分（只是预览，还没结算）。</summary>
+        private int StagedScore()
+        {
+            int sum = 0;
+            for (int i = 0; i < played.Count; i++) sum += ScoreOf(played[i]);
+            return sum;
+        }
+
+        /// <summary>
+        /// 确认打出：把打出区摆着的牌交给破壁机，开始结算。
+        /// 分数等动画演完才加，同时清空槽位（牌被吃掉了）。
+        /// </summary>
+        private void ConfirmPlay()
+        {
+            if (played.Count == 0 || blendT >= 0f) return;
+
+            pendingClear = true;
+            PlayBlend(StagedScore());
         }
 
         /// <summary>一张牌值多少分（临时算法，等回合结算接进来再换）。</summary>
@@ -186,6 +208,14 @@ namespace GameJam.Prototype
             // 动画演完才真正加分 —— 分数和表现对齐，不会"数字先跳、动画后播"
             score += pendingScore;
             pendingScore = 0;
+
+            // 打出区的牌被破壁机吃掉了，结算完清空
+            if (pendingClear)
+            {
+                played.Clear();
+                pendingClear = false;
+            }
+
             blendT = -1f;
         }
 
@@ -294,9 +324,9 @@ namespace GameJam.Prototype
             DrawFlyingCard();
 
             // 左下角操作提示
-            GUI.Label(new Rect(leftX + 8f, handY + handH - 22f, 700f, 20f),
-                      "拖动卡牌到打出区打出（拖到别处会飞回手牌）　｜　B / 空格 播放破壁机动画　｜　"
-                      + deckNameText(), small);
+            GUI.Label(new Rect(leftX + 8f, handY + handH - 22f, 760f, 20f),
+                      "拖动卡牌到打出区摆好 → 按「确认打出」才结算　｜　"
+                      + "B / 空格 播放破壁机动画　｜　" + deckNameText(), small);
         }
 
         private string deckNameText()
@@ -503,6 +533,24 @@ namespace GameJam.Prototype
                 GUI.Label(new Rect(bladeRect.x + 10f, bladeRect.y + 28f, bladeRect.width - 20f, 20f),
                           blade.attrs.DescribeLabeledNonZero(), small);
             }
+
+            // ── 确认打出 ──
+            // 拖进打出区只是"摆好"，按这里才真正丢进破壁机结算。
+            // 这样放错了还能拖回去改，不会一松手就后悔。
+            const float btnH = 50f;
+            Rect confirm = new Rect(x, r.y + r.height - pad - btnH, w, btnH);
+
+            bool running = blendT >= 0f;
+            bool canConfirm = played.Count > 0 && !running;
+
+            string label;
+            if (running)              label = "破壁机运转中…";
+            else if (played.Count == 0) label = "把牌拖进打出区";
+            else                      label = "确认打出　（" + played.Count + " 张　共 " + StagedScore() + " 分）";
+
+            GUI.enabled = canConfirm;
+            if (GUI.Button(confirm, label, btn)) ConfirmPlay();
+            GUI.enabled = true;
         }
 
         // ── 右：客人 / 杯子 ───────────────────────────────────────────
