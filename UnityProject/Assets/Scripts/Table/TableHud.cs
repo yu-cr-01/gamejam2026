@@ -231,7 +231,9 @@ namespace GameJam.Prototype
                       "一台机器，一个人，和一桌不肯认输的材料", titleSub);
 
             GUI.Label(new Rect(0f, Screen.height - 96f, Screen.width, 30f),
-                      HintForTitle(turnLoop.titleRig.Hovered), titleHint);
+                      turnLoop.titleRig.IsStarting
+                          ? "启 动 中 …"
+                          : HintForTitle(turnLoop.titleRig.Hovered), titleHint);
         }
 
         private static string HintForTitle(string id)
@@ -239,10 +241,11 @@ namespace GameJam.Prototype
             switch (id)
             {
                 case TableTitleRig.IdNew:      return "翻开它，开始这一局";
+                case TableTitleRig.IdJuicer:   return "按下开关，启动破壁机";
                 case TableTitleRig.IdContinue: return "还没有存档";
                 case TableTitleRig.IdSettings: return "设置还没做";
                 case TableTitleRig.IdQuit:     return "离开这张桌子";
-                default:                       return "桌上那本书是「新游戏」";
+                default:                       return "桌上那本书是「新游戏」，机器也能启动";
             }
         }
 

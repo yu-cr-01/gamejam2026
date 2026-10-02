@@ -33,6 +33,9 @@ namespace GameJam.Prototype
         public const string IdSettings = "settings";
         public const string IdQuit     = "quit";
 
+        /// <summary>点机器也是开始 —— 它才是这一局的主角。</summary>
+        public const string IdJuicer   = "juicer";
+
         private class MenuItem
         {
             public GameObject go;
@@ -53,10 +56,24 @@ namespace GameJam.Prototype
         private Light       candleLight;
         private float       flicker = 1f;
 
+        // ── 榨汁机（点它启动）──────────────────────────────────────────
+        private GameObject juicerProxy;    // 只在开场存在的点击代理
+        private Renderer   juicerGlow;     // 悬停时桌面上亮起的一圈暖光
+        private float      glowA;
+
+        /// <summary>点了机器之后的启动延时。-1 表示没在启动。</summary>
+        private float startingAt = -1f;
+
+        /// <summary>启动动画时长。点了立刻切屏的话，玩家看不到机器被启动。</summary>
+        private const float StartDelay = 1.3f;
+
+        /// <summary>正在启动（这段时间锁输入）。</summary>
+        public bool IsStarting { get { return startingAt >= 0f; } }
+
         // ── 布局 ──────────────────────────────────────────────────────
         // 书摆在桌子正中偏远端 —— 就是后面三选一牌组出现的位置，
         // 视线落点从开场到选牌是连贯的。
-        private static readonly Vector3 BookAt   = new Vector3(0f, 0f, 0.16f);
+        public static readonly Vector3 BookAt   = new Vector3(0f, 0f, 0.16f);
         private const float BookW = 0.62f;
         private const float BookD = 0.46f;
         private const float BookH = 0.100f;
@@ -106,6 +123,7 @@ namespace GameJam.Prototype
             BuildPlaque(IdQuit,     "退　　出",        PlaqueGap,  true);
 
             BuildCandle();
+            BuildJuicerTrigger();
         }
 
         public void Clear()
@@ -114,9 +132,58 @@ namespace GameJam.Prototype
                 CardFactory.DestroySafe(items[i].go);
             items.Clear();
 
+            // 点击代理和辉光跟着开场一起走 —— 回合里不该有任何残留碰撞体
+            CardFactory.DestroySafe(juicerProxy);
+            CardFactory.DestroySafe(juicerGlow != null ? juicerGlow.gameObject : null);
+            juicerProxy = null;
+            juicerGlow  = null;
+            glowA       = 0f;
+
             Hovered = null;
             flame = null;
             candleLight = null;
+            startingAt = -1f;
+        }
+
+        // ── 榨汁机：点它启动 ─────────────────────────────────────────
+        private void BuildJuicerTrigger()
+        {
+            JuicerRig j = setup != null ? setup.juicer : null;
+            if (j == null) return;
+
+            // ★ 机器自己的碰撞体是**故意关掉**的（JuicerRig.Strip —— 开着会挡住
+            //   卡牌的射线拾取）。所以这里另挂一个只在开场存在的代理碰撞体：
+            //   它跟着开场一起建、一起销毁，回合循环里完全不存在。
+            //
+            //   尺寸用机器的**本地空间**给，外面那层 0.75 的缩放会自动带上。
+            GameObject proxy = new GameObject("TitleJuicerProxy");
+            proxy.transform.SetParent(j.transform, false);
+            proxy.transform.localPosition = new Vector3(0f, 0.35f, 0f);
+
+            BoxCollider bc = proxy.AddComponent<BoxCollider>();
+            bc.size = new Vector3(0.40f, 0.74f, 0.40f);
+            juicerProxy = proxy;
+
+            // 悬停时桌面上亮起一圈暖光 —— 机器本身已经是全画面最亮的东西，
+            // 再往上提亮看不出变化，不如在它脚下点一盏灯。
+            GameObject g = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            g.name = "TitleJuicerGlow";
+            g.transform.SetParent(j.transform, false);
+            g.transform.localPosition = new Vector3(0f, 0.006f, 0f);
+            g.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            g.transform.localScale    = new Vector3(1.30f, 1.30f, 1f);
+
+            Collider gc = g.GetComponent<Collider>();
+            if (gc != null) gc.enabled = false;
+
+            Renderer gr = g.GetComponent<Renderer>();
+            if (gr != null)
+            {
+                gr.material = CardFactory.MakeUnlit(ProceduralArt.RadialGlow());
+                gr.material.color = new Color(1f, 0.72f, 0.34f, 0f);
+                gr.enabled = false;
+            }
+            juicerGlow = gr;
         }
 
         // ── 那本书 = 「新游戏」 ───────────────────────────────────────
@@ -259,6 +326,20 @@ namespace GameJam.Prototype
             TickCandle();
 
             if (loop == null || loop.phase != TablePhase.Title) return;
+            if (cam == null) return;
+
+            // 启动动画期间锁输入 —— 连点几下不能重复触发（PlayStamp 重入会打断动画）
+            if (startingAt >= 0f)
+            {
+                Animate();
+
+                if (Time.time - startingAt >= StartDelay)
+                {
+                    startingAt = -1f;
+                    loop.ConfirmTitleStart();
+                }
+                return;
+            }
 
             Ray ray = cam.ScreenPointToRay(Input.mousePosition);
             Hovered = HitItem(ray);
@@ -298,16 +379,27 @@ namespace GameJam.Prototype
                 flame.rotation = Quaternion.LookRotation(flame.position - cam.transform.position);
         }
 
+        /// <summary>
+        /// 射线打到哪一项（返回 id，没打到返回 null）。
+        ///
+        /// 公开出来是给编辑器工具做命中测试用的：机器的碰撞体是单独加的代理，
+        /// 尺寸给错就会点不到，而**这种错在静态截图里完全看不出来** ——
+        /// 画面一模一样，只是点下去没反应。
+        /// </summary>
+        public string HitTest(Ray ray) { return HitItem(ray); }
+
         private string HitItem(Ray ray)
         {
             RaycastHit hit;
             if (!Physics.Raycast(ray, out hit, 50f)) return null;
 
-            // 从命中的碰撞体往上找，看是不是某一块菜单物件。
+            // 从命中的碰撞体往上找，看是不是某一块菜单物件（或者机器的点击代理）。
             // 不用 transform.root —— 那会一路找到整张桌子。
             Transform t = hit.collider.transform;
             while (t != null)
             {
+                if (juicerProxy != null && t == juicerProxy.transform) return IdJuicer;
+
                 for (int i = 0; i < items.Count; i++)
                     if (items[i].go != null && items[i].go == t.gameObject) return items[i].id;
                 t = t.parent;
@@ -339,6 +431,52 @@ namespace GameJam.Prototype
                     it.body.material.color = Color.Lerp(it.body.material.color, want, k);
                 }
             }
+
+            AnimateJuicerGlow(k);
+        }
+
+        /// <summary>
+        /// 机器脚下那圈光。
+        /// 悬停时稳定亮着；按下之后改成脉动 —— 让"正在启动"看得出来，
+        /// 而不是点完一片安静、一秒后才突然切屏。
+        /// </summary>
+        private void AnimateJuicerGlow(float k)
+        {
+            if (juicerGlow == null || juicerGlow.material == null) return;
+
+            float want;
+            if (startingAt >= 0f)
+                want = 0.42f + 0.24f * Mathf.Sin(Time.time * 16f);
+            else
+                want = (Hovered == IdJuicer) ? 0.55f : 0f;
+
+            glowA = Mathf.Lerp(glowA, want, k);
+
+            juicerGlow.enabled = glowA > 0.02f;
+
+            Color c = juicerGlow.material.color;
+            c.a = glowA;
+            juicerGlow.material.color = c;
+        }
+
+        /// <summary>
+        /// 截图工具用：把悬停辉光强制点亮。
+        ///
+        /// 这圈光平时只在鼠标悬停（或启动中）才出现，而编辑模式下 Update 不跑，
+        /// 静态预览图里就永远看不到它 —— 等于这块效果没人验过。
+        /// 这里开个口子让 TablePreviewCapture 能把它点亮，和它已有的
+        /// "给罐子灌 600 分好确认液面"是同一类东西。
+        /// </summary>
+        public void PreviewHighlight(bool on)
+        {
+            if (juicerGlow == null || juicerGlow.material == null) return;
+
+            glowA = on ? 0.55f : 0f;
+            juicerGlow.enabled = on;
+
+            Color c = juicerGlow.material.color;
+            c.a = glowA;
+            juicerGlow.material.color = c;
         }
 
         /// <summary>点了某一项。</summary>
@@ -351,6 +489,13 @@ namespace GameJam.Prototype
             {
                 case IdNew:
                     if (loop != null) loop.ConfirmTitleStart();
+                    break;
+
+                // 点机器也是开始。先让它动起来，过一拍再切屏 ——
+                // 点了立刻进牌组选择的话，玩家根本看不到自己启动了机器。
+                case IdJuicer:
+                    startingAt = Time.time;
+                    if (setup != null && setup.juicer != null) setup.juicer.PlayStamp();
                     break;
 
                 case IdQuit:

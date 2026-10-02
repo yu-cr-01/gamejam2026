@@ -33,6 +33,20 @@ namespace GameJam.EditorTools
         private static readonly string[] Views = { "board", "juicer", "top", "hand", CameraRig.FreeView };
 
         [MenuItem("工具/截图 3D 桌面")]
+        /// <summary>从相机朝某个世界坐标打一条射线，看开场 rig 认成哪一项。</summary>
+        private static void LogHit(TableTitleRig rig, Camera cam, string label, Vector3 world)
+        {
+            Vector3 sp = cam.WorldToScreenPoint(world);
+            if (sp.z <= 0f)
+            {
+                Debug.Log("[命中] " + label + "：在相机背后，这次测不到");
+                return;
+            }
+
+            string id = rig.HitTest(cam.ScreenPointToRay(sp));
+            Debug.Log("[命中] " + label + " → " + (string.IsNullOrEmpty(id) ? "（没打到）" : id));
+        }
+
         public static void CaptureFromMenu()
         {
             string dir = RunCapture();
@@ -78,6 +92,24 @@ namespace GameJam.EditorTools
                 {
                     setup.juicer.SetScore(600, 1000);
                     setup.juicer.SnapLevelToScore();
+                }
+
+                // 开场那圈"机器可点"的辉光平时只在悬停时出现，静态图里看不到，
+                // 所以这里强制点亮一次，好确认它的位置和范围对不对。
+                TableTitleRig titleRig = Object.FindObjectOfType<TableTitleRig>();
+                if (titleRig != null) titleRig.PreviewHighlight(true);
+
+                // ── 命中测试 ──
+                // 开场有两个"能点就开始"的东西：桌上那本书、还有榨汁机。
+                // 机器自己的碰撞体是 JuicerRig 故意关掉的（开着会挡卡牌的射线），
+                // 所以 TableTitleRig 另挂了一个代理碰撞体 —— 那个盒子给错尺寸
+                // 就会出现"画面正常、点了没反应"，而截图永远发现不了。
+                if (titleRig != null && setup.cam != null)
+                {
+                    LogHit(titleRig, setup.cam, "书名", TableTitleRig.BookAt);
+                    if (setup.juicer != null)
+                        LogHit(titleRig, setup.cam, "机器", setup.juicer.transform.position
+                                                       + Vector3.up * 0.26f);
                 }
 
                 for (int i = 0; i < Views.Length; i++)
