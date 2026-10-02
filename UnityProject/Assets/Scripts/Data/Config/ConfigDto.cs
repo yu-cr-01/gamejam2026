@@ -117,6 +117,14 @@ namespace GameJam.Data
         /// <summary>所有牌组之外的兜底刀片 id（铁块）。牌组为空时才会用到。</summary>
         public string defaultBladeId;
 
+        /// <summary>
+        /// 全部关卡，按顺序。
+        /// 每个关卡自己带着完整的选择环节（见 GameConfig.BuildLevel），
+        /// 所以加一关只是在配置里多写一条，不用改代码。
+        /// </summary>
+        public LevelDto[] levels;
+
+        /// <summary>旧的单关字段。levels 没配时退回用它，保持老配置还能读。</summary>
         public LevelDto level;
 
         public TextDto texts;

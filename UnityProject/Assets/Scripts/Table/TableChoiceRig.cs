@@ -97,9 +97,63 @@ namespace GameJam.Prototype
                 ChoiceOption o = choice.options[i];
                 if (o == null) continue;
 
-                float x = RowXOff + (i - (n - 1) * 0.5f) * Spacing;
-                deckCards.Add(BuildOne(o, new Vector3(x, 0f, RowZ)));
+                Color accent = ProceduralArt.IngredientColor(o.id);
+
+                // 印记形状用牌组的开局刀片决定 —— 它是这副牌的门面
+                AttrId dominant = AttrId.Salt;
+                Ingredient blade = o.deck != null ? o.deck.InitialBlade() : null;
+                if (blade != null) dominant = ProceduralArt.DominantAttr(blade);
+
+                string module = "无";
+                if (o.deck != null && o.deck.modules != null && o.deck.modules.Count > 0
+                    && o.deck.modules[0] != null)
+                    module = o.deck.modules[0].name + "（" + o.deck.modules[0].Description() + "）";
+
+                deckCards.Add(BuildOne(o.id, o.title, accent, dominant,
+                    o.deck != null ? o.deck.DescribeIngredients() : "（无）",
+                    "模块：" + module,
+                    "开局刀片：" + (blade != null ? blade.name : "（无）"),
+                    CountToX(i, n), false));
             }
+        }
+
+        /// <summary>
+        /// 关卡卡片：一排关卡，每张写着名字、目标分、状态。
+        ///
+        /// 和牌组卡共用同一套卡片建模 —— 两者都是"一排大卡点一张"，
+        /// 只是上面的字不同。分开写两份的话，改一次卡面尺寸要改两处。
+        /// </summary>
+        public void BuildLevelCards(List<LevelData> levels, int currentIndex)
+        {
+            ClearDeckCards();
+
+            if (levels == null) return;
+
+            int n = levels.Count;
+            if (n == 0) return;
+
+            for (int i = 0; i < n; i++)
+            {
+                LevelData lv = levels[i];
+                if (lv == null) continue;
+
+                bool isCurrent = (i == currentIndex);
+
+                Color accent = isCurrent
+                    ? new Color(0.95f, 0.72f, 0.30f)          // 当前这关用暖金
+                    : new Color(0.45f, 0.48f, 0.55f);
+
+                deckCards.Add(BuildOne(lv.id, lv.name, accent, AttrId.Salt,
+                    "目标分：" + lv.targetScore,
+                    "选择环节：" + lv.ChoiceCount + " 个",
+                    isCurrent ? "▸ 当前关卡" : ("第 " + (i + 1) + " 关"),
+                    CountToX(i, n), isCurrent));
+            }
+        }
+
+        private static float CountToX(int i, int n)
+        {
+            return RowXOff + (i - (n - 1) * 0.5f) * Spacing;
         }
 
         public void ClearDeckCards()
@@ -112,18 +166,18 @@ namespace GameJam.Prototype
             DeckSelected = -1;
         }
 
-        private DeckCard BuildOne(ChoiceOption o, Vector3 pos)
+        /// <summary>
+        /// 造一张大卡片。牌组卡和关卡卡共用这一个 ——
+        /// 两者都是"一排大卡点一张"，只有上面的字不同，
+        /// 分开写两份的话改一次卡面尺寸要改两处。
+        /// </summary>
+        private DeckCard BuildOne(string id, string title, Color accent, AttrId dominant,
+                                  string line1, string line2, string line3,
+                                  float x, bool highlight)
         {
-            Color accent = ProceduralArt.IngredientColor(o.id);
-
-            // 印记形状用牌组的开局刀片决定 —— 它是这副牌的门面
-            AttrId dominant = AttrId.Salt;
-            Ingredient blade = o.deck != null ? o.deck.InitialBlade() : null;
-            if (blade != null) dominant = ProceduralArt.DominantAttr(blade);
-
-            GameObject go = new GameObject("DeckCard_" + o.id);
+            GameObject go = new GameObject("BigCard_" + id);
             if (root != null) go.transform.SetParent(root, false);
-            go.transform.position = pos;
+            go.transform.position = new Vector3(x, 0f, RowZ);
 
             // ── 卡身 ──
             GameObject body = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -140,7 +194,10 @@ namespace GameJam.Prototype
                 if (sh != null)
                 {
                     bodyR.material = new Material(sh);
-                    bodyR.material.color = EdgeColor;
+
+                    // 当前那关的卡身提亮一点 —— 金色卡面在深色桌面上本来就更显眼，
+                    // 卡身跟上才不会像"贴错色"。
+                    bodyR.material.color = highlight ? EdgeColor * 1.9f : EdgeColor;
                 }
             }
 
@@ -174,27 +231,14 @@ namespace GameJam.Prototype
             //   （按手牌的 0.008 厚度算）会把字埋进这块 0.018 厚的卡身里。
             float textY = CardT + 0.0022f;
 
-            string deckTitle = (o.deck != null && !string.IsNullOrEmpty(o.deck.name))
-                ? o.deck.name
-                : o.title;
+            CardFactory.AddText(go.transform, title, -0.075f, 0.0115f, InkOnPaper, textY);
 
-            CardFactory.AddText(go.transform, deckTitle, -0.075f, 0.0115f,
-                                InkOnPaper, textY);
-
-            string ingredients = o.deck != null ? o.deck.DescribeIngredients() : "（无）";
-            CardFactory.AddText(go.transform, "食材：" + ingredients, -0.115f, 0.0043f,
-                                InkOnPaper, textY);
-
-            string module = "无";
-            if (o.deck != null && o.deck.modules != null && o.deck.modules.Count > 0
-                && o.deck.modules[0] != null)
-                module = o.deck.modules[0].name + "（" + o.deck.modules[0].Description() + "）";
-            CardFactory.AddText(go.transform, "模块：" + module, -0.165f, 0.0039f,
-                                InkOnPaper, textY);
-
-            string bladeName = blade != null ? blade.name : "（无）";
-            CardFactory.AddText(go.transform, "开局刀片：" + bladeName, -0.215f, 0.0039f,
-                                InkOnPaper, textY);
+            if (!string.IsNullOrEmpty(line1))
+                CardFactory.AddText(go.transform, line1, -0.115f, 0.0043f, InkOnPaper, textY);
+            if (!string.IsNullOrEmpty(line2))
+                CardFactory.AddText(go.transform, line2, -0.165f, 0.0039f, InkOnPaper, textY);
+            if (!string.IsNullOrEmpty(line3))
+                CardFactory.AddText(go.transform, line3, -0.215f, 0.0039f, InkOnPaper, textY);
 
             DeckCard c = new DeckCard();
             c.go       = go;

@@ -148,6 +148,22 @@ namespace GameJam.EditorTools
                 case 31:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
                     StartGame();
+                    Stage = 32;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉜ 关卡界面
+                case 32:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    Shot("level_select.png");
+                    Stage = 33;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉝ 选第一关进入
+                case 33:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    PickLevel();
                     Stage = 20;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -258,6 +274,24 @@ namespace GameJam.EditorTools
 
             loop.ConfirmTitleStart();
             Debug.Log("[AutoPlay] 已点「新游戏」→ 阶段 " + loop.phase);
+        }
+
+        private static void PickLevel()
+        {
+            TableChoiceRig rig = Object.FindObjectOfType<TableChoiceRig>();
+            TableTurnLoop loop = Object.FindObjectOfType<TableTurnLoop>();
+
+            if (rig == null || loop == null)
+            {
+                Debug.LogWarning("[AutoPlay] 找不到 TableChoiceRig / TableTurnLoop，选关探针跳过。");
+                return;
+            }
+
+            rig.SelectDeck(0);
+            loop.ConfirmLevelSelect();
+
+            Debug.Log("[AutoPlay] 关卡已选 → 阶段 " + loop.phase
+                      + "，当前关卡 " + loop.level.Name);
         }
 
         private static void PickDeck()

@@ -56,6 +56,20 @@ namespace GameJam.Data
         /// <summary>这一关被开过几次（重开也算一次）</summary>
         public int attempts;
 
+        /// <summary>
+        /// 默认放行。
+        ///
+        /// 【为什么要有这个开关】
+        /// 今天还没接数值模拟，得分恒为 0，而目标分是 1000 ——
+        /// 严格按分数判定的话**永远过不了关**，关卡流程就死在第 1 关，
+        /// 后面几关根本走不到。
+        /// 原型阶段先默认放行，让整条"过关 → 下一关"的链路能跑通。
+        ///
+        /// ★ 等真模拟接上之后，把 GameConfig 或者这里的默认值改成 false
+        ///   （或者在配置里按关卡单独关掉），判定就回到 IsCleared 上。
+        /// </summary>
+        public bool passByDefault = true;
+
         public Level()
         {
             data = new LevelData();
@@ -105,8 +119,23 @@ namespace GameJam.Data
         /// <summary>这一关正在进行中。</summary>
         public bool IsPlaying { get { return state == LevelState.Playing; } }
 
-        /// <summary>分数够不够。今天得分恒为 0，所以实际上一定不达标。</summary>
+        /// <summary>
+        /// 这一关过没过。
+        ///
+        /// passByDefault 为真时直接放行 —— 数值模拟还没接，得分恒为 0，
+        /// 按分数判定会让流程卡死。等模拟落地后关掉这个开关即可。
+        /// </summary>
         public bool IsCleared
+        {
+            get
+            {
+                if (passByDefault) return true;
+                return turn != null && turn.score >= TargetScore;
+            }
+        }
+
+        /// <summary>分数够不够（不考虑默认放行）—— 真判定用这个。</summary>
+        public bool MeetsTarget
         {
             get { return turn != null && turn.score >= TargetScore; }
         }

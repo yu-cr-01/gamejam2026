@@ -10,6 +10,9 @@ namespace GameJam.Prototype
         /// <summary>开场：桌上摆着书、木牌和一根蜡烛</summary>
         Title,
 
+        /// <summary>关卡界面：桌上一排关卡卡，选一关开打</summary>
+        LevelSelect,
+
         /// <summary>三选一牌组</summary>
         DeckPick,
 
@@ -63,6 +66,12 @@ namespace GameJam.Prototype
 
         /// <summary>当前这一关（关卡定义 + 过程数据 + 进行状态）</summary>
         public Level level = new Level();
+
+        /// <summary>全部关卡，顺序就是配置里的顺序</summary>
+        public List<LevelData> levels = new List<LevelData>();
+
+        /// <summary>当前在第几关（levels 的下标）</summary>
+        public int levelIndex;
 
         /// <summary>
         /// 这一关的过程数据。**转发**到 level.turn，不是另存一份 ——
@@ -138,6 +147,12 @@ namespace GameJam.Prototype
         /// <summary>停在场界面。</summary>
         public bool IsTitle { get { return phase == TablePhase.Title; } }
 
+        /// <summary>停在关卡界面。</summary>
+        public bool IsLevelSelect { get { return phase == TablePhase.LevelSelect; } }
+
+        /// <summary>还有没有下一关。</summary>
+        public bool HasNextLevel { get { return levelIndex + 1 < levels.Count; } }
+
         /// <summary>当前正在进行的那个选择环节（不在选择阶段返回 null）。</summary>
         public Choice CurrentChoice
         {
@@ -188,15 +203,88 @@ namespace GameJam.Prototype
                 return;
             }
 
-            StartDeckPick();
+            OpenLevelSelect();
         }
 
-        /// <summary>点了桌上那本书（新游戏）：收起开场，进入三选一牌组。</summary>
+        /// <summary>点了桌上那本书（新游戏）：收起开场，打开关卡界面。</summary>
         public void ConfirmTitleStart()
         {
             if (phase != TablePhase.Title) return;
 
             if (titleRig != null) titleRig.Clear();
+
+            OpenLevelSelect();
+        }
+
+        /// <summary>
+        /// 打开关卡界面：桌上一排关卡卡。
+        ///
+        /// 关卡列表从配置读（GameConfig.Levels），加一关只是配置里多写一条。
+        /// </summary>
+        public void OpenLevelSelect()
+        {
+            levels = GameConfig.Levels();
+            if (levels.Count == 0) levels.Add(GameConfig.Level());
+
+            if (levelIndex < 0 || levelIndex >= levels.Count) levelIndex = 0;
+
+            level = new Level(levels[levelIndex]);
+            staged.Clear();
+            paused       = false;
+            settingsOpen = false;
+
+            if (choiceRig != null)
+            {
+                choiceRig.BuildLevelCards(levels, levelIndex);
+                phase = TablePhase.LevelSelect;
+                return;
+            }
+
+            StartDeckPick();   // 没有选关界面就直接进牌组
+        }
+
+        /// <summary>在关卡界面点了一张卡、按了确认。</summary>
+        public void ConfirmLevelSelect()
+        {
+            if (phase != TablePhase.LevelSelect) return;
+
+            int idx = choiceRig != null ? choiceRig.DeckSelected : levelIndex;
+            if (idx < 0 || idx >= levels.Count)
+            {
+                notice = "先在桌上点一张关卡卡";
+                return;
+            }
+
+            levelIndex = idx;
+            level = new Level(levels[levelIndex]);
+
+            choiceRig.ClearDeckCards();
+            StartDeckPick();
+        }
+
+        /// <summary>
+        /// 过关之后进入下一关。
+        /// 没有下一关了（或者还没过关就点了）就回关卡界面。
+        /// </summary>
+        public void NextLevel()
+        {
+            if (!HasNextLevel)
+            {
+                notice = "已经是最后一关了";
+                OpenLevelSelect();
+                return;
+            }
+
+            levelIndex++;
+            level = new Level(levels[levelIndex]);
+
+            staged.Clear();
+            lastPlayed = "";
+            notice     = "";
+
+            if (setup != null) setup.ClearHand();
+            KillBladeCard();
+            if (choiceRig != null) choiceRig.ClearDeckCards();
 
             StartDeckPick();
         }
@@ -229,10 +317,9 @@ namespace GameJam.Prototype
         /// <summary>确定牌组之后：数据层重开一局，再把桌面摆出来。</summary>
         private void StartLevelWith(Deck deck)
         {
-            // ★ 每次都换一个全新的关卡对象。
-            //   复用同一个的话，上一把的分数、杯内食材、卡牌状态会带进新一局 ——
-            //   重开一关就该是干净的一关。
-            level = new Level(GameConfig.Level());
+            // ★ 这里**不能**再 new 一个 Level。
+            //   关卡是玩家在关卡界面选的，new 一下就把选择覆盖掉、永远回到第 1 关。
+            //   （原来写的就是 new Level(GameConfig.Level())，加多关卡之后成了 bug。）
             level.Begin(deck, GameConfig.DefaultBlade());
 
             if (setup != null)
@@ -506,7 +593,19 @@ namespace GameJam.Prototype
         public void ExitLevel()
         {
             if (level != null) level.Abandon();
-            ReturnToTitle();
+
+            // 退出关卡 → 回**关卡界面**，不是回开场。
+            // 退的是这一关，不是整局游戏。
+            staged.Clear();
+            paused       = false;
+            settingsOpen = false;
+            lastPlayed   = "";
+            notice       = "";
+
+            if (setup != null) setup.ClearHand();
+            KillBladeCard();
+
+            OpenLevelSelect();
         }
 
         /// <summary>回到开场：桌面清干净，等玩家重新开始。</summary>
@@ -544,6 +643,24 @@ namespace GameJam.Prototype
             {
                 StartDeckPick();
             }
+        }
+
+        /// <summary>没过关时重打这一关。</summary>
+        public void RestartLevel()
+        {
+            if (levels.Count == 0) { OpenLevelSelect(); return; }
+
+            if (levelIndex < 0 || levelIndex >= levels.Count) levelIndex = 0;
+            level = new Level(levels[levelIndex]);
+
+            staged.Clear();
+            lastPlayed = "";
+            notice     = "";
+
+            if (setup != null) setup.ClearHand();
+            KillBladeCard();
+
+            StartDeckPick();
         }
 
         /// <summary>退出游戏。编辑器里是停止 Play，出包后是真退出。</summary>

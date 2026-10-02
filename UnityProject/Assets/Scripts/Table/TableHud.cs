@@ -79,9 +79,10 @@ namespace GameJam.Prototype
 
             switch (turnLoop.phase)
             {
-                case TablePhase.Title:     turnLoop.ConfirmTitleStart(); break;
-                case TablePhase.DeckPick:  turnLoop.ConfirmDeckPick();  break;
-                case TablePhase.BladePick: turnLoop.ConfirmBladePick(); break;
+                case TablePhase.Title:       turnLoop.ConfirmTitleStart(); break;
+                case TablePhase.LevelSelect: turnLoop.ConfirmLevelSelect(); break;
+                case TablePhase.DeckPick:    turnLoop.ConfirmDeckPick();  break;
+                case TablePhase.BladePick:   turnLoop.ConfirmBladePick(); break;
 
                 default:
                     if (turnLoop.CanInteract && turnLoop.StagedCount > 0) turnLoop.Confirm();
@@ -222,8 +223,9 @@ namespace GameJam.Prototype
             DrawViewButtons();
 
             // 开场 / 开局准备 / 正式回合是先后关系，三种信息栏不会同时出现
-            if (turnLoop != null && turnLoop.IsTitle)         DrawTitleOverlay();
-            else if (turnLoop != null && turnLoop.IsPreparing) DrawChoicePanel();
+            if (turnLoop != null && turnLoop.IsTitle)           DrawTitleOverlay();
+            else if (turnLoop != null && turnLoop.IsLevelSelect) DrawLevelSelectPanel();
+            else if (turnLoop != null && turnLoop.IsPreparing)   DrawChoicePanel();
             else
             {
                 DrawHints();
@@ -347,6 +349,52 @@ namespace GameJam.Prototype
                 GUI.FocusControl(null);
                 turnLoop.settingsOpen = false;
             }
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  关卡界面
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 关卡界面：桌上一排关卡卡，点一张再确认。
+        /// 和牌组/刀片那两个环节同一个形态 —— 都是"桌上一排大卡点一张"。
+        /// </summary>
+        private void DrawLevelSelectPanel()
+        {
+            if (turnLoop == null) return;
+
+            const float w = 660f;
+            const float h = 168f;
+            float x = (Screen.width - w) * 0.5f;
+            const float y = 14f;
+
+            GUI.Box(new Rect(x, y, w, h), GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(x + 18f, y + 8f, w - 36f, 30f), "选择关卡", h1Panel);
+
+            int sel = turnLoop.choiceRig != null ? turnLoop.choiceRig.DeckSelected : -1;
+
+            string picked = "还没选";
+            if (sel >= 0 && sel < turnLoop.levels.Count && turnLoop.levels[sel] != null)
+                picked = turnLoop.levels[sel].name;
+
+            GUI.Label(new Rect(x + 18f, y + 44f, w - 240f, 24f), "已选：" + picked, bodyPanel);
+            GUI.Label(new Rect(x + 18f, y + 70f, w - 240f, 44f),
+                      "点桌上的一张关卡卡选中它，再按确认。\n金色那张是你现在所在的关卡。", dimPanel);
+
+            if (!string.IsNullOrEmpty(turnLoop.notice))
+                GUI.Label(new Rect(x + 18f, y + 120f, w - 240f, 24f), turnLoop.notice, dimPanel);
+
+            bool old = GUI.enabled;
+            GUI.enabled = (sel >= 0);
+
+            if (GUI.Button(new Rect(x + w - 200f, y + 116f, 182f, 38f), "进入这一关", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.ConfirmLevelSelect();
+            }
+
+            GUI.enabled = old;
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -672,7 +720,7 @@ namespace GameJam.Prototype
         {
             TurnState t = turnLoop.turn;
 
-            const float w = 580f, h = 246f;
+            const float w = 580f, h = 316f;
             Rect r = CenterBox(w, h);
             GUI.Box(r, GUIContent.none, panelBox);
 
@@ -681,12 +729,39 @@ namespace GameJam.Prototype
                       + "　" + (turnLoop.Passed ? "通过" : "未通过"),
                       h1Panel);
 
-            float y = r.y + 62f;
+            float y = r.y + 56f;
+
+            // 默认放行要说出来，不然"0 分也算通过"看着像 bug
+            if (turnLoop.level.passByDefault)
+            {
+                GUI.Label(new Rect(r.x + 22f, y, w - 44f, 22f),
+                          "（数值模拟还没接，本关默认放行）", dimPanel);
+            }
+            y += 26f;
+
             GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f), "刀片：" + t.BladeName(), bodyPanel); y += 26f;
             GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f), "　" + t.BladeAttrLine(), bodyPanel); y += 26f;
             GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f),
                       "已投放模块：" + turnLoop.AppliedModulesText(), bodyPanel); y += 26f;
             GUI.Label(new Rect(r.x + 22f, y, w - 44f, 44f), "杯内：" + t.CupNames(), dimPanel);
+            y += 50f;
+
+            string label = turnLoop.Passed
+                ? (turnLoop.HasNextLevel ? "进入下一关" : "已是最后一关")
+                : "重试本关";
+
+            if (GUI.Button(new Rect(r.x + 22f, y, 230f, 40f), label, btn))
+            {
+                GUI.FocusControl(null);
+                if (turnLoop.Passed) turnLoop.NextLevel();
+                else                 turnLoop.RestartLevel();
+            }
+
+            if (GUI.Button(new Rect(r.x + w - 210f, y, 188f, 40f), "返回关卡界面", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.OpenLevelSelect();
+            }
         }
 
         // ── 划过时的小信息条 ──────────────────────────────────────────

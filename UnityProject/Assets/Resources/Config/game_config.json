@@ -66,11 +66,11 @@
 
   "defaultBladeId": "iron_block",
 
-  "level": {
-    "id": "level_1",
-    "name": "第 1 关",
-    "targetScore": 1000
-  },
+  "levels": [
+    { "id": "level_1", "name": "第 1 关 · 点火", "targetScore": 1000 },
+    { "id": "level_2", "name": "第 2 关 · 萃取", "targetScore": 1500 },
+    { "id": "level_3", "name": "第 3 关 · 破壁", "targetScore": 2000 }
+  ],
 
   "texts": {
     "deckTitle": "选择你的初始牌组",

@@ -36,6 +36,9 @@ namespace GameJam.Prototype
 
         private static List<Deck> decks = new List<Deck>();
         private static LevelData level;
+
+        /// <summary>全部关卡，顺序就是配置里的顺序。</summary>
+        private static List<LevelData> levels = new List<LevelData>();
         private static Ingredient defaultBlade;
         private static TextDto texts = new TextDto();
 
@@ -83,6 +86,22 @@ namespace GameJam.Prototype
         {
             EnsureLoaded();
             return level != null ? level.Clone() : new LevelData("level_1", "第 1 关", 1000);
+        }
+
+        /// <summary>
+        /// 全部关卡（克隆）。
+        /// 返回克隆而不是原对象：调用方会往 LevelData 上挂运行时状态，
+        /// 直接给出去的话第二次读到的就是被改过的配置。
+        /// </summary>
+        public static List<LevelData> Levels()
+        {
+            EnsureLoaded();
+
+            List<LevelData> result = new List<LevelData>();
+            for (int i = 0; i < levels.Count; i++)
+                if (levels[i] != null) result.Add(levels[i].Clone());
+
+            return result;
         }
 
         public static Ingredient DefaultBlade()
@@ -173,7 +192,22 @@ namespace GameJam.Prototype
             FillTextDefaults(texts);
 
             // ⑤ 关卡（自动带上两个选择环节）
-            level = BuildLevel(dto.level, decks);
+            // 关卡：优先读 levels 数组，没有就退回旧的单个 level 字段。
+            // 两条路都走 BuildLevel —— 每个关卡自己带着完整的牌组选择环节，
+            // 所以加一关只是在配置里多写一条。
+            levels = new List<LevelData>();
+
+            if (dto.levels != null && dto.levels.Length > 0)
+            {
+                for (int i = 0; i < dto.levels.Length; i++)
+                    levels.Add(BuildLevel(dto.levels[i], decks));
+            }
+            else
+            {
+                levels.Add(BuildLevel(dto.level, decks));
+            }
+
+            level = levels[0];   // 兼容只认单关的旧调用
         }
 
         private static Deck BuildDeck(DeckDto dto)
