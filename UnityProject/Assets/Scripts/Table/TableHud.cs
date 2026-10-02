@@ -190,7 +190,7 @@ namespace GameJam.Prototype
             float y = Screen.height - h - 14f;
 
             GUI.Label(new Rect(16f, y, w, 24f), "拖动卡牌放到桌面卡槽", h1);
-            GUI.Label(new Rect(16f, y + 28f, w, 22f), "松手时附近有空槽就吸附，否则回手牌", dim);
+            GUI.Label(new Rect(16f, y + 28f, w, 22f), "丢到卡槽附近就自动吸附，丢回手牌区则不吸", dim);
             GUI.Label(new Rect(16f, y + 48f, w, 22f), "右键单击卡牌 → 查看完整数据（Esc 关闭）", dim);
             GUI.Label(new Rect(16f, y + 68f, w, 22f), "右键拖动 / 中键拖动 → 原地转头（位置固定）", dim);
             GUI.Label(new Rect(16f, y + 88f, w, 22f), "1 / 2 / 3 固定视角　　4 自由视角　　G 开关物理", dim);

@@ -27,8 +27,21 @@ namespace GameJam.Prototype
         /// <summary>卡槽指示块，下标与 board.slots 一一对应（由 TableSetup 填入）</summary>
         public Renderer[] slotMarkers;
 
-        /// <summary>吸附半径（米）</summary>
-        public float snapRadius = 0.13f;
+        /// <summary>
+        /// 吸附余量：卡槽框之外再放宽这么多，落进来也算命中。
+        ///
+        /// 【为什么用两个轴分开的余量，而不是一个半径】
+        /// 卡槽是 0.255 × 0.35 的长方形，槽间距是 0.30 × 0.40。
+        /// 余量按轴给，才能保证"横着差一点"和"竖着差一点"被同样宽容地对待 ——
+        /// 用一个圆半径去套长方形，长边方向永远比短边难命中。
+        ///
+        /// 取值让相邻卡槽的判定区刚好连成一片（x 方向半间距 0.15 < 可达 0.228，
+        /// z 方向半间距 0.20 < 可达 0.305），于是**整片格子区没有死区**，
+        /// 往那片区域随便一丢就能吸上。手牌区在 z=−0.58，离最近的可达边界
+        /// 还有 0.24，所以放回手牌不会误吸。
+        /// </summary>
+        public float snapSlackX = 0.100f;
+        public float snapSlackZ = 0.130f;
 
         public PlayCard Hovered   { get; private set; }
         public PlayCard Dragging  { get; private set; }
@@ -249,7 +262,7 @@ namespace GameJam.Prototype
 
             card.EndDrag();
 
-            int slot = board.FindNearestFreeSlot(card.transform.position, snapRadius);
+            int slot = board.FindDropTarget(card.transform.position, snapSlackX, snapSlackZ);
             if (slot >= 0 && board.Place(slot, card))
             {
                 card.SnapTo(board.SlotPosition(slot));
@@ -267,7 +280,7 @@ namespace GameJam.Prototype
             if (slotMarkers == null || slotMarkers.Length == 0) return;
 
             int want = (Dragging != null)
-                ? board.FindNearestFreeSlot(Dragging.transform.position, snapRadius)
+                ? board.FindDropTarget(Dragging.transform.position, snapSlackX, snapSlackZ)
                 : -1;
 
             // ★ 角标平时整体隐形，只有拿起牌要放的时候才淡入。

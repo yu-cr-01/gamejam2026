@@ -59,6 +59,52 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
+        /// 卡槽矩形的尺寸（世界单位）。由 TableSetup 按卡槽指示块的实际大小填进来，
+        /// 吸附判定用它当"框"。
+        /// </summary>
+        public float slotSizeX = 0.255f;
+        public float slotSizeZ = 0.350f;
+
+        /// <summary>
+        /// 吸附判定：这一张牌该落在哪个槽。
+        ///
+        /// 【为什么不用"到槽中心的半径"】
+        /// 原来是"离槽中心 0.13 米以内才吸附"，而槽间距是 0.30 × 0.40 ——
+        /// 等于必须丢在中心附近才行，稍微偏到框边上就掉回手牌，手感很"黏手"。
+        /// 但玩家脑子里判定的是一句"我有没有把它放进那个框里"，
+        /// 不是"我离中心几厘米"。
+        ///
+        /// 现在改成**框对框**：卡槽是个矩形，再往外给一圈余量 slack，
+        /// 落点只要落进「框 + 余量」就算命中。
+        /// 多个框同时命中时取最近的那个（两轴归一化后比较，免得扁长的框把判定带偏）。
+        ///
+        /// 余量给足之后相邻框的判定区会互相重叠、整片格子连成一整块，
+        /// 于是"往那片区域里随便一丢"就能吸上 —— 正是要的松手感。
+        /// </summary>
+        public int FindDropTarget(Vector3 world, float slackX, float slackZ)
+        {
+            int best = -1;
+            float bestDist = float.MaxValue;
+
+            float reachX = slotSizeX * 0.5f + slackX;
+            float reachZ = slotSizeZ * 0.5f + slackZ;
+
+            for (int i = 0; i < slots.Count; i++)
+            {
+                if (occupants[i] != null) continue;      // 已被占的不参与
+
+                float dx = Mathf.Abs(world.x - slots[i].x);
+                float dz = Mathf.Abs(world.z - slots[i].z);
+
+                if (dx > reachX || dz > reachZ) continue;
+
+                float d = dx / reachX + dz / reachZ;
+                if (d < bestDist) { bestDist = d; best = i; }
+            }
+            return best;
+        }
+
+        /// <summary>
         /// 找离 world 最近的空槽。
         /// maxDist 是吸附半径 —— 超出就不吸附（表示"放回手牌"）。
         /// </summary>

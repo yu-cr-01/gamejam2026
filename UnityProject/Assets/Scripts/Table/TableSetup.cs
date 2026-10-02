@@ -45,6 +45,10 @@ namespace GameJam.Prototype
 
         private static readonly Color TableColor  = new Color(0.20f, 0.155f, 0.125f);
 
+        /// <summary>卡槽指示块（也就是吸附判定用的"框"）的尺寸。两处共用，别各写一个数。</summary>
+        private const float SlotSizeX = 0.255f;
+        private const float SlotSizeZ = 0.350f;
+
         public readonly List<PlayCard> hand = new List<PlayCard>();
 
         /// <summary>本局用的牌组名 —— 右键检视面板要显示"这张牌属于哪副牌组"。</summary>
@@ -188,6 +192,11 @@ namespace GameJam.Prototype
             // 4 列 × 2 行。卡是 0.24 × 0.335，留一点间隙
             board.BuildGrid(4, 2, 0.30f, 0.40f, new Vector3(0f, 0f, 0.17f));
 
+            // 把卡槽矩形尺寸告诉 board —— 吸附判定要用它当"框"。
+            // 和下面指示块的 scale 用同一组常量，免得两边各写一个数、改一处忘一处。
+            board.slotSizeX = SlotSizeX;
+            board.slotSizeZ = SlotSizeZ;
+
             slotMarkers = new Renderer[board.SlotCount];
             for (int i = 0; i < board.SlotCount; i++)
             {
@@ -200,7 +209,7 @@ namespace GameJam.Prototype
                 m.transform.SetParent(go.transform, false);
                 m.transform.position = board.SlotPosition(i) + new Vector3(0f, 0.0022f, 0f);
                 m.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
-                m.transform.localScale = new Vector3(0.255f, 0.35f, 1f);
+                m.transform.localScale = new Vector3(SlotSizeX, SlotSizeZ, 1f);
 
                 Collider c = m.GetComponent<Collider>();
                 if (c != null) c.enabled = false;      // 别挡住卡牌的射线
