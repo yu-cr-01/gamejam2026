@@ -115,11 +115,47 @@ namespace GameJam.Prototype
         public static PlayCard Create(Ingredient ing, Transform parent, Vector3 home, Vector3 euler)
         {
             string title = ing != null ? ing.name : "?";
-
-            // 按 id 稳定取一个主题色，再按"三属性里最高的那个"决定图标印记的形状
             Color accent = ProceduralArt.IngredientColor(ing != null ? ing.id : "");
+
+            // 按"三属性里最高的那个"决定图标印记的形状
             AttrId dominant = ProceduralArt.DominantAttr(ing);
 
+            string sub = (ing != null && ing.attrs != null) ? StatsText(ing) : null;
+
+            PlayCard card = BuildCard(title, accent, dominant, sub, parent);
+            card.Setup(ing, home, euler);
+            return card;
+        }
+
+        /// <summary>
+        /// 造一张变速模块卡。
+        ///
+        /// 和食材卡共用同一套建模，区别只有两处：
+        ///   配色走冷色区（ModuleColor），
+        ///   副文本写的是效果描述而不是三属性 ——
+        ///   模块本身没有属性值，它的数值是加到刀片上去的。
+        /// </summary>
+        public static PlayCard Create(SpeedModule mod, Transform parent, Vector3 home, Vector3 euler)
+        {
+            string title = mod != null ? mod.name : "?";
+            Color accent = ProceduralArt.ModuleColor(mod != null ? mod.id : "");
+
+            // 模块没有"主属性"，印记形状固定给液体形；
+            // 卡面文字已经写明它是模块，形状这里不需要再承担区分职责。
+            string sub = "【变速模块】" + (mod != null ? "\n" + mod.Description() : "");
+
+            PlayCard card = BuildCard(title, accent, AttrId.Mercury, sub, parent);
+            card.SetupModule(mod, home, euler);
+            return card;
+        }
+
+        /// <summary>
+        /// 两类卡共用的建模部分。
+        /// 只负责"长什么样"，绑定数据交给调用方 —— 食材和模块的绑定接口不一样。
+        /// </summary>
+        private static PlayCard BuildCard(string title, Color accent, AttrId dominant,
+                                          string subText, Transform parent)
+        {
             // ① 根节点：scale = 1，挂脚本和刚体
             GameObject root = new GameObject("Card_" + title);
             root.transform.SetParent(parent, false);
@@ -173,12 +209,12 @@ namespace GameJam.Prototype
             // ④ 文字：挂在根节点上（scale=1），避免被 Body 的非等比缩放拉变形
             AddText(root.transform, title, NameZ, NameSize, ProceduralArt.InkOn(accent));
 
-            if (ing != null && ing.attrs != null)
-                AddText(root.transform, StatsText(ing), StatsZ, StatsSize, InkOnPaper());
+            // 副文本：食材写三属性，模块写效果描述
+            if (!string.IsNullOrEmpty(subText))
+                AddText(root.transform, subText, StatsZ, StatsSize, InkOnPaper());
 
             // 卡身和卡面都要跟着悬停/拖动变亮，所以两个渲染器都绑上
             card.BindRenderer(bodyRenderer, faceRenderer);
-            card.Setup(ing, home, euler);
             return card;
         }
 

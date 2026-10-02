@@ -28,6 +28,12 @@ namespace GameJam.Prototype
         public Renderer[] slotMarkers;
 
         /// <summary>
+        /// 桌面上的回合循环。
+        /// 放进投放区 / 拖回来的牌要报给它，它才知道"现在待投放的是哪张"。
+        /// </summary>
+        public TableTurnLoop turnLoop;
+
+        /// <summary>
         /// 吸附余量：卡槽框之外再放宽这么多，落进来也算命中。
         ///
         /// 【为什么用两个轴分开的余量，而不是一个半径】
@@ -90,7 +96,12 @@ namespace GameJam.Prototype
             {
                 SetHovered(RaycastCard(ray));
 
-                if (Input.GetMouseButtonDown(0) && Hovered != null && !PhysicsOn)
+                // 只有选牌阶段能拖动。模拟中 / 结算中手里的牌不动，
+                // 免得玩家在这两张界面之间还能把牌丢来丢去、状态对不上。
+                // 悬停和右键检视不受限制 —— 那两件事任何时候都该能用。
+                bool mayDrag = (turnLoop == null) || turnLoop.CanInteract;
+
+                if (mayDrag && Input.GetMouseButtonDown(0) && Hovered != null && !PhysicsOn)
                     BeginDrag(Hovered, ray);
             }
             else if (Dragging == null)
@@ -266,10 +277,16 @@ namespace GameJam.Prototype
             if (slot >= 0 && board.Place(slot, card))
             {
                 card.SnapTo(board.SlotPosition(slot));
+
+                // 进了投放区 → 只是"摆好"，还没投出去。真正落子在 HUD 的确认键上。
+                if (turnLoop != null) turnLoop.Stage(card);
             }
             else
             {
-                card.ReturnHome();           // 附近没有空槽 → 回手牌
+                card.ReturnHome();
+
+                // 拖回手牌等于反悔，把待投放状态一起撤掉
+                if (turnLoop != null) turnLoop.Release(card);
             }
         }
 

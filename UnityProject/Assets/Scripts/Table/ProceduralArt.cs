@@ -78,6 +78,30 @@ namespace GameJam.Prototype
             return Palette[i];
         }
 
+        /// <summary>
+        /// 变速模块的配色。
+        ///
+        /// 食材走的是全色相的中低饱和色，模块统一压进冷色区（青 → 蓝紫），
+        /// 桌上一眼就能分出"这张不是食材"，不用去读名字。
+        ///
+        /// 仍然拿 id 哈希当色相来源、而不是写死一个蓝色：
+        /// 一局里手上可能同时有两三个模块，全一个颜色就完全分不出来了。
+        /// </summary>
+        public static Color ModuleColor(string id)
+        {
+            Color c = IngredientColor(id);
+
+            float h, s, v;
+            Color.RGBToHSV(c, out h, out s, out v);
+
+            // 把原来的色相折进 0.50..0.72 这一段，保留各自的差异
+            h = Mathf.Lerp(0.50f, 0.72f, Mathf.Repeat(h * 3.7f, 1f));
+            s = Mathf.Lerp(s, 0.42f, 0.35f);   // 收一点饱和度，更像金属件
+            v = Mathf.Lerp(v, 0.60f, 0.30f);
+
+            return Color.HSVToRGB(h, s, v);
+        }
+
         /// <summary>在给定底色上选一个能看清的字色（深底配白字，浅底配墨字）。</summary>
         public static Color InkOn(Color bg)
         {

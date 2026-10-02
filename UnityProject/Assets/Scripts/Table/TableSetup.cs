@@ -32,6 +32,9 @@ namespace GameJam.Prototype
         public TableInteraction interaction;
         public Transform        cardsRoot;
 
+        /// <summary>桌面上的回合循环 —— 手牌、投放区、得分的唯一驱动源</summary>
+        public TableTurnLoop    turnLoop;
+
         /// <summary>视角名，供 HUD 和快捷键使用。最后两个是自由转头和榨汁机特写。</summary>
         public static readonly string[] ViewNames =
         {
@@ -67,9 +70,25 @@ namespace GameJam.Prototype
             BuildTable();
             BuildSlots();
             BuildRoots();
-            DealHand();
             BuildJuicer();
+            BuildTurnLoop();     // ★ 先有回合循环（它持有数据层的手牌），再按它发牌
+            DealHand();
             BuildInteraction();
+        }
+
+        // ── 回合循环 ──────────────────────────────────────────────────
+        private void BuildTurnLoop()
+        {
+            GameObject go = new GameObject("TableTurnLoop");
+            go.transform.SetParent(transform, false);
+
+            turnLoop = go.AddComponent<TableTurnLoop>();
+            turnLoop.setup  = this;
+            turnLoop.juicer = juicer;
+            turnLoop.board  = board;
+
+            // 在这里就把手牌和刀片准备好 —— 下面 DealHand 要读它
+            turnLoop.Begin();
         }
 
         // ── 榨汁机 + 液体罐 ───────────────────────────────────────────
@@ -241,43 +260,60 @@ namespace GameJam.Prototype
         }
 
         // ── 发牌 ──────────────────────────────────────────────────────
+        /// <summary>
+        /// 按数据层的手牌摆出 3D 卡。
+        ///
+        /// 【为什么不再自己去读牌组】
+        /// 原来这里是 deck.InitialHandIngredients()，自己算一遍初始手牌 ——
+        /// 于是桌面上摆的牌和 TurnState 里记的牌是两份互相独立的数据，
+        /// 谁改了规则另一份都不知道。而且那份实现漏掉了变速模块，
+        /// 模块永远进不了玩家手里。
+        /// 现在唯一的数据来源是 turnLoop.turn，这里只负责把它画出来。
+        /// </summary>
         private void DealHand()
         {
-            // 手牌来自配置表里第一副牌组的"初始手牌"——
-            // 也就是牌组里除了开局刀片以外的那些牌。
-            // 3D 桌面原型只是把同一份配置换个画法，不另建一套数据。
-            GameConfig.EnsureLoaded();
+            hand.Clear();
+            if (turnLoop == null || cardsRoot == null) return;
 
-            List<Deck> decks = GameConfig.Decks();
-            Deck deck = decks.Count > 0 ? decks[0] : null;
-            deckName = deck != null ? deck.name : "";
+            TurnState st = turnLoop.turn;
 
-            List<Ingredient> data = deck != null
-                ? deck.InitialHandIngredients()
-                : new List<Ingredient>();
+            int ingCount = st.hand    != null ? st.hand.Count    : 0;
+            int modCount = st.modules != null ? st.modules.Count : 0;
+            int total    = ingCount + modCount;
 
-            // 兜底：配置表空掉了也至少有一张牌可摆
-            if (data.Count == 0)
+            Vector3 pos, euler;
+
+            // 兜底：配置表空掉了也至少摆一张，免得桌面光着没法验证
+            if (total == 0)
             {
-                Ingredient fallback = GameConfig.DefaultBlade();
-                if (fallback != null) data.Add(fallback);
+                Ingredient fb = GameConfig.DefaultBlade();
+                if (fb == null) return;
+
+                TableTurnLoop.HandSlot(0, 1, out pos, out euler);
+                hand.Add(CardFactory.Create(fb, cardsRoot, pos, euler));
+                return;
             }
-            if (data.Count == 0) return;
 
-            const float z = -0.58f;
-            const float gap = 0.30f;
-            float startX = -(data.Count - 1) * gap * 0.5f;
+            int k = 0;
 
-            for (int i = 0; i < data.Count; i++)
-            {
-                // 手牌摆成微微的扇形，朝向相机一侧张开
-                float fan = (i - (data.Count - 1) * 0.5f) * 4f;
-                Vector3 home = new Vector3(startX + i * gap, 0f, z);
-                Vector3 euler = new Vector3(0f, fan, 0f);
+            // 食材在前、模块在后 —— 和 Flow2D 那份的顺序保持一致
+            if (st.hand != null)
+                for (int i = 0; i < st.hand.Count; i++)
+                {
+                    if (st.hand[i] == null) continue;
+                    TableTurnLoop.HandSlot(k, total, out pos, out euler);
+                    hand.Add(CardFactory.Create(st.hand[i], cardsRoot, pos, euler));
+                    k++;
+                }
 
-                PlayCard card = CardFactory.Create(data[i], cardsRoot, home, euler);
-                hand.Add(card);
-            }
+            if (st.modules != null)
+                for (int i = 0; i < st.modules.Count; i++)
+                {
+                    if (st.modules[i] == null) continue;
+                    TableTurnLoop.HandSlot(k, total, out pos, out euler);
+                    hand.Add(CardFactory.Create(st.modules[i], cardsRoot, pos, euler));
+                    k++;
+                }
         }
 
         // ── 交互层 ────────────────────────────────────────────────────
@@ -292,6 +328,7 @@ namespace GameJam.Prototype
             interaction.board = board;
             interaction.cardsRoot = cardsRoot;
             interaction.slotMarkers = slotMarkers;
+            interaction.turnLoop = turnLoop;   // 放进投放区的牌要报给回合循环
 
             go.AddComponent<TableHud>();     // HUD 需要用到 interaction，用 GetComponent 拿
         }

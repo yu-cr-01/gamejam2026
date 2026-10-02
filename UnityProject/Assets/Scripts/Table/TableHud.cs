@@ -19,6 +19,7 @@ namespace GameJam.Prototype
     {
         private TableInteraction interaction;
         private TableSetup       setup;
+        private TableTurnLoop    turnLoop;
 
         private Font cjkFont;
         private GUIStyle h1, body, dim, btn, btnOn;
@@ -42,6 +43,7 @@ namespace GameJam.Prototype
             interaction = GetComponent<TableInteraction>();
             if (interaction == null) interaction = Object.FindObjectOfType<TableInteraction>();
             setup = Object.FindObjectOfType<TableSetup>();
+            turnLoop = Object.FindObjectOfType<TableTurnLoop>();
         }
 
         private void Update()
@@ -56,31 +58,23 @@ namespace GameJam.Prototype
                     setup.rig.GoTo(TableSetup.ViewNames[i]);
             }
 
-            HandleScoreDemoKeys();
+            HandleConfirmKey();
         }
 
-        // ── 得分 / 冲压的演示按键 ─────────────────────────────────────
-        // 数值系统还没接进来，先用手动按键把罐子和冲压效果跑起来，
-        // 好确认表现对不对。等回合结算接上之后这几个键就可以删掉。
-        private int demoScore;
-
-        private void HandleScoreDemoKeys()
+        /// <summary>
+        /// 回车 = 确认投放。和点按钮完全等效。
+        ///
+        /// 【为什么要有键盘这一路】
+        /// 卡是拖到桌面上放的，放完之后手还在鼠标上，
+        /// 要么横跨半个屏幕去够按钮、要么就得放下鼠标 —— 回车省掉这一步。
+        /// </summary>
+        private void HandleConfirmKey()
         {
-            if (setup == null || setup.juicer == null) return;
+            if (turnLoop == null) return;
+            if (!turnLoop.CanInteract || turnLoop.Staged == null) return;
 
-            bool changed = false;
-
-            if (Input.GetKeyDown(KeyCode.LeftBracket))  { demoScore -= 100; changed = true; }
-            if (Input.GetKeyDown(KeyCode.RightBracket)) { demoScore += 100; changed = true; }
-            if (Input.GetKeyDown(KeyCode.Alpha0))       { demoScore = 0;    changed = true; }
-
-            if (changed)
-            {
-                demoScore = Mathf.Clamp(demoScore, 0, 1200);
-                setup.juicer.SetScore(demoScore, 1000);
-            }
-
-            if (Input.GetKeyDown(KeyCode.S)) setup.juicer.PlayStamp();
+            if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
+                turnLoop.Confirm();
         }
 
         private void EnsureStyles()
@@ -97,7 +91,14 @@ namespace GameJam.Prototype
 
             if (h1 == null)
             {
-                h1   = new GUIStyle(GUI.skin.label)  { fontSize = 22, fontStyle = FontStyle.Bold, wordWrap = true };
+                // ★ 标题不要用 FontStyle.Bold。
+                //   雅黑这类中文字体没有单独的粗体字面，Unity 只能"伪粗体"——
+                //   把同一个字形错开一两像素叠着画几遍。英文字母小字号下还看得过去，
+                //   22 号的中文就会糊成一团双影（截图放大后非常明显）。
+                //   要拉开层次就加大字号、提亮颜色，别动 Bold。
+                h1   = new GUIStyle(GUI.skin.label)  { fontSize = 23, wordWrap = true };
+                h1.normal.textColor = new Color(0.93f, 0.95f, 0.98f);
+
                 body = new GUIStyle(GUI.skin.label)  { fontSize = 16, wordWrap = true };
                 dim  = new GUIStyle(GUI.skin.label)  { fontSize = 14, wordWrap = true };
                 dim.normal.textColor = new Color(0.62f, 0.66f, 0.74f);
@@ -127,7 +128,7 @@ namespace GameJam.Prototype
                     padding = new RectOffset(9, 9, 7, 7)
                 };
 
-                h1Panel   = new GUIStyle(h1)   { fontSize = 19 };
+                h1Panel   = new GUIStyle(h1)   { fontSize = 21 };
                 bodyPanel = new GUIStyle(body) { fontSize = 15 };
                 dimPanel  = new GUIStyle(dim)  { fontSize = 13 };
                 h1Panel.normal.textColor   = new Color(0.95f, 0.96f, 0.98f);
@@ -156,6 +157,8 @@ namespace GameJam.Prototype
 
             DrawViewButtons();
             DrawHints();
+            DrawTurnPanel();
+            DrawPhaseOverlay();
 
             // 检视面板和划过信息条是同一个位置，二选一
             if (interaction.Inspected != null) DrawInspectPanel();
@@ -186,50 +189,211 @@ namespace GameJam.Prototype
         // ── 左下角：操作提示 ──────────────────────────────────────────
         private void DrawHints()
         {
-            const float w = 440f, h = 168f;
+            const float w = 470f, h = 190f;
             float y = Screen.height - h - 14f;
 
-            GUI.Label(new Rect(16f, y, w, 24f), "拖动卡牌放到桌面卡槽", h1);
-            GUI.Label(new Rect(16f, y + 28f, w, 22f), "丢到卡槽附近就自动吸附，丢回手牌区则不吸", dim);
-            GUI.Label(new Rect(16f, y + 48f, w, 22f), "右键单击卡牌 → 查看完整数据（Esc 关闭）", dim);
-            GUI.Label(new Rect(16f, y + 68f, w, 22f), "右键拖动 / 中键拖动 → 原地转头（位置固定，活动范围 120° 锥）", dim);
-            GUI.Label(new Rect(16f, y + 88f, w, 22f), "1 / 2 / 3 固定视角　　4 自由视角　　G 开关物理", dim);
-            GUI.Label(new Rect(16f, y + 108f, w, 22f),
-                      "罐子得分面板：　[ 减 100　　] 加 100　　0 归零　　S 冲压刀片", dim);
-            GUI.Label(new Rect(16f, y + 130f, w, 22f),
+            GUI.Label(new Rect(16f, y, w, 24f), "拖动卡牌放到桌面中间的投放区", h1);
+            GUI.Label(new Rect(16f, y + 28f, w, 22f), "每回合只能投一张；再放一张会把上一张退回手牌", dim);
+            GUI.Label(new Rect(16f, y + 48f, w, 22f), "放好后按「确认投放」或回车 —— 牌会被吸进罐子", dim);
+            GUI.Label(new Rect(16f, y + 68f, w, 22f), "拖回手牌 = 反悔，可以重新挑", dim);
+            GUI.Label(new Rect(16f, y + 88f, w, 22f), "右键单击卡牌 → 查看完整数据（Esc 关闭）", dim);
+            GUI.Label(new Rect(16f, y + 108f, w, 22f), "右键拖动 / 中键拖动 → 原地转头（活动范围 120° 锥）", dim);
+            GUI.Label(new Rect(16f, y + 128f, w, 22f), "1 / 2 / 3 固定视角　　4 自由视角　　G 开关物理", dim);
+            GUI.Label(new Rect(16f, y + 150f, w, 22f),
                       "物理：" + (interaction.PhysicsOn ? "开（受重力）" : "关（脚本控制）")
                       + "　　视角：" + (setup != null && setup.rig != null && setup.rig.IsFreeLook
                                         ? "自由转头中" : "固定机位"), dim);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  回合信息栏（顶部居中）
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 顶部信息栏：回合数 / 得分 / 当前刀片 / 待投放 + 确认键。
+        ///
+        /// 放屏幕正上方而不是左上角：左上角已经被卡牌详情和检视面板占了，
+        /// 而且这条信息是全局状态，放正中最显眼、也最像"桌面上的那块牌子"。
+        /// </summary>
+        private void DrawTurnPanel()
+        {
+            if (turnLoop == null) return;
+
+            TurnState t = turnLoop.turn;
+
+            const float w = 660f;
+            float x = (Screen.width - w) * 0.5f;
+            const float y = 14f;
+
+            GUI.Box(new Rect(x, y, w, 126f), GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(x + 18f, y + 8f, w - 36f, 30f),
+                      "第 " + t.turnNumber + " 回合　　得分 " + t.score + " / " + t.targetScore,
+                      h1Panel);
+
+            GUI.Label(new Rect(x + 18f, y + 40f, w - 36f, 24f),
+                      "当前刀片：" + t.BladeName() + "　　" + t.BladeAttrLine(), bodyPanel);
+
+            GUI.Label(new Rect(x + 18f, y + 64f, w - 36f, 22f),
+                      "已应用模块：" + turnLoop.AppliedModulesText(), dimPanel);
+
+            GUI.Label(new Rect(x + 18f, y + 90f, w - 200f, 26f),
+                      "待投放：" + turnLoop.StagedText,
+                      turnLoop.Staged != null ? bodyPanel : dimPanel);
+
+            bool canConfirm = turnLoop.CanInteract && turnLoop.Staged != null;
+
+            bool oldEnabled = GUI.enabled;
+            GUI.enabled = canConfirm;
+
+            if (GUI.Button(new Rect(x + w - 172f, y + 86f, 154f, 34f), "确认投放", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.Confirm();
+            }
+
+            GUI.enabled = oldEnabled;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  阶段浮层：模拟中 / 回合结算 / 关卡结束 / 总结算
+        // ══════════════════════════════════════════════════════════════
+
+        private void DrawPhaseOverlay()
+        {
+            if (turnLoop == null) return;
+
+            switch (turnLoop.phase)
+            {
+                case TablePhase.Simulating:  DrawSimulating();  break;
+                case TablePhase.TurnResult:  DrawTurnResult();  break;
+                case TablePhase.LevelEnd:    DrawLevelEnd();    break;
+                case TablePhase.LevelResult: DrawLevelResult(); break;
+            }
+        }
+
+        private static Rect CenterBox(float w, float h)
+        {
+            return new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+        }
+
+        /// <summary>模拟中 —— 纯过场，不接数值。</summary>
+        private void DrawSimulating()
+        {
+            const float w = 470f, h = 158f;
+            Rect r = CenterBox(w, h);
+            GUI.Box(r, GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(r.x + 22f, r.y + 18f, w - 44f, 34f), "模拟中…", h1Panel);
+            GUI.Label(new Rect(r.x + 22f, r.y + 58f, w - 44f, 26f),
+                      "本回合投放：" + turnLoop.lastPlayed, bodyPanel);
+            GUI.Label(new Rect(r.x + 22f, r.y + 90f, w - 44f, 50f),
+                      "今天不做真实模拟 —— 得分、反应、爆刀都不算，\n等冲压动作走完自动进入回合结算。", dimPanel);
+        }
+
+        /// <summary>回合结算。</summary>
+        private void DrawTurnResult()
+        {
+            TurnState t = turnLoop.turn;
+
+            const float w = 580f, h = 262f;
+            Rect r = CenterBox(w, h);
+            GUI.Box(r, GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(r.x + 22f, r.y + 16f, w - 44f, 32f),
+                      "第 " + t.turnNumber + " 回合结算", h1Panel);
+
+            float y = r.y + 58f;
+            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f), "本回合得分：0　（今天不做数值）", bodyPanel); y += 24f;
+            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f),
+                      "关卡总得分：" + t.score + " / " + t.targetScore, bodyPanel); y += 24f;
+            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f), "杯内食材：" + t.CupNames(), bodyPanel); y += 24f;
+            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 46f), "剩余手牌：" + turnLoop.HandSummary(), dimPanel); y += 50f;
+
+            if (t.IsHandEmpty)
+                GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f), "手牌已用完。", dimPanel);
+
+            string label = t.IsHandEmpty ? "结束本关" : "下一回合";
+
+            if (GUI.Button(new Rect(r.x + w - 190f, r.y + h - 62f, 168f, 42f), label, btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.NextTurn();
+            }
+        }
+
+        private void DrawLevelEnd()
+        {
+            const float w = 470f, h = 138f;
+            Rect r = CenterBox(w, h);
+            GUI.Box(r, GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(r.x + 22f, r.y + 20f, w - 44f, 34f), "手牌已用完，关卡结束", h1Panel);
+
+            if (GUI.Button(new Rect(r.x + 22f, r.y + 76f, w - 44f, 42f), "进入结算", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.ShowLevelResult();
+            }
+        }
+
+        private void DrawLevelResult()
+        {
+            TurnState t = turnLoop.turn;
+
+            const float w = 580f, h = 246f;
+            Rect r = CenterBox(w, h);
+            GUI.Box(r, GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(r.x + 22f, r.y + 16f, w - 44f, 34f),
+                      "总分 " + t.score + " / 目标分 " + t.targetScore + "　"
+                      + (turnLoop.Passed ? "通过" : "未通过"),
+                      h1Panel);
+
+            float y = r.y + 62f;
+            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f), "刀片：" + t.BladeName(), bodyPanel); y += 26f;
+            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f), "　" + t.BladeAttrLine(), bodyPanel); y += 26f;
+            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f),
+                      "已投放模块：" + turnLoop.AppliedModulesText(), bodyPanel); y += 26f;
+            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 44f), "杯内：" + t.CupNames(), dimPanel);
         }
 
         // ── 划过时的小信息条 ──────────────────────────────────────────
         private void DrawCardInfo()
         {
             PlayCard card = interaction.FocusCard;
-            if (card == null || card.data == null) return;
+            if (card == null) return;
+            if (card.data == null && card.module == null) return;
 
             const float w = 320f;
             float h = 130f + AttrCatalog.Count * 22f;
 
             GUI.Box(new Rect(16f, 14f, w, h), GUIContent.none, panelBox);
 
-            Ingredient ing = card.data;
-            GUI.Label(new Rect(30f, 26f, w - 28f, 28f), ing.name, h1Panel);
+            GUI.Label(new Rect(30f, 26f, w - 28f, 28f), card.DisplayName, h1Panel);
 
             float y = 60f;
-            foreach (AttrDef def in AttrCatalog.All())
+
+            if (card.IsModule)
             {
-                int v = ing.attrs.Get(def.id);
-                GUI.Label(new Rect(30f, y, w - 28f, 22f),
-                          def.Label + "：" + def.Format(v), v != 0 ? bodyPanel : dimPanel);
-                y += 22f;
+                GUI.Label(new Rect(30f, y, w - 28f, 22f), "类型：变速模块", bodyPanel);
+                GUI.Label(new Rect(30f, y + 24f, w - 28f, 44f),
+                          "效果：" + card.module.Description(), bodyPanel);
+                y += 72f;
+            }
+            else
+            {
+                Ingredient ing = card.data;
+                foreach (AttrDef def in AttrCatalog.All())
+                {
+                    int v = ing.attrs.Get(def.id);
+                    GUI.Label(new Rect(30f, y, w - 28f, 22f),
+                              def.Label + "：" + def.Format(v), v != 0 ? bodyPanel : dimPanel);
+                    y += 22f;
+                }
             }
 
-            GUI.Label(new Rect(30f, y + 4f, w - 28f, 22f),
-                      card.IsDragging ? "拿在手上"
-                      : card.slotIndex >= 0 ? "已放在卡槽 " + (card.slotIndex + 1)
-                      : "在手牌里", dimPanel);
-
+            GUI.Label(new Rect(30f, y + 4f, w - 28f, 22f), PositionText(card), dimPanel);
             GUI.Label(new Rect(30f, y + 26f, w - 28f, 22f), "右键单击查看完整数据", dimPanel);
         }
 
@@ -292,11 +456,19 @@ namespace GameJam.Prototype
         private void DrawInspectContents(int id)
         {
             PlayCard card = interaction.Inspected;
-            if (card == null || card.data == null) return;
+            if (card == null) return;
+            if (card.data == null && card.module == null) return;
 
-            Ingredient ing = card.data;
-            Color accent = ProceduralArt.IngredientColor(ing.id);
-            AttrId dominant = ProceduralArt.DominantAttr(ing);
+            // 两类牌的主题色来源不同：模块走冷色区，食材按 id 哈希取色
+            Color accent = card.IsModule
+                ? ProceduralArt.ModuleColor(card.module.id)
+                : ProceduralArt.IngredientColor(card.data.id);
+
+            // 模块没有"自己的属性"，印记固定给液体形；食材取数值最高的那个
+            AttrId dominant = card.IsModule
+                ? AttrId.Mercury
+                : ProceduralArt.DominantAttr(card.data);
+
             AttrDef domDef = AttrCatalog.Get(dominant);
 
             const float headerH = 42f;
@@ -306,7 +478,7 @@ namespace GameJam.Prototype
             // ── 标题条：卡面同款主题色，兼作拖拽把手 ──
             GUILayout.BeginHorizontal();
 
-            GUILayout.Box(ing.name, HeaderStyle(accent),
+            GUILayout.Box(card.DisplayName, HeaderStyle(accent),
                           GUILayout.Height(headerH - 8f), GUILayout.ExpandWidth(true));
 
             if (GUILayout.Button("×", btnClose, GUILayout.Width(closeW), GUILayout.Height(headerH - 8f)))
@@ -333,36 +505,58 @@ namespace GameJam.Prototype
                             GUILayout.Width(88f), GUILayout.Height(88f));
 
             GUILayout.BeginVertical();
-            GUILayout.Label("类型：食材", bodyPanel);
+            GUILayout.Label("类型：" + card.TypeTag, bodyPanel);
             GUILayout.Label("牌组：" + (setup != null && !string.IsNullOrEmpty(setup.deckName)
                                        ? setup.deckName : "（未知）"), bodyPanel);
             GUILayout.Label("位置：" + PositionText(card), bodyPanel);
-            GUILayout.Label("主属性：" + (domDef != null
-                                        ? domDef.Label + "（" + domDef.tendency + "）"
-                                        : "?"), dimPanel);
+
+            if (!card.IsModule)
+                GUILayout.Label("主属性：" + (domDef != null
+                                            ? domDef.Label + "（" + domDef.tendency + "）"
+                                            : "?"), dimPanel);
+
             GUILayout.EndVertical();
 
             GUILayout.EndHorizontal();
 
-            GUILayout.Space(10f);
-            GUILayout.Label("── 三属性完整数据 ──", h1Panel);
-            GUILayout.Space(4f);
-
-            foreach (AttrDef def in AttrCatalog.All())
+            if (card.IsModule)
             {
-                int v = ing.attrs.Get(def.id);
-                bool isDominant = (def.id == dominant);
+                // ── 模块：显示效果，而不是三属性 ──
+                // 模块本身没有属性值，它的数值是加到刀片上去的。
+                GUILayout.Space(10f);
+                GUILayout.Label("── 模块效果 ──", h1Panel);
+                GUILayout.Space(4f);
 
                 GUILayout.BeginVertical(panelBoxInner);
-
-                GUILayout.Label(def.Label + "　" + def.Format(v) + "　（" + def.tendency + "）"
-                                + (isDominant ? "　← 主属性" : ""),
-                                v != 0 ? bodyPanel : dimPanel);
-
-                GUILayout.Label(def.description, dimPanel);
-
+                GUILayout.Label(card.module.Description(), bodyPanel);
+                GUILayout.Label("投出去之后效果并入本局，作用在当前刀片上；"
+                                + "之后换刀片不会把这份加成带走。", dimPanel);
                 GUILayout.EndVertical();
+            }
+            else
+            {
+                Ingredient ing = card.data;
+
+                GUILayout.Space(10f);
+                GUILayout.Label("── 三属性完整数据 ──", h1Panel);
                 GUILayout.Space(4f);
+
+                foreach (AttrDef def in AttrCatalog.All())
+                {
+                    int v = ing.attrs.Get(def.id);
+                    bool isDominant = (def.id == dominant);
+
+                    GUILayout.BeginVertical(panelBoxInner);
+
+                    GUILayout.Label(def.Label + "　" + def.Format(v) + "　（" + def.tendency + "）"
+                                    + (isDominant ? "　← 主属性" : ""),
+                                    v != 0 ? bodyPanel : dimPanel);
+
+                    GUILayout.Label(def.description, dimPanel);
+
+                    GUILayout.EndVertical();
+                    GUILayout.Space(4f);
+                }
             }
 
             GUILayout.Space(6f);
@@ -373,7 +567,7 @@ namespace GameJam.Prototype
         private string PositionText(PlayCard card)
         {
             if (card.IsDragging) return "拿在手上";
-            if (card.slotIndex >= 0) return "桌面卡槽 " + (card.slotIndex + 1);
+            if (card.slotIndex >= 0) return "投放区（待确认）";
             return "手牌";
         }
 
@@ -402,7 +596,7 @@ namespace GameJam.Prototype
             st.normal.background = tex;
             st.normal.textColor = ProceduralArt.InkOn(c);   // 浅底配墨字、深底配白字
             st.fontSize = 26;
-            st.fontStyle = FontStyle.Bold;
+            // 同样不设 Bold —— 见 EnsureStyles 里关于伪粗体的说明
             st.alignment = TextAnchor.MiddleLeft;
             st.padding = new RectOffset(16, 16, 6, 6);
             if (cjkFont != null) st.font = cjkFont;

@@ -82,6 +82,18 @@ namespace GameJam.Prototype
 
         public bool IsStamping { get { return phase != Phase.Idle; } }
 
+        /// <summary>
+        /// 罐口的世界坐标 —— 卡牌被投进去时的落点。
+        ///
+        /// 走 TransformPoint 而不是自己拼一个世界坐标：
+        /// 整个榨汁机挂在 TableSetup 下、并且整体缩放过 0.75，
+        /// 手写坐标一旦挪机器就会飞到桌子外面去。
+        /// </summary>
+        public Vector3 MouthWorld
+        {
+            get { return transform.TransformPoint(new Vector3(0f, JarBaseY + JarHeight + 0.07f, 0f)); }
+        }
+
         // ══════════════════════════════════════════════════════════════
         //  建模
         // ══════════════════════════════════════════════════════════════

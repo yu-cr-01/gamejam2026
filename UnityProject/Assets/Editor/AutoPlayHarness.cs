@@ -39,6 +39,7 @@ namespace GameJam.EditorTools
 
         private static string outDir;
         private static bool   capture;
+        private static bool   turnProbe;
 
         static AutoPlayHarness()
         {
@@ -48,6 +49,10 @@ namespace GameJam.EditorTools
             if (string.IsNullOrEmpty(outDir)) outDir = Path.GetTempPath();
 
             capture = System.Environment.GetEnvironmentVariable("DSH_PLAYCAPTURE") == "1";
+
+            // 回合循环探针：把第一张手牌放进投放区并确认，一路拍到"下一回合"。
+            // 单独一个开关，因为这条路径会真的改动游戏状态，不适合默认开启。
+            turnProbe = System.Environment.GetEnvironmentVariable("DSH_TURNPROBE") == "1";
 
             // ★ 每次域重载都要订阅，否则进 Play 之后就再也没人推进流程了
             EditorApplication.update += Tick;
@@ -117,10 +122,112 @@ namespace GameJam.EditorTools
                 //    否则进程先结束，文件根本没落盘（踩过：日志显示截了，磁盘上没有）。
                 case 5:
                     if (EditorApplication.timeSinceStartup - stageTime < 4.0) return;
-                    Debug.Log("[AutoPlay] 截图完成，退出。");
-                    EditorApplication.Exit(0);
+
+                    if (turnProbe) { Stage = 6; return; }
+
+                    Finish();
+                    return;
+
+                // ⑦ 把第一张手牌放进投放区并按确认。
+                //    走的是和玩家点按钮**完全相同**的入口（Stage + Confirm），
+                //    不是另写一条捷径 —— 否则测的就不是玩家那条路了。
+                case 6:
+                    StageAndConfirm();
+                    Stage = 7;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑧ 冲压刚开始，拍"模拟中"
+                case 7:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    Shot("turn_simulating.png");
+                    Stage = 8;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑨ 模拟走完 → 拍"回合结算"
+                //
+                // ★ 拍完这一帧**不能**接着改状态。
+                //   ScreenCapture.CaptureScreenshot 是帧末才写盘的：
+                //   同一帧里先截图、后调 NextTurn()，落盘的其实是改完之后那一帧，
+                //   于是"回合结算"这张拍到的是下一回合的选牌界面（踩过）。
+                //   改状态一律挪到下一个 stage。
+                case 8:
+                    if (EditorApplication.timeSinceStartup - stageTime < 2.4) return;
+                    Shot("turn_result.png");
+                    Stage = 9;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑩ 确认结算拍到了，再推进回合
+                case 9:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    AdvanceTurn();
+                    Stage = 10;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑪ 下一回合的选牌界面
+                case 10:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    Shot("turn_next.png");
+                    Stage = 11;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 11:
+                    if (EditorApplication.timeSinceStartup - stageTime < 4.0) return;
+                    Finish();
                     return;
             }
+        }
+
+        private static void Finish()
+        {
+            Debug.Log("[AutoPlay] 截图完成，退出。");
+            EditorApplication.Exit(0);
+        }
+
+        /// <summary>把第一张手牌放进 0 号投放位并确认。</summary>
+        private static void StageAndConfirm()
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableTurnLoop loop = Object.FindObjectOfType<TableTurnLoop>();
+
+            if (setup == null || loop == null)
+            {
+                Debug.LogWarning("[AutoPlay] 找不到 TableSetup / TableTurnLoop，回合探针跳过。");
+                return;
+            }
+            if (setup.board == null || setup.hand.Count == 0)
+            {
+                Debug.LogWarning("[AutoPlay] 投放区或手牌是空的，回合探针跳过。");
+                return;
+            }
+
+            PlayCard card = setup.hand[0];
+            if (!setup.board.Place(0, card))
+            {
+                Debug.LogWarning("[AutoPlay] 0 号位放不下这张牌。");
+                return;
+            }
+
+            card.SnapTo(setup.board.SlotPosition(0));
+            loop.Stage(card);
+            loop.Confirm();
+
+            Debug.Log("[AutoPlay] 已投放并确认：" + card.DisplayName
+                      + "，现在阶段 = " + loop.phase);
+        }
+
+        private static void AdvanceTurn()
+        {
+            TableTurnLoop loop = Object.FindObjectOfType<TableTurnLoop>();
+            if (loop == null) return;
+
+            Debug.Log("[AutoPlay] 回合结算阶段 = " + loop.phase
+                      + "，剩余手牌 " + loop.turn.HandCount + " 张 → 推进");
+            loop.NextTurn();
         }
 
         private static void OpenInspect()

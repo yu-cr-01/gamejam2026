@@ -21,8 +21,34 @@ namespace GameJam.Prototype
     /// </summary>
     public class PlayCard : MonoBehaviour
     {
-        /// <summary>对应的食材数据</summary>
+        /// <summary>对应的食材数据（模块牌这里是 null）</summary>
         public Ingredient data;
+
+        /// <summary>
+        /// 对应的变速模块数据（食材牌这里是 null）。
+        ///
+        /// 【为什么是两个字段而不是一个 object】
+        /// Ingredient 和 SpeedModule 是两个互不相干的 [Serializable] 类，没有共同基类。
+        /// 塞进 object 会丢掉类型安全，每处取值都得强转 + 判空 + 猜类型。
+        /// 两个字段加一个 IsModule 判断，读写反而更干净。
+        /// </summary>
+        public SpeedModule module;
+
+        /// <summary>这张牌是变速模块还是食材。</summary>
+        public bool IsModule { get { return module != null; } }
+
+        /// <summary>界面上显示的名字（食材名 / 模块名）。</summary>
+        public string DisplayName
+        {
+            get
+            {
+                if (module != null) return module.name;
+                return data != null ? data.name : "?";
+            }
+        }
+
+        /// <summary>类型标签 —— HUD 和检视面板靠它区分两类牌。</summary>
+        public string TypeTag { get { return IsModule ? "变速模块" : "食材"; } }
 
         /// <summary>所在卡槽索引。-1 表示不在槽位上（在手牌 / 被拿在手里）</summary>
         public int slotIndex = -1;
@@ -87,20 +113,42 @@ namespace GameJam.Prototype
             return c;
         }
 
-        /// <summary>绑定数据并放到手牌原位。</summary>
+        /// <summary>绑定食材数据并放到手牌原位。</summary>
         public void Setup(Ingredient ing, Vector3 home, Vector3 euler)
         {
             data = ing;
+            module = null;
+            SetHome(home, euler);
+            Teleport(home, euler);
+            gameObject.name = "Card_" + (ing != null ? ing.name : "?");
+        }
+
+        /// <summary>绑定变速模块数据并放到手牌原位。</summary>
+        public void SetupModule(SpeedModule mod, Vector3 home, Vector3 euler)
+        {
+            module = mod;
+            data = null;
+            SetHome(home, euler);
+            Teleport(home, euler);
+            gameObject.name = "Module_" + (mod != null ? mod.name : "?");
+        }
+
+        /// <summary>
+        /// 重设"手牌原位"。
+        ///
+        /// 手牌会因为投放而少人，剩下的牌得重新居中排一遍 ——
+        /// 所以原位不能只在开局定一次。这里**不瞬移**，只改目标点，
+        /// 让剩下的牌自己滑过去（瞬移会让每次投放都闪一下）。
+        /// </summary>
+        public void SetHome(Vector3 home, Vector3 euler)
+        {
             homePosition = home;
-            homeEuler = euler;
+            homeEuler    = euler;
+
+            if (consuming) return;   // 正飞向罐子的牌不参与重排
 
             targetPos = home;
             targetRot = Quaternion.Euler(euler);
-
-            transform.position = home;
-            transform.rotation = targetRot;
-
-            gameObject.name = "Card_" + (ing != null ? ing.name : "?");
         }
 
         // ── 目标控制 ──────────────────────────────────────────────────
@@ -158,10 +206,53 @@ namespace GameJam.Prototype
             transform.rotation = targetRot;
         }
 
+        // ── 投进杯子 ──────────────────────────────────────────────────
+
+        private bool    consuming;
+        private Vector3 consumeTarget;
+
+        /// <summary>
+        /// 被投进杯子：飞向罐口、边飞边缩小，到点自毁。
+        ///
+        /// 【为什么不是直接 Destroy】
+        /// 直接删的话，玩家看到的是"按下确认，牌凭空消失"——
+        /// 而"牌被机器吸进去"这一段恰恰是确认键唯一的反馈。
+        /// </summary>
+        public void ConsumeInto(Vector3 target, float lifeSeconds)
+        {
+            consuming     = true;
+            consumeTarget = target;
+            IsDragging    = false;
+            IsHovered     = false;
+
+            if (rb != null) rb.isKinematic = true;
+
+            // 飞行途中不能再被射线拾取，否则会被鼠标半路"抓"回来
+            Collider col = GetComponentInChildren<Collider>();
+            if (col != null) col.enabled = false;
+
+            Destroy(gameObject, Mathf.Max(0.1f, lifeSeconds));
+        }
+
+        /// <summary>正在飞向罐子（表里已经在数它离场了）。</summary>
+        public bool IsConsuming { get { return consuming; } }
+
         // ── 每帧 ──────────────────────────────────────────────────────
 
         void Update()
         {
+            if (consuming)
+            {
+                // 比平时快得多的速度扑向罐口，同时缩到几乎看不见。
+                // 插值系数不能叫 k —— 下面那个作用域里已经有一个 k 了，
+                // C# 不允许内层作用域重名。
+                float kc = 1f - Mathf.Exp(-11f * Time.deltaTime);
+                transform.position   = Vector3.Lerp(transform.position, consumeTarget, kc);
+                transform.rotation   = Quaternion.Slerp(transform.rotation, targetRot, kc);
+                transform.localScale = Vector3.Lerp(transform.localScale, Vector3.one * 0.10f, kc);
+                return;
+            }
+
             if (rb != null && !rb.isKinematic)
             {
                 // 物理接管中：位置交给 Rigidbody，只更新高亮
