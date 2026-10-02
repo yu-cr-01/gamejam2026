@@ -62,7 +62,7 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
-        /// 回车 = 确认投放。和点按钮完全等效。
+        /// 回车 / 小键盘回车 = 当前阶段的确认键。
         ///
         /// 【为什么要有键盘这一路】
         /// 卡是拖到桌面上放的，放完之后手还在鼠标上，
@@ -71,10 +71,17 @@ namespace GameJam.Prototype
         private void HandleConfirmKey()
         {
             if (turnLoop == null) return;
-            if (!turnLoop.CanInteract || turnLoop.Staged == null) return;
+            if (!Input.GetKeyDown(KeyCode.Return) && !Input.GetKeyDown(KeyCode.KeypadEnter)) return;
 
-            if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
-                turnLoop.Confirm();
+            switch (turnLoop.phase)
+            {
+                case TablePhase.DeckPick:  turnLoop.ConfirmDeckPick();  break;
+                case TablePhase.BladePick: turnLoop.ConfirmBladePick(); break;
+
+                default:
+                    if (turnLoop.CanInteract && turnLoop.Staged != null) turnLoop.Confirm();
+                    break;
+            }
         }
 
         private void EnsureStyles()
@@ -156,13 +163,113 @@ namespace GameJam.Prototype
             if (setup == null || interaction == null) return;
 
             DrawViewButtons();
-            DrawHints();
-            DrawTurnPanel();
+
+            // 开局准备和正式回合是先后关系，两块信息栏不会同时出现
+            if (turnLoop != null && turnLoop.IsPreparing) DrawChoicePanel();
+            else
+            {
+                DrawHints();
+                DrawTurnPanel();
+            }
+
             DrawPhaseOverlay();
 
             // 检视面板和划过信息条是同一个位置，二选一
             if (interaction.Inspected != null) DrawInspectPanel();
             else                               DrawCardInfo();
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  开局准备：三选一牌组 / 选刀片
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 牌组和刀片两个环节的信息栏。位置和回合信息栏相同。
+        ///
+        /// 两段共用一个面板：它们的结构完全一样 ——
+        /// 标题、几行状态、右下角一个确认键，只是内容不同。
+        /// </summary>
+        private void DrawChoicePanel()
+        {
+            if (turnLoop == null) return;
+
+            bool deckPhase = (turnLoop.phase == TablePhase.DeckPick);
+            Choice c = turnLoop.CurrentChoice;
+
+            TextDto texts = GameConfig.Texts();
+
+            const float w = 660f;
+            const float h = 168f;
+            float x = (Screen.width - w) * 0.5f;
+            const float y = 14f;
+
+            // 内容区宽度要避开右下角的确认键，否则长句会钻到按钮底下
+            const float textW = w - 250f;
+
+            GUI.Box(new Rect(x, y, w, h), GUIContent.none, panelBox);
+
+            string title = (c != null && !string.IsNullOrEmpty(c.prompt))
+                ? c.prompt
+                : (deckPhase ? "选择你的初始牌组" : "选择你的刀片");
+
+            GUI.Label(new Rect(x + 18f, y + 8f, w - 36f, 30f), title, h1Panel);
+
+            float ty = y + 44f;
+
+            if (deckPhase)
+            {
+                int sel = turnLoop.choiceRig != null ? turnLoop.choiceRig.DeckSelected : -1;
+
+                string picked = "还没选";
+                if (sel >= 0 && c != null && sel < c.options.Count && c.options[sel] != null)
+                    picked = c.options[sel].title;
+
+                GUI.Label(new Rect(x + 18f, ty, textW, 24f), "已选牌组：" + picked, bodyPanel);
+                ty += 26f;
+
+                GUI.Label(new Rect(x + 18f, ty, textW, 24f),
+                          c != null && !string.IsNullOrEmpty(c.hint) ? c.hint
+                          : "在桌上点一张牌组卡选中它，再按确认。", dimPanel);
+            }
+            else
+            {
+                GUI.Label(new Rect(x + 18f, ty, textW, 24f),
+                          "当前刀片：" + turnLoop.turn.BladeName(), bodyPanel);
+                ty += 24f;
+
+                GUI.Label(new Rect(x + 18f, ty, textW, 24f),
+                          "　" + turnLoop.turn.BladeAttrLine(), bodyPanel);
+                ty += 26f;
+
+                GUI.Label(new Rect(x + 18f, ty, textW, 24f),
+                          c != null && !string.IsNullOrEmpty(c.hint) ? c.hint
+                          : "点手牌里的食材即与当前刀片交换。", dimPanel);
+            }
+
+            ty += 26f;
+
+            if (!string.IsNullOrEmpty(turnLoop.notice))
+                GUI.Label(new Rect(x + 18f, ty, textW, 24f), turnLoop.notice, dimPanel);
+
+            string label = deckPhase
+                ? (texts != null && !string.IsNullOrEmpty(texts.deckConfirm) ? texts.deckConfirm : "确认选择该卡组")
+                : (texts != null && !string.IsNullOrEmpty(texts.bladeConfirm) ? texts.bladeConfirm : "确认刀片，进入关卡");
+
+            bool canConfirm = deckPhase
+                ? (turnLoop.choiceRig != null && turnLoop.choiceRig.DeckSelected >= 0)
+                : true;
+
+            bool oldEnabled = GUI.enabled;
+            GUI.enabled = canConfirm;
+
+            if (GUI.Button(new Rect(x + w - 210f, y + 112f, 192f, 40f), label, btn))
+            {
+                GUI.FocusControl(null);
+                if (deckPhase) turnLoop.ConfirmDeckPick();
+                else           turnLoop.ConfirmBladePick();
+            }
+
+            GUI.enabled = oldEnabled;
         }
 
         // ── 右上角：视角切换 ──────────────────────────────────────────
@@ -218,6 +325,7 @@ namespace GameJam.Prototype
         private void DrawTurnPanel()
         {
             if (turnLoop == null) return;
+            if (turnLoop.IsPreparing) return;   // 这段由 DrawChoicePanel 负责
 
             TurnState t = turnLoop.turn;
 

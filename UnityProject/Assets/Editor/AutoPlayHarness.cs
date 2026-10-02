@@ -123,59 +123,103 @@ namespace GameJam.EditorTools
                 case 5:
                     if (EditorApplication.timeSinceStartup - stageTime < 4.0) return;
 
-                    if (turnProbe) { Stage = 6; return; }
+                    if (turnProbe) { Stage = 20; return; }
 
                     Finish();
                     return;
 
-                // ⑦ 把第一张手牌放进投放区并按确认。
+                // ══════════════════════════════════════════════════════
+                //  回合循环探针
+                //
+                //  ★ 一律先截图、下一个 stage 再改状态。
+                //    ScreenCapture.CaptureScreenshot 是帧末才写盘的：
+                //    同一帧里先截图、后改状态，落盘的是改完之后那一帧。
+                //    （踩过：第一版"回合结算"拍到的是下一回合的选牌界面。）
+                // ══════════════════════════════════════════════════════
+
+                // ⑳ 三选一牌组
+                case 20:
+                    Shot("choice_deck.png");
+                    Stage = 21;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉑ 选第一副牌组并确认
+                case 21:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    PickDeck();
+                    Stage = 22;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉒ 选刀片
+                case 22:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    Shot("choice_blade.png");
+                    Stage = 23;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉓ 换一把刀片再确认
+                case 23:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    SwapBlade();
+                    ConfirmBlade();
+                    Stage = 24;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉔ 正式回合：第 1 回合的选牌界面
+                case 24:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    Shot("turn_start.png");
+                    Stage = 25;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕ 把第一张手牌放进投放区并按确认。
                 //    走的是和玩家点按钮**完全相同**的入口（Stage + Confirm），
                 //    不是另写一条捷径 —— 否则测的就不是玩家那条路了。
-                case 6:
+                case 25:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
                     StageAndConfirm();
-                    Stage = 7;
+                    Stage = 26;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                // ⑧ 冲压刚开始，拍"模拟中"
-                case 7:
+                // ㉖ 冲压刚开始，拍"模拟中"
+                case 26:
                     if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
                     Shot("turn_simulating.png");
-                    Stage = 8;
+                    Stage = 27;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                // ⑨ 模拟走完 → 拍"回合结算"
-                //
-                // ★ 拍完这一帧**不能**接着改状态。
-                //   ScreenCapture.CaptureScreenshot 是帧末才写盘的：
-                //   同一帧里先截图、后调 NextTurn()，落盘的其实是改完之后那一帧，
-                //   于是"回合结算"这张拍到的是下一回合的选牌界面（踩过）。
-                //   改状态一律挪到下一个 stage。
-                case 8:
+                // ㉗ 拍"回合结算"
+                case 27:
                     if (EditorApplication.timeSinceStartup - stageTime < 2.4) return;
                     Shot("turn_result.png");
-                    Stage = 9;
+                    Stage = 28;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                // ⑩ 确认结算拍到了，再推进回合
-                case 9:
+                // ㉘ 确认结算拍到了，再推进回合
+                case 28:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
                     AdvanceTurn();
-                    Stage = 10;
+                    Stage = 29;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                // ⑪ 下一回合的选牌界面
-                case 10:
+                // ㉙ 下一回合的选牌界面
+                case 29:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
                     Shot("turn_next.png");
-                    Stage = 11;
+                    Stage = 30;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                case 11:
+                case 30:
                     if (EditorApplication.timeSinceStartup - stageTime < 4.0) return;
                     Finish();
                     return;
@@ -186,6 +230,62 @@ namespace GameJam.EditorTools
         {
             Debug.Log("[AutoPlay] 截图完成，退出。");
             EditorApplication.Exit(0);
+        }
+
+        // ── 探针用的动作 ──────────────────────────────────────────────
+        // 全部走游戏自己的公开入口（SelectDeck / ConfirmDeckPick / SwapBladeWith ...），
+        // 这样探针测到的失败就一定是玩家会遇到的失败。
+
+        private static void PickDeck()
+        {
+            TableChoiceRig rig = Object.FindObjectOfType<TableChoiceRig>();
+            TableTurnLoop loop = Object.FindObjectOfType<TableTurnLoop>();
+
+            if (rig == null || loop == null)
+            {
+                Debug.LogWarning("[AutoPlay] 找不到 TableChoiceRig / TableTurnLoop，牌组探针跳过。");
+                return;
+            }
+
+            rig.SelectDeck(0);
+            loop.ConfirmDeckPick();
+
+            Debug.Log("[AutoPlay] 牌组已确认 → 阶段 " + loop.phase
+                      + "，手牌 " + loop.turn.HandCount + " 张，刀片 " + loop.turn.BladeName());
+        }
+
+        private static void SwapBlade()
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableTurnLoop loop = Object.FindObjectOfType<TableTurnLoop>();
+
+            if (setup == null || loop == null || setup.hand == null || setup.hand.Count == 0)
+            {
+                Debug.LogWarning("[AutoPlay] 手牌是空的，换刀片探针跳过。");
+                return;
+            }
+
+            // 挑一张食材 —— 模块当不了刀片
+            for (int i = 0; i < setup.hand.Count; i++)
+            {
+                PlayCard c = setup.hand[i];
+                if (c == null || c.IsModule) continue;
+
+                bool ok = loop.SwapBladeWith(c);
+
+                Debug.Log("[AutoPlay] 拿 " + c.DisplayName + " 换刀片 → " + ok
+                          + "，现在刀片 = " + loop.turn.BladeName());
+                return;
+            }
+        }
+
+        private static void ConfirmBlade()
+        {
+            TableTurnLoop loop = Object.FindObjectOfType<TableTurnLoop>();
+            if (loop == null) return;
+
+            loop.ConfirmBladePick();
+            Debug.Log("[AutoPlay] 刀片已确认 → 阶段 " + loop.phase);
         }
 
         /// <summary>把第一张手牌放进 0 号投放位并确认。</summary>

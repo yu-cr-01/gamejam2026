@@ -4,9 +4,15 @@ using GameJam.Data;
 
 namespace GameJam.Prototype
 {
-    /// <summary>3D 桌面上的回合阶段。</summary>
+    /// <summary>3D 桌面上的阶段。</summary>
     public enum TablePhase
     {
+        /// <summary>三选一牌组</summary>
+        DeckPick,
+
+        /// <summary>选刀片（点手牌即交换）</summary>
+        BladePick,
+
         /// <summary>选牌：可以从手牌拖一张进投放区，再按确认</summary>
         Select,
 
@@ -27,14 +33,16 @@ namespace GameJam.Prototype
     /// 3D 桌面上的回合循环 —— 这一份才是"玩法"在桌面上跑起来的驱动源。
     ///
     /// 【它和 Flow2D 那份的关系】
-    /// 规则完全相同，共用同一个 TurnState / GameConfig：
-    ///   每回合从手牌里挑 1 张（食材或变速模块）→ 放进投放区 → 确认投放
-    ///   → 模拟 → 回合结算 → 下一回合
+    /// 规则完全相同，共用同一个 TurnState / LevelData / GameConfig：
+    ///   三选一牌组 → 选刀片 → 每回合挑 1 张（食材或变速模块）放进投放区
+    ///   → 确认投放 → 模拟 → 回合结算 → 下一回合
     ///   手牌用完 → 关卡结束 → 总结算
     /// 区别只在"表现"：那边是 IMGUI 文字，这边是 3D 卡牌 + 榨汁机。
     /// 所以这里绝不能再自己维护一份手牌数据 —— 那样两边迟早会对不上。
     ///
     /// 【桌面上的映射】
+    ///   牌组     = 桌中央并排的三张大卡（TableChoiceRig）
+    ///   刀片     = 桌中央一张卡，点手牌里的食材即交换
     ///   手牌     = 桌面近端那排卡（食材 + 模块混排）
     ///   投放区   = 桌面中间那 8 个卡槽（每回合只能用一张）
     ///   杯子     = 榨汁机的玻璃罐，液面就是得分
@@ -42,20 +50,33 @@ namespace GameJam.Prototype
     /// </summary>
     public class TableTurnLoop : MonoBehaviour
     {
-        public TableSetup setup;
-        public JuicerRig  juicer;
-        public TableBoard board;
+        public TableSetup     setup;
+        public JuicerRig      juicer;
+        public TableBoard     board;
+        public TableChoiceRig choiceRig;
 
         /// <summary>本关的过程数据（手牌 / 刀片 / 杯内 / 得分）</summary>
         public TurnState turn = new TurnState();
 
-        public TablePhase phase = TablePhase.Select;
+        /// <summary>玩家做过的选择 —— 和 TurnState 互不依赖，各记各的</summary>
+        public SelectionLog selections = new SelectionLog();
+
+        /// <summary>当前关卡（选择环节、目标分都在它身上）</summary>
+        public LevelData level;
+
+        public TablePhase phase = TablePhase.DeckPick;
 
         /// <summary>已经放进投放区、等玩家按确认的那张牌（null = 还没放）</summary>
         public PlayCard Staged { get; private set; }
 
+        /// <summary>刀片位上的那张 3D 卡（只在选刀片阶段存在）</summary>
+        public PlayCard bladeCard;
+
         /// <summary>本回合投出去的东西的名字，模拟中/结算界面显示</summary>
         public string lastPlayed = "";
+
+        /// <summary>一行提示（"模块不能作为刀片"这类），给 HUD 显示</summary>
+        public string notice = "";
 
         /// <summary>本次"模拟中"开始的时刻</summary>
         public float simulatingSince = -1f;
@@ -67,51 +88,227 @@ namespace GameJam.Prototype
         public const float HandZ   = -0.58f;
         public const float HandGap = 0.30f;
 
+        // ══════════════════════════════════════════════════════════════
+        //  查询
+        // ══════════════════════════════════════════════════════════════
+
         /// <summary>现在能不能拖动卡牌（只有选牌阶段可以）。</summary>
         public bool CanInteract { get { return phase == TablePhase.Select; } }
 
         /// <summary>手牌是不是真的空了（关卡结束的判据）。</summary>
         public bool HandEmpty { get { return turn.IsHandEmpty; } }
 
-        // ══════════════════════════════════════════════════════════════
-        //  开局
-        // ══════════════════════════════════════════════════════════════
+        /// <summary>还在开局准备阶段（牌组 / 刀片还没定）。</summary>
+        public bool IsPreparing
+        {
+            get { return phase == TablePhase.DeckPick || phase == TablePhase.BladePick; }
+        }
+
+        /// <summary>当前正在进行的那个选择环节（不在选择阶段返回 null）。</summary>
+        public Choice CurrentChoice
+        {
+            get
+            {
+                if (phase == TablePhase.DeckPick)  return FindChoice(GameConfig.DeckPickId);
+                if (phase == TablePhase.BladePick) return FindChoice(GameConfig.BladePickId);
+                return null;
+            }
+        }
 
         /// <summary>
-        /// 开一局：按配置表准备手牌和刀片。
-        ///
-        /// 牌组固定取配置表里的第一副。3D 桌面这边还没做"选牌组"的界面，
-        /// 那两步选择属于另一条分支（Flow2D / Board2D），不是回合循环本身的事。
+        /// 按 id 找选择环节。
+        /// LevelData 只暴露 ChoiceAt/ChoiceCount，没有按 id 查的接口 ——
+        /// 走一遍就够了，不值得为它给数据层加方法。
         /// </summary>
+        public Choice FindChoice(string id)
+        {
+            if (level == null) return null;
+
+            for (int i = 0; i < level.ChoiceCount; i++)
+            {
+                Choice c = level.ChoiceAt(i);
+                if (c != null && c.id == id) return c;
+            }
+            return null;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  开局：牌组 → 刀片
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>开一局。叫 Begin 是因为它由 TableSetup 在装配完成之后调用。</summary>
         public void Begin()
         {
             GameConfig.EnsureLoaded();
+            level = GameConfig.Level();
 
-            List<Deck> decks = GameConfig.Decks();
-            Deck deck = decks.Count > 0 ? decks[0] : null;
-
-            turn.PrepareLoadout(GameConfig.Level(), deck, GameConfig.DefaultBlade());
-
-            if (setup != null) setup.deckName = deck != null ? deck.name : "";
+            selections.Clear();
+            turn.Reset();
 
             Staged          = null;
             lastPlayed      = "";
+            notice          = "";
             simulatingSince = -1f;
-            phase = turn.IsHandEmpty ? TablePhase.LevelEnd : TablePhase.Select;
+            if (setup != null) setup.deckName = "";
+
+            // ── 选择①：三选一牌组 ──
+            Choice deckChoice = FindChoice(GameConfig.DeckPickId);
+
+            if (deckChoice != null && deckChoice.OptionCount > 0 && choiceRig != null)
+            {
+                choiceRig.BuildDeckCards(deckChoice);
+                phase = TablePhase.DeckPick;
+                return;
+            }
+
+            // 配置里没有牌组环节（或者还没接上选择界面）→ 退回"直接用第一副"
+            BeginWithDefaultDeck();
+        }
+
+        /// <summary>没有牌组选择环节时的兜底：直接用配置表里的第一副。</summary>
+        private void BeginWithDefaultDeck()
+        {
+            List<Deck> decks = GameConfig.Decks();
+            Deck deck = decks.Count > 0 ? decks[0] : null;
+
+            StartLevelWith(deck);
+        }
+
+        /// <summary>确定牌组之后：数据层重开一局，再把桌面摆出来。</summary>
+        private void StartLevelWith(Deck deck)
+        {
+            turn.PrepareLoadout(level, deck, GameConfig.DefaultBlade());
+
+            if (setup != null)
+            {
+                setup.deckName = deck != null ? deck.name : "";
+                setup.RebuildHand();
+            }
+
+            BuildBladeCard();
+        }
+
+        /// <summary>按下「确认选择该卡组」。</summary>
+        public void ConfirmDeckPick()
+        {
+            if (phase != TablePhase.DeckPick) return;
+
+            int idx = choiceRig != null ? choiceRig.DeckSelected : -1;
+            if (idx < 0)
+            {
+                notice = "先在桌上点一张牌组卡";
+                return;
+            }
+
+            Choice c = FindChoice(GameConfig.DeckPickId);
+            if (c == null || idx >= c.options.Count) return;
+
+            ChoiceOption o = c.options[idx];
+            if (o == null || o.deck == null) return;
+
+            selections.Record(c.id, 0, o.id);
+
+            choiceRig.ClearDeckCards();
+            StartLevelWith(o.deck);
+
+            notice = "牌组已定：" + o.deck.name;
+            phase  = TablePhase.BladePick;
+        }
+
+        /// <summary>按下「确认刀片，进入关卡」。</summary>
+        public void ConfirmBladePick()
+        {
+            if (phase != TablePhase.BladePick) return;
+
+            Choice c = FindChoice(GameConfig.BladePickId);
+            if (c != null)
+            {
+                string[] picked = turn.blade != null
+                    ? new string[] { turn.blade.id }
+                    : new string[0];
+                selections.Record(c.id, 0, picked);
+            }
+
+            KillBladeCard();
+
+            notice = "刀片已定：" + turn.BladeName();
+            phase  = turn.IsHandEmpty ? TablePhase.LevelEnd : TablePhase.Select;
 
             SyncJuicer();
         }
 
-        /// <summary>
-        /// 把得分推给罐子的液面。
-        ///
-        /// target 一定要挡住 0：JuicerRig.SetScore 里算的是 score / target，
-        /// 目标分为 0 会得到 NaN，液面高度直接变成乱值。
-        /// </summary>
-        public void SyncJuicer()
+        // ══════════════════════════════════════════════════════════════
+        //  刀片位
+        // ══════════════════════════════════════════════════════════════
+
+        private void BuildBladeCard()
         {
-            if (juicer == null) return;
-            juicer.SetScore(turn.score, Mathf.Max(1, turn.targetScore));
+            KillBladeCard();
+
+            if (turn.blade == null || setup == null || setup.cardsRoot == null) return;
+
+            bladeCard = CardFactory.Create(turn.blade, setup.cardsRoot,
+                                           TableChoiceRig.BladeSpot, Vector3.zero);
+        }
+
+        private void KillBladeCard()
+        {
+            if (bladeCard == null) return;
+
+            CardFactory.DestroySafe(bladeCard.gameObject);
+            bladeCard = null;
+        }
+
+        /// <summary>
+        /// 点手牌里的一张，和当前刀片对调。
+        ///
+        /// 【数据层是"原位替换"】
+        /// SwapBladeWithHand 换完之后，turn.hand[idx] 拿到的就是原来那张刀片 ——
+        /// 不是移除再追加，所以手牌不会少人、刀片也不会凭空消失。
+        ///
+        /// 【表现层必须整张重建】
+        /// 卡面贴图和文字都是造卡时烤好的，改 data 字段不会让它们变。
+        /// 所以这里把两张卡都销毁重建，位置沿用原来的（槽位不动，只换内容）。
+        /// </summary>
+        public bool SwapBladeWith(PlayCard handCard)
+        {
+            if (phase != TablePhase.BladePick) return false;
+            if (handCard == null || setup == null || setup.hand == null) return false;
+
+            // 模块不能当刀片 —— 规则上的硬约束，说清楚，别静默失败
+            if (handCard.IsModule)
+            {
+                notice = "模块不能作为刀片";
+                return false;
+            }
+
+            int idx = setup.hand.IndexOf(handCard);
+            if (idx < 0) return false;
+
+            if (!turn.SwapBladeWithHand(idx)) return false;
+
+            ReplaceHandCard(idx, turn.hand[idx]);
+            BuildBladeCard();
+
+            notice = "已换刀片：" + turn.BladeName();
+            return true;
+        }
+
+        /// <summary>把某张手牌换成另一份数据（位置不变）。</summary>
+        private void ReplaceHandCard(int index, Ingredient data)
+        {
+            if (setup == null || setup.hand == null) return;
+            if (index < 0 || index >= setup.hand.Count) return;
+
+            PlayCard old = setup.hand[index];
+            if (old == null) return;
+
+            Vector3 home  = old.homePosition;
+            Vector3 euler = old.homeEuler;
+
+            CardFactory.DestroySafe(old.gameObject);
+
+            setup.hand[index] = CardFactory.Create(data, setup.cardsRoot, home, euler);
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -124,7 +321,6 @@ namespace GameJam.Prototype
         /// 【每回合只留一张】
         /// 再放一张会把上一张**退回手牌**，而不是让它留在桌上 ——
         /// 留在桌上玩家会以为两张都会被投进去，然后发现只结算了一张。
-        /// 规则是每回合一张，界面上就得让这件事一眼可见。
         /// </summary>
         public void Stage(PlayCard card)
         {
@@ -235,6 +431,18 @@ namespace GameJam.Prototype
         /// <summary>本关是否达标（今天得分恒为 0，所以实际上一定不达标）。</summary>
         public bool Passed { get { return turn.score >= turn.targetScore; } }
 
+        /// <summary>
+        /// 把得分推给罐子的液面。
+        ///
+        /// target 一定要挡住 0：JuicerRig.SetScore 里算的是 score / target，
+        /// 目标分为 0 会得到 NaN，液面高度直接变成乱值。
+        /// </summary>
+        public void SyncJuicer()
+        {
+            if (juicer == null) return;
+            juicer.SetScore(turn.score, Mathf.Max(1, turn.targetScore));
+        }
+
         // ══════════════════════════════════════════════════════════════
         //  每帧
         // ══════════════════════════════════════════════════════════════
@@ -328,7 +536,6 @@ namespace GameJam.Prototype
                 for (int i = 0; i < turn.hand.Count; i++)
                     if (turn.hand[i] != null) names.Add(turn.hand[i].name);
 
-            // 已经放进投放区的那张也算还在手上，别让它从摘要里消失
             if (turn.modules != null)
                 for (int i = 0; i < turn.modules.Count; i++)
                     if (turn.modules[i] != null) names.Add(turn.modules[i].name);

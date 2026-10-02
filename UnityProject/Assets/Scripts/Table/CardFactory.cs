@@ -112,6 +112,22 @@ namespace GameJam.Prototype
 
         // ── 造卡 ──────────────────────────────────────────────────────
 
+        /// <summary>
+        /// 销毁一个对象，运行时和编辑模式都能用。
+        ///
+        /// 【为什么需要它】TablePreviewCapture 是在**编辑模式**下调 TableSetup.Awake 的
+        /// （场景里不摆东西，全靠代码搭）。那条路径上 Object.Destroy 会直接报错，
+        /// 必须走 DestroyImmediate。牌组卡片、刀片卡、重发手牌都要销毁重建，
+        /// 所以这个判断只留一份，别到处抄。
+        /// </summary>
+        public static void DestroySafe(Object o)
+        {
+            if (o == null) return;
+
+            if (Application.isPlaying) Object.Destroy(o);
+            else                       Object.DestroyImmediate(o);
+        }
+
         public static PlayCard Create(Ingredient ing, Transform parent, Vector3 home, Vector3 euler)
         {
             string title = ing != null ? ing.name : "?";
@@ -265,13 +281,29 @@ namespace GameJam.Prototype
         ///
         /// ★ 如果哪天发现文字整体上下颠倒了，把 LookRotation(Vector3.down, ...)
         ///   里的 down 换成 up 即可（那说明这台机器上 TextMesh 的可读面约定相反）。
+        ///
+        /// 【为什么是 public】牌组卡片（TableChoiceRig）也要在桌面放中文，
+        /// 上面这段朝向推导踩过坑、只有一个正确答案，不能让它有第二份抄本。
         /// </summary>
-        private static void AddText(Transform parent, string text, float localZ, float size, Color color)
+        public static void AddText(Transform parent, string text, float localZ, float size, Color color)
+        {
+            AddText(parent, text, localZ, size, color, CardThick * 0.5f + 0.0022f);
+        }
+
+        /// <summary>
+        /// 同上，但自己指定文字离卡面的高度。
+        ///
+        /// ★ 卡牌厚度不是处处都一样的：牌组卡有 0.018，手牌只有 0.008。
+        ///   沿用默认高度的话，牌组卡的标题会被埋进卡身里，一个字都看不见 ——
+        ///   （踩过：三张牌组卡的色带全是空白的。）所以把 Y 开出来当参数。
+        /// </summary>
+        public static void AddText(Transform parent, string text, float localZ, float size,
+                                   Color color, float localY)
         {
             GameObject go = new GameObject("Text");
             go.transform.SetParent(parent, false);
 
-            go.transform.localPosition = new Vector3(0f, CardThick * 0.5f + 0.0022f, localZ);
+            go.transform.localPosition = new Vector3(0f, localY, localZ);
             go.transform.localRotation = Quaternion.LookRotation(Vector3.down, Vector3.forward);
             go.transform.localScale = Vector3.one * size;
 

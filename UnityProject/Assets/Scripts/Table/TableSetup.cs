@@ -35,6 +35,9 @@ namespace GameJam.Prototype
         /// <summary>桌面上的回合循环 —— 手牌、投放区、得分的唯一驱动源</summary>
         public TableTurnLoop    turnLoop;
 
+        /// <summary>牌组 / 刀片两个选择环节的桌面表现</summary>
+        public TableChoiceRig   choiceRig;
+
         /// <summary>视角名，供 HUD 和快捷键使用。最后两个是自由转头和榨汁机特写。</summary>
         public static readonly string[] ViewNames =
         {
@@ -71,9 +74,14 @@ namespace GameJam.Prototype
             BuildSlots();
             BuildRoots();
             BuildJuicer();
-            BuildTurnLoop();     // ★ 先有回合循环（它持有数据层的手牌），再按它发牌
-            DealHand();
-            BuildInteraction();
+            BuildTurnLoop();      // 建出组件、接好引用（还不开始）
+            BuildInteraction();   // HUD 和交互层都要能拿到 turnLoop
+            BuildChoiceRig();     // 牌组 / 刀片的桌面表现
+
+            // ★ 最后才开始。Begin 会直接进入"三选一牌组"，
+            //   那时候桌面、HUD、交互、选择 rig 必须都已经就位 ——
+            //   以前是在 BuildTurnLoop 里就 Begin 的，顺序一旦动过就会踩空。
+            turnLoop.Begin();
         }
 
         // ── 回合循环 ──────────────────────────────────────────────────
@@ -86,9 +94,21 @@ namespace GameJam.Prototype
             turnLoop.setup  = this;
             turnLoop.juicer = juicer;
             turnLoop.board  = board;
+        }
 
-            // 在这里就把手牌和刀片准备好 —— 下面 DealHand 要读它
-            turnLoop.Begin();
+        // ── 选择环节（牌组 / 刀片）────────────────────────────────────
+        private void BuildChoiceRig()
+        {
+            GameObject go = new GameObject("TableChoiceRig");
+            go.transform.SetParent(transform, false);
+
+            choiceRig = go.AddComponent<TableChoiceRig>();
+            choiceRig.cam   = cam;
+            choiceRig.setup = this;
+            choiceRig.loop  = turnLoop;
+            choiceRig.root  = go.transform;   // 牌组卡片挂在自己下面，拆的时候一起走
+
+            turnLoop.choiceRig = choiceRig;
         }
 
         // ── 榨汁机 + 液体罐 ───────────────────────────────────────────
@@ -260,6 +280,23 @@ namespace GameJam.Prototype
         }
 
         // ── 发牌 ──────────────────────────────────────────────────────
+
+        /// <summary>
+        /// 按当前 TurnState 重新摆一遍手牌。
+        ///
+        /// 确认牌组之前手牌是空的，所以发牌不能放在 Awake 里做 ——
+        /// 那会走兜底分支、凭空摆出一张"铁块"。
+        /// 换刀片之后也会用到它（刀片和手牌对调，两边内容都变了）。
+        /// </summary>
+        public void RebuildHand()
+        {
+            for (int i = hand.Count - 1; i >= 0; i--)
+                if (hand[i] != null) CardFactory.DestroySafe(hand[i].gameObject);
+
+            hand.Clear();
+            DealHand();
+        }
+
         /// <summary>
         /// 按数据层的手牌摆出 3D 卡。
         ///
