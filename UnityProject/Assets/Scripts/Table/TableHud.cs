@@ -61,6 +61,7 @@ namespace GameJam.Prototype
                     setup.rig.GoTo(TableSetup.ViewNames[i]);
             }
 
+            HandleMenuKeys();
             HandleConfirmKey();
         }
 
@@ -83,9 +84,36 @@ namespace GameJam.Prototype
                 case TablePhase.BladePick: turnLoop.ConfirmBladePick(); break;
 
                 default:
-                    if (turnLoop.CanInteract && turnLoop.Staged != null) turnLoop.Confirm();
+                    if (turnLoop.CanInteract && turnLoop.StagedCount > 0) turnLoop.Confirm();
                     break;
             }
+        }
+
+        /// <summary>
+        /// ESC 一层一层退：先关检视面板，再关设置，最后才是暂停菜单。
+        ///
+        /// 三件事都由这一处决定 —— 之前检视面板的 Esc 归 TableInteraction 管、
+        /// 别的归这里管，两边各读一次 Input.GetKeyDown(Escape)，
+        /// 就会出现"关掉面板的同时把游戏也暂停了"。
+        /// </summary>
+        private void HandleMenuKeys()
+        {
+            if (turnLoop == null) return;
+            if (!Input.GetKeyDown(KeyCode.Escape)) return;
+
+            if (interaction != null && interaction.Inspected != null)
+            {
+                interaction.Inspect(null);
+                return;
+            }
+
+            if (turnLoop.settingsOpen) { turnLoop.settingsOpen = false; return; }
+
+            // 开场、开局准备、总结算没有"暂停"这回事
+            if (turnLoop.IsTitle || turnLoop.IsPreparing) return;
+            if (turnLoop.phase == TablePhase.LevelResult) return;
+
+            turnLoop.paused = !turnLoop.paused;
         }
 
         private void EnsureStyles()
@@ -204,9 +232,119 @@ namespace GameJam.Prototype
 
             DrawPhaseOverlay();
 
+            // 弹窗盖在最上面。设置优先于暂停 —— 设置是从暂停里开出来的。
+            if (turnLoop != null && turnLoop.settingsOpen)    DrawSettingsPanel();
+            else if (turnLoop != null && turnLoop.paused)     DrawPausePanel();
+
             // 检视面板和划过信息条是同一个位置，二选一
             if (interaction.Inspected != null) DrawInspectPanel();
             else                               DrawCardInfo();
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  暂停菜单 / 设置
+        // ══════════════════════════════════════════════════════════════
+
+        private void DrawPausePanel()
+        {
+            const float w = 400f, h = 292f;
+            Rect r = CenterBox(w, h);
+            GUI.Box(r, GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(r.x + 22f, r.y + 16f, w - 44f, 34f), "暂　停", h1Panel);
+
+            float by = r.y + 66f;
+            const float bh = 40f;
+            const float gap = 6f;
+
+            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "继续游戏", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.paused = false;
+            }
+            by += bh + gap;
+
+            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "设　　置", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.settingsOpen = true;
+            }
+            by += bh + gap;
+
+            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "返回开场", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.ReturnToTitle();
+            }
+            by += bh + gap;
+
+            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "退出游戏", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.QuitGame();
+            }
+
+            GUI.Label(new Rect(r.x + 22f, r.y + h - 28f, w - 44f, 22f),
+                      "Esc 也可以直接继续", dimPanel);
+        }
+
+        /// <summary>
+        /// 设置面板 —— 这一版是壳子。
+        ///
+        /// 结构先立起来（有哪几项、长什么样、从哪儿进），
+        /// 但里面挂的三项都是**真能改东西**的，不是摆着好看：
+        /// 转头灵敏度接 TableInteraction，操作提示和调试信息接 DrawHints。
+        /// 音量、画质、存档这些等真需要了再往里加。
+        /// </summary>
+        private void DrawSettingsPanel()
+        {
+            const float w = 470f, h = 274f;
+            Rect r = CenterBox(w, h);
+            GUI.Box(r, GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(r.x + 22f, r.y + 16f, w - 44f, 34f), "设　置", h1Panel);
+            GUI.Label(new Rect(r.x + 22f, r.y + 52f, w - 44f, 22f),
+                      "（壳子：结构先立起来，挂上去的值都是生效的）", dimPanel);
+
+            float y = r.y + 88f;
+
+            GUI.Label(new Rect(r.x + 22f, y, 210f, 26f),
+                      "转头灵敏度　" + TableSettings.LookSensitivity.ToString("0.0"), bodyPanel);
+
+            TableSettings.LookSensitivity =
+                GUI.HorizontalSlider(new Rect(r.x + 232f, y + 8f, w - 258f, 20f),
+                                     TableSettings.LookSensitivity, 0.5f, 8f);
+            y += 36f;
+
+            GUI.Label(new Rect(r.x + 22f, y, 210f, 26f), "操作提示", bodyPanel);
+            if (GUI.Button(new Rect(r.x + 232f, y, 110f, 28f),
+                           TableSettings.ShowHints ? "开" : "关", btn))
+            {
+                GUI.FocusControl(null);
+                TableSettings.ShowHints = !TableSettings.ShowHints;
+            }
+            y += 36f;
+
+            GUI.Label(new Rect(r.x + 22f, y, 210f, 26f), "调试信息", bodyPanel);
+            if (GUI.Button(new Rect(r.x + 232f, y, 110f, 28f),
+                           TableSettings.ShowDebugInfo ? "开" : "关", btn))
+            {
+                GUI.FocusControl(null);
+                TableSettings.ShowDebugInfo = !TableSettings.ShowDebugInfo;
+            }
+            y += 40f;
+
+            if (GUI.Button(new Rect(r.x + 22f, y, 130f, 32f), "恢复默认", btn))
+            {
+                GUI.FocusControl(null);
+                TableSettings.ResetToDefault();
+            }
+
+            if (GUI.Button(new Rect(r.x + w - 152f, y, 130f, 32f), "关　闭", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.settingsOpen = false;
+            }
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -373,20 +511,25 @@ namespace GameJam.Prototype
         // ── 左下角：操作提示 ──────────────────────────────────────────
         private void DrawHints()
         {
-            const float w = 470f, h = 190f;
+            if (!TableSettings.ShowHints) return;
+
+            const float w = 480f, h = 214f;
             float y = Screen.height - h - 14f;
 
             GUI.Label(new Rect(16f, y, w, 24f), "拖动卡牌放到桌面中间的投放区", h1);
-            GUI.Label(new Rect(16f, y + 28f, w, 22f), "每回合只能投一张；再放一张会把上一张退回手牌", dim);
+            GUI.Label(new Rect(16f, y + 28f, w, 22f), "一次可以放多张 —— 确认时效果会叠加发动", dim);
             GUI.Label(new Rect(16f, y + 48f, w, 22f), "放好后按「确认投放」或回车 —— 牌会被吸进罐子", dim);
             GUI.Label(new Rect(16f, y + 68f, w, 22f), "拖回手牌 = 反悔，可以重新挑", dim);
             GUI.Label(new Rect(16f, y + 88f, w, 22f), "右键单击卡牌 → 查看完整数据（Esc 关闭）", dim);
             GUI.Label(new Rect(16f, y + 108f, w, 22f), "右键拖动 / 中键拖动 → 原地转头（活动范围 120° 锥）", dim);
             GUI.Label(new Rect(16f, y + 128f, w, 22f), "1 / 2 / 3 固定视角　　4 自由视角　　G 开关物理", dim);
-            GUI.Label(new Rect(16f, y + 150f, w, 22f),
-                      "物理：" + (interaction.PhysicsOn ? "开（受重力）" : "关（脚本控制）")
-                      + "　　视角：" + (setup != null && setup.rig != null && setup.rig.IsFreeLook
-                                        ? "自由转头中" : "固定机位"), dim);
+            GUI.Label(new Rect(16f, y + 148f, w, 22f), "Esc → 菜单（继续 / 设置 / 返回开场 / 退出游戏）", dim);
+
+            if (TableSettings.ShowDebugInfo)
+                GUI.Label(new Rect(16f, y + 170f, w, 22f),
+                          "物理：" + (interaction.PhysicsOn ? "开（受重力）" : "关（脚本控制）")
+                          + "　　视角：" + (setup != null && setup.rig != null && setup.rig.IsFreeLook
+                                            ? "自由转头中" : "固定机位"), dim);
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -424,9 +567,9 @@ namespace GameJam.Prototype
 
             GUI.Label(new Rect(x + 18f, y + 90f, w - 200f, 26f),
                       "待投放：" + turnLoop.StagedText,
-                      turnLoop.Staged != null ? bodyPanel : dimPanel);
+                      turnLoop.StagedCount > 0 ? bodyPanel : dimPanel);
 
-            bool canConfirm = turnLoop.CanInteract && turnLoop.Staged != null;
+            bool canConfirm = turnLoop.CanInteract && turnLoop.StagedCount > 0;
 
             bool oldEnabled = GUI.enabled;
             GUI.enabled = canConfirm;

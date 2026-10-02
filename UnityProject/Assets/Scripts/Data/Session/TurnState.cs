@@ -195,13 +195,27 @@ namespace GameJam.Data
 
         // ── 动作 ──────────────────────────────────────────────────────
 
-        /// <summary>从手牌打出一张，放进杯子。返回打出的那张。</summary>
+        /// <summary>
+        /// 从手牌打出一张，放进杯子。返回打出的那张。
+        ///
+        /// ★ 食材自带的 effects 也要并进本局效果 —— 和 PlayModule 对称。
+        ///   activeEffects 的注释里一直写着"关卡规则 + 已投放的模块 + 食材自带效果"，
+        ///   但这里从来没并过，食材的效果一直是丢的。
+        ///   多张牌同时发动时这一点尤其要命：模块叠得起来，食材的却全丢。
+        /// </summary>
         public Ingredient PlayFromHand(int index)
         {
             if (hand == null || index < 0 || index >= hand.Count) return null;
+
             Ingredient ing = hand[index];
             hand.RemoveAt(index);
-            if (ing != null) cup.Add(ing);
+
+            if (ing != null)
+            {
+                cup.Add(ing);
+
+                if (ing.effects != null) activeEffects.Append(ing.effects);
+            }
             return ing;
         }
 

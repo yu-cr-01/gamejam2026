@@ -307,12 +307,23 @@ namespace GameJam.Prototype
         /// 那会走兜底分支、凭空摆出一张"铁块"。
         /// 换刀片之后也会用到它（刀片和手牌对调，两边内容都变了）。
         /// </summary>
-        public void RebuildHand()
+        /// <summary>
+        /// 清空手牌（连 3D 卡一起销毁）。
+        /// 和 RebuildHand 分开是有原因的：RebuildHand 会调 DealHand，
+        /// 而 DealHand 在"手牌是空的"时会走兜底分支凭空摆出一张铁块 ——
+        /// 回开场那种"就是要清空"的场合不能走那条路。
+        /// </summary>
+        public void ClearHand()
         {
             for (int i = hand.Count - 1; i >= 0; i--)
                 if (hand[i] != null) CardFactory.DestroySafe(hand[i].gameObject);
 
             hand.Clear();
+        }
+
+        public void RebuildHand()
+        {
+            ClearHand();
             DealHand();
         }
 

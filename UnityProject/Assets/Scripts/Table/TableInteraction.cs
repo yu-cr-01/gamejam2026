@@ -73,9 +73,6 @@ namespace GameJam.Prototype
         /// <summary>超过这个像素距离才算"拖动"，否则算"单击"。</summary>
         private const float LookDragThreshold = 6f;
 
-        /// <summary>转头灵敏度（度 / 鼠标单位）。</summary>
-        private const float LookSensitivity = 3.2f;
-
         /// <summary>卡槽角标的颜色。贴图只出白色形状，颜色在这里染 —— TableSetup 建槽时也要用。</summary>
         public static readonly Color MarkerIdle = new Color(0.30f, 0.34f, 0.42f);
         public static readonly Color MarkerHot  = new Color(0.35f, 0.95f, 0.60f);
@@ -187,15 +184,16 @@ namespace GameJam.Prototype
             }
 
             if (looking) ApplyLook();
-
-            if (Input.GetKeyDown(KeyCode.Escape)) Inspected = null;
         }
 
         private void ApplyLook()
         {
             if (rig == null) return;
-            rig.Rotate(Input.GetAxis("Mouse X") * LookSensitivity,
-                       Input.GetAxis("Mouse Y") * LookSensitivity);
+
+            // 灵敏度走设置面板，不再是写死的常量
+            float s = TableSettings.LookSensitivity;
+            rig.Rotate(Input.GetAxis("Mouse X") * s,
+                       Input.GetAxis("Mouse Y") * s);
         }
 
         private void HandlePhysicsToggle()

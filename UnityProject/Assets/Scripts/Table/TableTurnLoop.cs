@@ -72,8 +72,22 @@ namespace GameJam.Prototype
 
         public TablePhase phase = TablePhase.DeckPick;
 
-        /// <summary>已经放进投放区、等玩家按确认的那张牌（null = 还没放）</summary>
-        public PlayCard Staged { get; private set; }
+        /// <summary>
+        /// 已经放进投放区、等玩家按确认的那些牌。
+        ///
+        /// 【为什么是列表，而不是单张】
+        /// 效果类单独封装（Effect / EffectGroup / EffectOp）的**目的就是并发**：
+        /// 多张牌同时发动时，效果靠 EffectGroup.Append 一层层叠进 activeEffects，
+        /// 而不是各改各的数值。原来这里写死"每回合只能投一张"，
+        /// 等于从界面层把整套效果组合体系掐死了 —— 那份解耦就白做了。
+        /// </summary>
+        private readonly List<PlayCard> staged = new List<PlayCard>();
+
+        /// <summary>暂停中（ESC 打开菜单）。</summary>
+        public bool paused;
+
+        /// <summary>设置面板开着没有（开场和暂停菜单都能打开它）。</summary>
+        public bool settingsOpen;
 
         /// <summary>刀片位上的那张 3D 卡（只在选刀片阶段存在）</summary>
         public PlayCard bladeCard;
@@ -98,8 +112,14 @@ namespace GameJam.Prototype
         //  查询
         // ══════════════════════════════════════════════════════════════
 
-        /// <summary>现在能不能拖动卡牌（只有选牌阶段可以）。</summary>
-        public bool CanInteract { get { return phase == TablePhase.Select; } }
+        /// <summary>现在能不能拖动卡牌（选牌阶段、且没有弹窗挡着）。</summary>
+        public bool CanInteract
+        {
+            get { return phase == TablePhase.Select && !paused && !settingsOpen; }
+        }
+
+        /// <summary>待投放的牌数。</summary>
+        public int StagedCount { get { return staged.Count; } }
 
         /// <summary>手牌是不是真的空了（关卡结束的判据）。</summary>
         public bool HandEmpty { get { return turn.IsHandEmpty; } }
@@ -154,7 +174,9 @@ namespace GameJam.Prototype
             selections.Clear();
             turn.Reset();
 
-            Staged          = null;
+            staged.Clear();
+            paused          = false;
+            settingsOpen    = false;
             lastPlayed      = "";
             notice          = "";
             simulatingSince = -1f;
@@ -348,20 +370,19 @@ namespace GameJam.Prototype
         // ══════════════════════════════════════════════════════════════
 
         /// <summary>
-        /// 某张牌落进了投放区。
+        /// 某张牌落进了投放区，记为待投放。
         ///
-        /// 【每回合只留一张】
-        /// 再放一张会把上一张**退回手牌**，而不是让它留在桌上 ——
-        /// 留在桌上玩家会以为两张都会被投进去，然后发现只结算了一张。
+        /// 放多少张都行 —— 投放区有 8 个格子，玩家的手牌也就那几张。
+        /// 之前这里是"再放一张就把上一张退回手牌"，理由是"玩家会以为两张都会
+        /// 被投进去"；其实真正的毛病是**没说清楚**，而不是不让放。
+        /// 现在顶部信息栏会把待投放的张数和名字全列出来。
         /// </summary>
         public void Stage(PlayCard card)
         {
             if (card == null) return;
-            if (Staged == card) return;
+            if (staged.Contains(card)) return;
 
-            if (Staged != null) Release(Staged);
-
-            Staged = card;
+            staged.Add(card);
             lastPlayed = "";
         }
 
@@ -373,7 +394,7 @@ namespace GameJam.Prototype
             if (board != null) board.Clear(card);
             card.ReturnHome();
 
-            if (Staged == card) Staged = null;
+            staged.Remove(card);
 
             LayoutHand();
         }
@@ -383,46 +404,66 @@ namespace GameJam.Prototype
         // ══════════════════════════════════════════════════════════════
 
         /// <summary>
-        /// 按下「确认投放」：牌真正进数据层，然后飞进罐子。
+        /// 按下「确认投放」：投放区里的牌**一起**进数据层，然后依次飞进罐子。
         ///
-        /// 落子权在确认键上，不在"放上投放区"那一刻 ——
-        /// 放上去只是摆好，玩家还能拖回来。
+        /// 【一次投多张，效果是叠加的】
+        /// 食材进杯子（PlayFromHand），模块的效果并进 activeEffects（PlayModule），
+        /// 两者都按投放顺序走一遍。多个模块的效果靠 EffectGroup.Append 叠起来，
+        /// 所以"两张加硫性、一张加汞性"同时发动时，它们是在同一份效果组合里
+        /// 依次作用的，而不是互相覆盖 —— 这正是效果类单独封装要换来的东西。
+        ///
+        /// 落子权仍然在确认键上，不在"放上投放区"那一刻：放上去只是摆好，
+        /// 玩家还能一张张拖回来。
         /// </summary>
         public void Confirm()
         {
             if (phase != TablePhase.Select) return;
+            if (staged.Count == 0) return;
 
-            PlayCard card = Staged;
-            if (card == null) return;
+            // 先整批拿出来再处理 —— 处理过程会动 setup.hand，边遍历边改会漏牌
+            List<PlayCard> batch = new List<PlayCard>(staged);
+            staged.Clear();
 
-            Staged = null;
+            List<string> played = new List<string>();
 
-            string playedName = card.DisplayName;
-
-            // ── 1. 先动数据层 ──
-            if (card.IsModule)
+            for (int i = 0; i < batch.Count; i++)
             {
-                int idx = turn.modules != null ? turn.modules.IndexOf(card.module) : -1;
-                SpeedModule m = idx >= 0 ? turn.PlayModule(idx) : null;
-                if (m != null) playedName = m.name;
+                PlayCard card = batch[i];
+                if (card == null) continue;
+
+                string name = card.DisplayName;
+
+                // ── 1. 先动数据层 ──
+                if (card.IsModule)
+                {
+                    int idx = turn.modules != null ? turn.modules.IndexOf(card.module) : -1;
+                    SpeedModule m = idx >= 0 ? turn.PlayModule(idx) : null;
+                    if (m != null) name = m.name;
+                }
+                else
+                {
+                    int idx = turn.hand != null ? turn.hand.IndexOf(card.data) : -1;
+                    Ingredient ing = idx >= 0 ? turn.PlayFromHand(idx) : null;
+                    if (ing != null) name = ing.name;
+                }
+
+                played.Add(name);
+
+                // ── 2. 再动表现层 ──
+                if (board != null) board.Clear(card);
+                if (setup != null && setup.hand != null) setup.hand.Remove(card);
+
+                Vector3 mouth = juicer != null
+                    ? juicer.MouthWorld
+                    : card.transform.position + Vector3.up * 0.4f;
+
+                // 落点错开一点、寿命依次加长 —— 看起来是一张接一张被吸进去，
+                // 全叠在同一个点上会糊成一坨，也看不出先后
+                float spread = (i - (batch.Count - 1) * 0.5f) * 0.05f;
+                card.ConsumeInto(mouth + new Vector3(spread, 0f, 0f), 0.8f + i * 0.14f);
             }
-            else
-            {
-                int idx = turn.hand != null ? turn.hand.IndexOf(card.data) : -1;
-                Ingredient ing = idx >= 0 ? turn.PlayFromHand(idx) : null;
-                if (ing != null) playedName = ing.name;
-            }
 
-            lastPlayed = playedName;
-
-            // ── 2. 再动表现层 ──
-            if (board != null) board.Clear(card);
-            if (setup != null && setup.hand != null) setup.hand.Remove(card);
-
-            Vector3 mouth = juicer != null
-                ? juicer.MouthWorld
-                : card.transform.position + Vector3.up * 0.4f;
-            card.ConsumeInto(mouth, 0.8f);
+            lastPlayed = played.Count > 0 ? string.Join("、", played.ToArray()) : "";
 
             LayoutHand();
             SyncJuicer();
@@ -447,11 +488,57 @@ namespace GameJam.Prototype
             }
 
             turn.NextTurn();
-            Staged     = null;
+            staged.Clear();
             lastPlayed = "";
             phase = TablePhase.Select;
 
             LayoutHand();
+        }
+
+        /// <summary>回到开场：桌面清干净，重新开一局。</summary>
+        public void ReturnToTitle()
+        {
+            paused       = false;
+            settingsOpen = false;
+            staged.Clear();
+            lastPlayed = "";
+            notice     = "";
+
+            turn.Reset();
+            selections.Clear();
+
+            if (choiceRig != null) choiceRig.ClearDeckCards();
+            KillBladeCard();
+
+            if (setup != null)
+            {
+                // ★ 用 ClearHand 而不是 RebuildHand：后者会调 DealHand，
+                //   而手牌为空时 DealHand 会走兜底分支凭空摆出一张铁块。
+                setup.ClearHand();
+                setup.deckName = "";
+            }
+
+            SyncJuicer();
+
+            if (titleRig != null)
+            {
+                titleRig.Build();
+                phase = TablePhase.Title;
+            }
+            else
+            {
+                StartDeckPick();
+            }
+        }
+
+        /// <summary>退出游戏。编辑器里是停止 Play，出包后是真退出。</summary>
+        public void QuitGame()
+        {
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.isPlaying = false;
+#else
+            Application.Quit();
+#endif
         }
 
         /// <summary>关卡结束 → 总结算。</summary>
@@ -481,6 +568,10 @@ namespace GameJam.Prototype
 
         void Update()
         {
+            // 暂停 / 设置面板开着的时候，模拟计时也停住 ——
+            // 否则暂停回来会发现"模拟中"直接跳过了
+            if (paused || settingsOpen) return;
+
             if (phase != TablePhase.Simulating) return;
 
             bool longEnough = (Time.time - simulatingSince) >= SimulateSeconds;
@@ -551,10 +642,19 @@ namespace GameJam.Prototype
         //  给 HUD 用的只读文本
         // ══════════════════════════════════════════════════════════════
 
-        /// <summary>待投放的那张牌的名字（没放就是提示语）。</summary>
+        /// <summary>待投放的牌：几张、都是什么。</summary>
         public string StagedText
         {
-            get { return Staged != null ? Staged.DisplayName : "（还没放牌）"; }
+            get
+            {
+                if (staged.Count == 0) return "（还没放牌）";
+
+                List<string> names = new List<string>();
+                for (int i = 0; i < staged.Count; i++)
+                    if (staged[i] != null) names.Add(staged[i].DisplayName);
+
+                return names.Count + " 张：" + string.Join("、", names.ToArray());
+            }
         }
 
         /// <summary>手牌摘要：食材和模块一起列。</summary>

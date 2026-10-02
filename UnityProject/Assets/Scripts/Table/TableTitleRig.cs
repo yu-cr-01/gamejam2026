@@ -328,6 +328,14 @@ namespace GameJam.Prototype
             if (loop == null || loop.phase != TablePhase.Title) return;
             if (cam == null) return;
 
+            // 设置面板开着的时候，底下的东西不再响应鼠标 ——
+            // 不然会隔着面板把书点开
+            if (loop.settingsOpen)
+            {
+                Animate();
+                return;
+            }
+
             // 启动动画期间锁输入 —— 连点几下不能重复触发（PlayStamp 重入会打断动画）
             if (startingAt >= 0f)
             {
@@ -506,8 +514,11 @@ namespace GameJam.Prototype
 #endif
                     break;
 
-                // 设置还没做，点了不做事（但至少不是没反应）
+                // 设置：打开设置面板（壳子，但里面的值都是生效的）
                 case IdSettings:
+                    if (loop != null) loop.settingsOpen = true;
+                    break;
+
                 default:
                     break;
             }
