@@ -38,6 +38,9 @@ namespace GameJam.Prototype
         /// <summary>牌组 / 刀片两个选择环节的桌面表现</summary>
         public TableChoiceRig   choiceRig;
 
+        /// <summary>开场界面（书 / 木牌 / 蜡烛）</summary>
+        public TableTitleRig    titleRig;
+
         /// <summary>视角名，供 HUD 和快捷键使用。最后两个是自由转头和榨汁机特写。</summary>
         public static readonly string[] ViewNames =
         {
@@ -77,11 +80,27 @@ namespace GameJam.Prototype
             BuildTurnLoop();      // 建出组件、接好引用（还不开始）
             BuildInteraction();   // HUD 和交互层都要能拿到 turnLoop
             BuildChoiceRig();     // 牌组 / 刀片的桌面表现
+            BuildTitleRig();      // 开场界面
 
-            // ★ 最后才开始。Begin 会直接进入"三选一牌组"，
-            //   那时候桌面、HUD、交互、选择 rig 必须都已经就位 ——
+            // ★ 最后才开始。Begin 会先停在开场界面，
+            //   那时候桌面、HUD、交互、开场 rig 必须都已经就位 ——
             //   以前是在 BuildTurnLoop 里就 Begin 的，顺序一旦动过就会踩空。
             turnLoop.Begin();
+        }
+
+        // ── 开场界面 ──────────────────────────────────────────────────
+        private void BuildTitleRig()
+        {
+            GameObject go = new GameObject("TableTitleRig");
+            go.transform.SetParent(transform, false);
+
+            titleRig = go.AddComponent<TableTitleRig>();
+            titleRig.cam   = cam;
+            titleRig.setup = this;
+            titleRig.loop  = turnLoop;
+            titleRig.root  = go.transform;
+
+            turnLoop.titleRig = titleRig;
         }
 
         // ── 回合循环 ──────────────────────────────────────────────────

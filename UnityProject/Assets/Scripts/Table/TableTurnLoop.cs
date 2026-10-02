@@ -7,6 +7,9 @@ namespace GameJam.Prototype
     /// <summary>3D 桌面上的阶段。</summary>
     public enum TablePhase
     {
+        /// <summary>开场：桌上摆着书、木牌和一根蜡烛</summary>
+        Title,
+
         /// <summary>三选一牌组</summary>
         DeckPick,
 
@@ -54,6 +57,9 @@ namespace GameJam.Prototype
         public JuicerRig      juicer;
         public TableBoard     board;
         public TableChoiceRig choiceRig;
+
+        /// <summary>开场界面（书 / 木牌 / 蜡烛）</summary>
+        public TableTitleRig  titleRig;
 
         /// <summary>本关的过程数据（手牌 / 刀片 / 杯内 / 得分）</summary>
         public TurnState turn = new TurnState();
@@ -104,6 +110,9 @@ namespace GameJam.Prototype
             get { return phase == TablePhase.DeckPick || phase == TablePhase.BladePick; }
         }
 
+        /// <summary>停在场界面。</summary>
+        public bool IsTitle { get { return phase == TablePhase.Title; } }
+
         /// <summary>当前正在进行的那个选择环节（不在选择阶段返回 null）。</summary>
         public Choice CurrentChoice
         {
@@ -151,7 +160,30 @@ namespace GameJam.Prototype
             simulatingSince = -1f;
             if (setup != null) setup.deckName = "";
 
-            // ── 选择①：三选一牌组 ──
+            // ── 开场界面 ──
+            if (titleRig != null)
+            {
+                titleRig.Build();
+                phase = TablePhase.Title;
+                return;
+            }
+
+            StartDeckPick();
+        }
+
+        /// <summary>点了桌上那本书（新游戏）：收起开场，进入三选一牌组。</summary>
+        public void ConfirmTitleStart()
+        {
+            if (phase != TablePhase.Title) return;
+
+            if (titleRig != null) titleRig.Clear();
+
+            StartDeckPick();
+        }
+
+        /// <summary>选择①：三选一牌组。</summary>
+        private void StartDeckPick()
+        {
             Choice deckChoice = FindChoice(GameConfig.DeckPickId);
 
             if (deckChoice != null && deckChoice.OptionCount > 0 && choiceRig != null)

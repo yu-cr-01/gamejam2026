@@ -123,7 +123,7 @@ namespace GameJam.EditorTools
                 case 5:
                     if (EditorApplication.timeSinceStartup - stageTime < 4.0) return;
 
-                    if (turnProbe) { Stage = 20; return; }
+                    if (turnProbe) { Stage = 19; return; }
 
                     Finish();
                     return;
@@ -136,6 +136,21 @@ namespace GameJam.EditorTools
                 //    同一帧里先截图、后改状态，落盘的是改完之后那一帧。
                 //    （踩过：第一版"回合结算"拍到的是下一回合的选牌界面。）
                 // ══════════════════════════════════════════════════════
+
+                // ⑲ 开场界面（书 / 木牌 / 蜡烛）
+                case 19:
+                    Shot("title.png");
+                    Stage = 31;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉛ 点桌上那本书 = 新游戏
+                case 31:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    StartGame();
+                    Stage = 20;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
 
                 // ⑳ 三选一牌组
                 case 20:
@@ -235,6 +250,15 @@ namespace GameJam.EditorTools
         // ── 探针用的动作 ──────────────────────────────────────────────
         // 全部走游戏自己的公开入口（SelectDeck / ConfirmDeckPick / SwapBladeWith ...），
         // 这样探针测到的失败就一定是玩家会遇到的失败。
+
+        private static void StartGame()
+        {
+            TableTurnLoop loop = Object.FindObjectOfType<TableTurnLoop>();
+            if (loop == null) return;
+
+            loop.ConfirmTitleStart();
+            Debug.Log("[AutoPlay] 已点「新游戏」→ 阶段 " + loop.phase);
+        }
 
         private static void PickDeck()
         {

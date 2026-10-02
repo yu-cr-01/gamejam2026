@@ -30,6 +30,9 @@ namespace GameJam.Prototype
         // 面板统一走"深色底 + 浅色字"，和游戏整体调子也一致。
         private GUIStyle panelBox, panelBoxInner, h1Panel, bodyPanel, dimPanel, btnClose;
 
+        // ── 开场界面的大标题 ──
+        private GUIStyle titleBig, titleSub, titleHint;
+
         // ── 检视窗口 ──
         private const int   InspectWindowId = 0x54A1;
         private Rect        inspectRect = new Rect(16f, 14f, 450f, 520f);
@@ -75,6 +78,7 @@ namespace GameJam.Prototype
 
             switch (turnLoop.phase)
             {
+                case TablePhase.Title:     turnLoop.ConfirmTitleStart(); break;
                 case TablePhase.DeckPick:  turnLoop.ConfirmDeckPick();  break;
                 case TablePhase.BladePick: turnLoop.ConfirmBladePick(); break;
 
@@ -154,6 +158,31 @@ namespace GameJam.Prototype
                     h1Panel.font = cjkFont; bodyPanel.font = cjkFont;
                     dimPanel.font = cjkFont; btnClose.font = cjkFont;
                 }
+
+                // ── 开场界面的大标题 ──
+                // 同样不用 Bold —— 见上面 h1 那段关于伪粗体的说明。
+                // 标题靠字号（56）和暖色拉开层次，不靠加粗。
+                titleBig  = new GUIStyle(GUI.skin.label)
+                {
+                    fontSize = 56, alignment = TextAnchor.MiddleCenter
+                };
+                titleSub  = new GUIStyle(GUI.skin.label)
+                {
+                    fontSize = 19, alignment = TextAnchor.MiddleCenter
+                };
+                titleHint = new GUIStyle(GUI.skin.label)
+                {
+                    fontSize = 17, alignment = TextAnchor.MiddleCenter
+                };
+
+                titleBig.normal.textColor  = new Color(0.94f, 0.88f, 0.74f);
+                titleSub.normal.textColor  = new Color(0.60f, 0.55f, 0.46f);
+                titleHint.normal.textColor = new Color(0.88f, 0.74f, 0.46f);
+
+                if (cjkFont != null)
+                {
+                    titleBig.font = cjkFont; titleSub.font = cjkFont; titleHint.font = cjkFont;
+                }
             }
         }
 
@@ -164,8 +193,9 @@ namespace GameJam.Prototype
 
             DrawViewButtons();
 
-            // 开局准备和正式回合是先后关系，两块信息栏不会同时出现
-            if (turnLoop != null && turnLoop.IsPreparing) DrawChoicePanel();
+            // 开场 / 开局准备 / 正式回合是先后关系，三种信息栏不会同时出现
+            if (turnLoop != null && turnLoop.IsTitle)         DrawTitleOverlay();
+            else if (turnLoop != null && turnLoop.IsPreparing) DrawChoicePanel();
             else
             {
                 DrawHints();
@@ -177,6 +207,43 @@ namespace GameJam.Prototype
             // 检视面板和划过信息条是同一个位置，二选一
             if (interaction.Inspected != null) DrawInspectPanel();
             else                               DrawCardInfo();
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  开场界面
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 开场只画标题和一行提示 —— 菜单项本身是桌上的立体物件
+        /// （书、木牌），由 TableTitleRig 搭出来、玩家直接用鼠标点。
+        ///
+        /// 这跟 2D 那版的分工是一样的，只是那边整幅画面都是画出来的，
+        /// 这边把"物件"那部分交给了 3D。
+        /// </summary>
+        private void DrawTitleOverlay()
+        {
+            if (turnLoop == null || turnLoop.titleRig == null) return;
+
+            GUI.Label(new Rect(0f, Screen.height * 0.075f, Screen.width, 74f),
+                      "破 壁 机 计 划", titleBig);
+
+            GUI.Label(new Rect(0f, Screen.height * 0.075f + 72f, Screen.width, 30f),
+                      "一台机器，一个人，和一桌不肯认输的材料", titleSub);
+
+            GUI.Label(new Rect(0f, Screen.height - 96f, Screen.width, 30f),
+                      HintForTitle(turnLoop.titleRig.Hovered), titleHint);
+        }
+
+        private static string HintForTitle(string id)
+        {
+            switch (id)
+            {
+                case TableTitleRig.IdNew:      return "翻开它，开始这一局";
+                case TableTitleRig.IdContinue: return "还没有存档";
+                case TableTitleRig.IdSettings: return "设置还没做";
+                case TableTitleRig.IdQuit:     return "离开这张桌子";
+                default:                       return "桌上那本书是「新游戏」";
+            }
         }
 
         // ══════════════════════════════════════════════════════════════
