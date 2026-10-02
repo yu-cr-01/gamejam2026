@@ -245,7 +245,14 @@ namespace GameJam.Prototype
                 case TableTitleRig.IdContinue: return "还没有存档";
                 case TableTitleRig.IdSettings: return "设置还没做";
                 case TableTitleRig.IdQuit:     return "离开这张桌子";
-                default:                       return "桌上那本书是「新游戏」，机器也能启动";
+
+                // 没悬停时把能点的都列出来。
+                //
+                // 原来这里只写了"桌上那本书是「新游戏」"—— 结果桌上另外三块木牌
+                // 没人找得到。把菜单做成物件是没有"这是菜单"的视觉提示的，
+                // 深色木头趴在深色桌面上尤其不明显，所以至少要用文字兜住。
+                default:
+                    return "桌上能点的：书（新游戏）　继续　设置　退出　榨汁机（启动）";
             }
         }
 
