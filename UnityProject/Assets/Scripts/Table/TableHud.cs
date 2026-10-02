@@ -126,7 +126,7 @@ namespace GameJam.Prototype
             {
                 int v = ing.attrs.Get(def.id);
                 GUI.Label(new Rect(28f, y, w - 24f, 22f),
-                          def.displayName + "：" + def.Format(v), v != 0 ? body : dim);
+                          def.Label + "：" + def.Format(v), v != 0 ? body : dim);
                 y += 20f;
             }
 

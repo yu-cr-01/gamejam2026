@@ -35,9 +35,12 @@ namespace GameJam.Prototype
 
         private Plane  dragPlane;
         private int    hotSlot = -1;
+        private float  markerAlpha;      // 角标当前透明度（拖动时淡入、松手后淡出）
+        private float  markerApplied = -1f;
 
-        private static readonly Color MarkerIdle = new Color(0.30f, 0.34f, 0.42f);
-        private static readonly Color MarkerHot  = new Color(0.35f, 0.95f, 0.60f);
+        /// <summary>卡槽角标的颜色。贴图只出白色形状，颜色在这里染 —— TableSetup 建槽时也要用。</summary>
+        public static readonly Color MarkerIdle = new Color(0.30f, 0.34f, 0.42f);
+        public static readonly Color MarkerHot  = new Color(0.35f, 0.95f, 0.60f);
 
         // ─────────────────────────────────────────────────────────────
 
@@ -158,17 +161,38 @@ namespace GameJam.Prototype
         {
             if (slotMarkers == null || slotMarkers.Length == 0) return;
 
-            int want = -1;
-            if (Dragging != null)
-                want = board.FindNearestFreeSlot(Dragging.transform.position, snapRadius);
+            int want = (Dragging != null)
+                ? board.FindNearestFreeSlot(Dragging.transform.position, snapRadius)
+                : -1;
 
-            if (want == hotSlot) return;
+            // ★ 角标平时整体隐形，只有拿起牌要放的时候才淡入。
+            //   每个槽是 4 个 L 形角标，8 个槽就是 32 个 —— 常亮的话整张桌子全是碎线，
+            //   比原来那种色块还吵。拖动时才出现，桌面平时是干净的。
+            float targetAlpha = (Dragging != null) ? 0.95f : 0f;
+            float k = 1f - Mathf.Exp(-14f * Time.deltaTime);
+            markerAlpha = Mathf.Lerp(markerAlpha, targetAlpha, k);
+
+            bool slotChanged = (want != hotSlot);
             hotSlot = want;
+
+            // 位置没换、透明度也基本到位就不用碰材质了
+            if (!slotChanged && Mathf.Abs(markerAlpha - markerApplied) < 0.004f) return;
+            markerApplied = markerAlpha;
 
             for (int i = 0; i < slotMarkers.Length && i < board.SlotCount; i++)
             {
-                if (slotMarkers[i] == null) continue;
-                slotMarkers[i].material.color = (i == hotSlot) ? MarkerHot : MarkerIdle;
+                Renderer r = slotMarkers[i];
+                if (r == null || r.material == null) continue;
+
+                // ★ 用 Renderer.enabled 开关，**不依赖 shader 的 alpha 混合**。
+                //   上一版只把 color.a 设成 0，结果角标照样显示 ——
+                //   说明材质用的根本不是能透明混合的 shader（Shader.Find 回退了），
+                //   alpha 被直接忽略。开关渲染器就没这个问题。
+                r.enabled = markerAlpha > 0.02f;
+
+                Color c = (i == hotSlot) ? MarkerHot : MarkerIdle;
+                c.a = markerAlpha;          // shader 支持透明的话还能顺便有个淡入
+                r.material.color = c;
             }
         }
 

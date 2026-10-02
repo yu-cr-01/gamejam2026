@@ -35,8 +35,13 @@ namespace GameJam.Prototype
         public bool IsDragging { get; private set; }
 
         private Rigidbody rb;
-        private Renderer  bodyRenderer;
-        private Color     bodyBaseColor = Color.white;
+
+        // 需要跟着悬停/拖动一起变亮的渲染器。
+        // 一张卡现在有两个：Body（卡身边缘）和 Face（卡面贴图）。
+        // 各自的"原始颜色"要分开记 —— 卡身是深色、卡面是白色贴图，
+        // 共用一个基准色会把卡面乘暗。
+        private Renderer[] tintRenderers = new Renderer[0];
+        private Color[]    tintBase      = new Color[0];
 
         private Vector3    targetPos;
         private Quaternion targetRot;
@@ -54,14 +59,32 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
-        /// 由 CardFactory 指定卡面渲染器。
-        /// 卡牌本体和文字都是子物体，用 GetComponentInChildren 猜不可靠，所以显式绑。
+        /// 由 CardFactory 指定要参与高亮的渲染器。
+        /// 卡身、卡面都是子物体，用 GetComponentInChildren 猜不可靠，所以显式绑。
         /// </summary>
-        public void BindRenderer(Renderer body)
+        public void BindRenderer(Renderer body, params Renderer[] extras)
         {
-            bodyRenderer = body;
-            if (bodyRenderer != null && bodyRenderer.material != null)
-                bodyBaseColor = bodyRenderer.material.color;
+            int extraCount = extras != null ? extras.Length : 0;
+
+            tintRenderers = new Renderer[1 + extraCount];
+            tintBase      = new Color[1 + extraCount];
+
+            tintRenderers[0] = body;
+            tintBase[0]      = ReadBaseColor(body);
+
+            for (int i = 0; i < extraCount; i++)
+            {
+                tintRenderers[i + 1] = extras[i];
+                tintBase[i + 1]      = ReadBaseColor(extras[i]);
+            }
+        }
+
+        private static Color ReadBaseColor(Renderer r)
+        {
+            if (r == null || r.material == null) return Color.white;
+            Color c = r.material.color;
+            c.a = 1f;
+            return c;
         }
 
         /// <summary>绑定数据并放到手牌原位。</summary>
@@ -165,15 +188,22 @@ namespace GameJam.Prototype
 
         private void UpdateTint()
         {
-            if (bodyRenderer == null || bodyRenderer.material == null) return;
+            if (tintRenderers == null || tintRenderers.Length == 0) return;
 
-            Color want = IsDragging ? bodyBaseColor * 1.30f
-                       : IsHovered  ? bodyBaseColor * 1.15f
-                                    : bodyBaseColor;
-            want.a = 1f;
+            float mul = IsDragging ? 1.30f
+                      : IsHovered  ? 1.15f
+                                   : 1f;
+            float k = 1f - Mathf.Exp(-18f * Time.deltaTime);
 
-            bodyRenderer.material.color =
-                Color.Lerp(bodyRenderer.material.color, want, 1f - Mathf.Exp(-18f * Time.deltaTime));
+            for (int i = 0; i < tintRenderers.Length; i++)
+            {
+                Renderer r = tintRenderers[i];
+                if (r == null || r.material == null) continue;
+
+                Color want = tintBase[i] * mul;
+                want.a = 1f;    // 圆角靠贴图自己的 alpha 抠，这里不能动 alpha
+                r.material.color = Color.Lerp(r.material.color, want, k);
+            }
         }
     }
 }

@@ -36,8 +36,7 @@ namespace GameJam.Prototype
         public static readonly string[] ViewNames = { "board", "hand", "top" };
         public static readonly string[] ViewLabels = { "桌面视角", "手牌特写", "俯视" };
 
-        private static readonly Color TableColor  = new Color(0.22f, 0.17f, 0.14f);
-        private static readonly Color MarkerColor = new Color(0.30f, 0.34f, 0.42f);
+        private static readonly Color TableColor  = new Color(0.20f, 0.155f, 0.125f);
 
         public readonly List<PlayCard> hand = new List<PlayCard>();
 
@@ -127,6 +126,11 @@ namespace GameJam.Prototype
             if (r != null)
             {
                 r.material = MakeMaterial(TableColor, 0.05f);
+
+                // 程序化木纹。立方体顶面的 UV 是 0..1 铺满整面，
+                // 直接贴会被拉成长条，所以给一个接近"每格 0.9 米见方"的平铺次数。
+                r.material.mainTexture = ProceduralArt.TableSurface();
+                r.material.mainTextureScale = new Vector2(3f, 2.1f);
             }
         }
 
@@ -145,17 +149,34 @@ namespace GameJam.Prototype
             slotMarkers = new Renderer[board.SlotCount];
             for (int i = 0; i < board.SlotCount; i++)
             {
-                GameObject m = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                // 用 Quad 而不是 Cube：
+                //   Quad 默认躺在 XY 平面，Euler(90,0,0) 把它放平后法线朝上、
+                //   局部 +Y 转到世界 +Z（远端 = 屏幕上方向），贴图方向正好对。
+                //   尺寸按 Quad 的 1×1 单位算，所以 scale 直接就是世界尺寸。
+                GameObject m = GameObject.CreatePrimitive(PrimitiveType.Quad);
                 m.name = "Slot" + i;
                 m.transform.SetParent(go.transform, false);
-                m.transform.position = board.SlotPosition(i) + new Vector3(0f, 0.0025f, 0f);
-                m.transform.localScale = new Vector3(0.255f, 0.003f, 0.35f);
+                m.transform.position = board.SlotPosition(i) + new Vector3(0f, 0.0022f, 0f);
+                m.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+                m.transform.localScale = new Vector3(0.255f, 0.35f, 1f);
 
                 Collider c = m.GetComponent<Collider>();
                 if (c != null) c.enabled = false;      // 别挡住卡牌的射线
 
+                // 贴图只在四个角画了 L 形短角标，其余全透明 ——
+                // 比原来那种不透明方块低调得多。
+                // 初始 alpha = 0：平时完全隐形，拿起牌要放的时候才由
+                // TableInteraction 淡入（8 个槽 × 4 个角标常亮的话桌面全是碎线）。
                 Renderer mr = m.GetComponent<Renderer>();
-                if (mr != null) mr.material = MakeMaterial(MarkerColor, 0.15f);
+                if (mr != null)
+                {
+                    mr.material = CardFactory.MakeUnlit(ProceduralArt.SlotFrame());
+
+                    Color idle = TableInteraction.MarkerIdle;
+                    idle.a = 0f;
+                    mr.material.color = idle;
+                    mr.enabled = false;     // 初始隐形，拿起牌时由 TableInteraction 打开
+                }
                 slotMarkers[i] = mr;
             }
         }
