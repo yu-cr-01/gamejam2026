@@ -33,6 +33,9 @@ namespace GameJam.Prototype
         // ── 开场界面的大标题 ──
         private GUIStyle titleBig, titleSub, titleHint;
 
+        // ── 杯内 2D 模拟视图 ──
+        private CupSimView cupView;
+
         // ── 检视窗口 ──
         private const int   InspectWindowId = 0x54A1;
         private Rect        inspectRect = new Rect(16f, 14f, 450f, 520f);
@@ -212,6 +215,10 @@ namespace GameJam.Prototype
                 {
                     titleBig.font = cjkFont; titleSub.font = cjkFont; titleHint.font = cjkFont;
                 }
+
+                // 杯内 2D 视图自己建样式，但字体跟 HUD 共用一份
+                cupView = new CupSimView();
+                cupView.Setup(cjkFont);
             }
         }
 
@@ -603,7 +610,7 @@ namespace GameJam.Prototype
             float x = (Screen.width - w) * 0.5f;
             const float y = 14f;
 
-            GUI.Box(new Rect(x, y, w, 126f), GUIContent.none, panelBox);
+            GUI.Box(new Rect(x, y, w, 158f), GUIContent.none, panelBox);
 
             GUI.Label(new Rect(x + 18f, y + 8f, w - 36f, 30f),
                       turnLoop.level.Name + "　第 " + t.turnNumber + " 回合"
@@ -616,19 +623,34 @@ namespace GameJam.Prototype
             GUI.Label(new Rect(x + 18f, y + 64f, w - 36f, 22f),
                       "已应用模块：" + turnLoop.AppliedModulesText(), dimPanel);
 
-            GUI.Label(new Rect(x + 18f, y + 90f, w - 200f, 26f),
+            GUI.Label(new Rect(x + 18f, y + 90f, w - 200f, 24f),
                       "待投放：" + turnLoop.StagedText,
                       turnLoop.StagedCount > 0 ? bodyPanel : dimPanel);
 
-            bool canConfirm = turnLoop.CanInteract && turnLoop.StagedCount > 0;
+            GUI.Label(new Rect(x + 18f, y + 112f, w - 200f, 22f),
+                      "本回合行动 " + turnLoop.ActionsUsed + " / " + turnLoop.actionsPerTurn
+                      + "　（还剩 " + turnLoop.ActionsLeft + " 次）",
+                      turnLoop.ActionsLeft > 0 ? bodyPanel : dimPanel);
+
+            bool canConfirm = turnLoop.CanInteract
+                           && (turnLoop.StagedCount > 0
+                               || (turnLoop.cup != null && turnLoop.cup.particles.Count > 0));
 
             bool oldEnabled = GUI.enabled;
             GUI.enabled = canConfirm;
 
-            if (GUI.Button(new Rect(x + w - 172f, y + 86f, 154f, 34f), "确认投放", btn))
+            if (GUI.Button(new Rect(x + w - 172f, y + 84f, 154f, 32f), "确认投放", btn))
             {
                 GUI.FocusControl(null);
                 turnLoop.Confirm();
+            }
+
+            GUI.enabled = turnLoop.CanInteract && turnLoop.ActionsLeft > 0;
+
+            if (GUI.Button(new Rect(x + w - 172f, y + 120f, 154f, 26f), "空打（跳过）", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.SkipAction();
             }
 
             GUI.enabled = oldEnabled;
@@ -656,18 +678,18 @@ namespace GameJam.Prototype
             return new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         }
 
-        /// <summary>模拟中 —— 纯过场，不接数值。</summary>
+        /// <summary>
+        /// 模拟中 —— Day 3 这里是"模拟中…"占位，现在换成真实的杯内 2D 模拟。
+        /// 这一屏只负责把 CupSim 画出来，规则一条都不在这。
+        /// </summary>
         private void DrawSimulating()
         {
-            const float w = 470f, h = 158f;
-            Rect r = CenterBox(w, h);
-            GUI.Box(r, GUIContent.none, panelBox);
+            if (turnLoop == null || turnLoop.cup == null) return;
 
-            GUI.Label(new Rect(r.x + 22f, r.y + 18f, w - 44f, 34f), "模拟中…", h1Panel);
-            GUI.Label(new Rect(r.x + 22f, r.y + 58f, w - 44f, 26f),
-                      "本回合投放：" + turnLoop.lastPlayed, bodyPanel);
-            GUI.Label(new Rect(r.x + 22f, r.y + 90f, w - 44f, 50f),
-                      "今天不做真实模拟 —— 得分、反应、爆刀都不算，\n等冲压动作走完自动进入回合结算。", dimPanel);
+            const float w = 540f, h = 540f;
+            Rect r = CenterBox(w, h);
+
+            cupView.Draw(r, turnLoop.cup, turnLoop.turn.turnNumber, panelBox);
         }
 
         /// <summary>回合结算。</summary>
@@ -683,9 +705,12 @@ namespace GameJam.Prototype
                       "第 " + t.turnNumber + " 回合结算", h1Panel);
 
             float y = r.y + 58f;
-            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f), "本回合得分：0　（今天不做数值）", bodyPanel); y += 24f;
             GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f),
-                      "关卡总得分：" + t.score + " / " + t.targetScore, bodyPanel); y += 24f;
+                      "本回合得分：" + turnLoop.cup.roundScore, bodyPanel); y += 24f;
+            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f),
+                      "本关总得分：" + t.score + " / " + t.targetScore, bodyPanel); y += 24f;
+            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f),
+                      "本回合反应：" + turnLoop.cup.ReactionSummary(), dimPanel); y += 24f;
             GUI.Label(new Rect(r.x + 22f, y, w - 44f, 24f), "杯内食材：" + t.CupNames(), bodyPanel); y += 24f;
             GUI.Label(new Rect(r.x + 22f, y, w - 44f, 46f), "剩余手牌：" + turnLoop.HandSummary(), dimPanel); y += 50f;
 

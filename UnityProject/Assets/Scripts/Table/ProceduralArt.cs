@@ -113,6 +113,48 @@ namespace GameJam.Prototype
         //  卡面
         // ══════════════════════════════════════════════════════════════
 
+        // ══════════════════════════════════════════════════════════════
+        //  实心圆
+        // ══════════════════════════════════════════════════════════════
+
+        private static Texture2D discTex;
+
+        /// <summary>
+        /// 实心圆，边缘留 1.5 像素过渡。
+        ///
+        /// RadialGlow 是"中心亮、往外淡出"的辉光，拿来当面片会糊成一团；
+        /// 杯内的食材粒子和杯子本身要的是**实心**的圆，所以单独出一张。
+        /// 想换颜色 / 大小就用 GUI.color 和绘制矩形，不用重新生成贴图。
+        /// </summary>
+        public static Texture2D Disc()
+        {
+            if (discTex != null) return discTex;
+
+            const int S = 128;
+            discTex = new Texture2D(S, S, TextureFormat.RGBA32, false);
+            discTex.hideFlags = HideFlags.HideAndDontSave;
+
+            float r = S * 0.5f - 1f;
+            float cx = S * 0.5f, cy = S * 0.5f;
+
+            for (int y = 0; y < S; y++)
+            {
+                for (int x = 0; x < S; x++)
+                {
+                    float dx = x + 0.5f - cx;
+                    float dy = y + 0.5f - cy;
+                    float d = Mathf.Sqrt(dx * dx + dy * dy);
+
+                    float a = Mathf.Clamp01((r - d) / 1.5f);   // 硬边太扎眼，留一点过渡
+                    discTex.SetPixel(x, y, new Color(1f, 1f, 1f, a));
+                }
+            }
+
+            discTex.Apply();
+            discTex.wrapMode = TextureWrapMode.Clamp;
+            return discTex;
+        }
+
         /// <summary>
         /// 生成一张卡面贴图。
         ///

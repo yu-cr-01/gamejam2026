@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using GameJam.Data;
+using GameJam.Sim;
 
 namespace GameJam.Prototype
 {
@@ -115,8 +116,29 @@ namespace GameJam.Prototype
         /// <summary>本次"模拟中"开始的时刻</summary>
         public float simulatingSince = -1f;
 
-        /// <summary>模拟停留时长。今天没有真模拟，只是个过场。</summary>
-        private const float SimulateSeconds = 1.4f;
+        /// <summary>
+        /// 杯内模拟。一关之内只有一份，**跨回合保留** ——
+        /// 规格要求粒子属性和刀片属性留到下一回合，
+        /// 所以每次投放只是往里加粒子，不是重建。
+        /// </summary>
+        public CupSim cup = new CupSim();
+
+        /// <summary>每个回合的行动次数（规格：两次）</summary>
+        public int actionsPerTurn = 2;
+
+        /// <summary>这个回合已经用掉的"空打"次数</summary>
+        public int skipsUsed;
+
+        /// <summary>这个回合用掉了几次行动。</summary>
+        public int ActionsUsed { get { return staged.Count + skipsUsed; } }
+
+        /// <summary>还剩几次行动。</summary>
+        public int ActionsLeft
+        {
+            get { return Mathf.Max(0, actionsPerTurn - ActionsUsed); }
+        }
+
+        /// <summary>本次"模拟中"开始的时刻（旧字段，保留给快照对比用）</summary>
 
         /// <summary>手牌区布局 —— 和 TableSetup 共用同一组常量，免得两边各写一个数。</summary>
         public const float HandZ   = -0.58f;
@@ -322,6 +344,11 @@ namespace GameJam.Prototype
             //   （原来写的就是 new Level(GameConfig.Level())，加多关卡之后成了 bug。）
             level.Begin(deck, GameConfig.DefaultBlade());
 
+            // 新的一关 = 干净的杯子。粒子和刀片磨损都从零开始，
+            // 跨回合保留说的是"关内"，不是"跨关"。
+            cup = new CupSim();
+            skipsUsed = 0;
+
             if (setup != null)
             {
                 setup.deckName = deck != null ? deck.name : "";
@@ -471,8 +498,29 @@ namespace GameJam.Prototype
             if (card == null) return;
             if (staged.Contains(card)) return;
 
+            // 规格：每回合只有两次行动机会，投放一次算一次
+            if (ActionsLeft <= 0)
+            {
+                notice = "这个回合的行动用完了（" + actionsPerTurn + " 次）";
+                return;
+            }
+
             staged.Add(card);
             lastPlayed = "";
+        }
+
+        /// <summary>
+        /// 空打：把一次行动直接跳过。
+        /// 规格里"所有行动可跳过"，所以两次都跳过是允许的 ——
+        /// 但那样杯里就啥也没有，Confirm 那边会拦住。
+        /// </summary>
+        public void SkipAction()
+        {
+            if (phase != TablePhase.Select) return;
+            if (ActionsLeft <= 0) return;
+
+            skipsUsed++;
+            notice = "跳过了一次行动（还可以空打 " + ActionsLeft + " 次）";
         }
 
         /// <summary>把一张牌从投放区退回手牌（等于"我反悔了"）。</summary>
@@ -507,7 +555,22 @@ namespace GameJam.Prototype
         public void Confirm()
         {
             if (phase != TablePhase.Select) return;
-            if (staged.Count == 0) return;
+
+            // 规格：无食材时不得开始回合 —— 至少得有一张食材牌打出去。
+            // 两次行动全空打、而且杯里本来就没东西，这一回合就没意义。
+            if (staged.Count == 0 && cup.particles.Count == 0)
+            {
+                notice = "至少投放一张食材才能开始模拟";
+                return;
+            }
+
+            if (staged.Count == 0)
+            {
+                // 全空打但杯里还有上一回合的食材 —— 允许，直接进模拟
+                notice = "本回合空打";
+                StartSimulation();
+                return;
+            }
 
             // 先整批拿出来再处理 —— 处理过程会动 setup.hand，边遍历边改会漏牌
             List<PlayCard> batch = new List<PlayCard>(staged);
@@ -557,9 +620,21 @@ namespace GameJam.Prototype
             LayoutHand();
             SyncJuicer();
 
-            // ── 3. 进模拟 ──
+            StartSimulation();
+        }
+
+        /// <summary>
+        /// 进入真实的杯内模拟（替掉 Day 3 那个"模拟中…"占位）。
+        ///
+        /// 模拟是**纯逻辑**（CupSim），这里只负责起跑和收尾；
+        /// 画成什么样是 CupSimView 的事。
+        /// </summary>
+        private void StartSimulation()
+        {
+            cup.Begin(turn);          // 把本回合投进去的食材变成粒子，上一回合的还留着
             phase = TablePhase.Simulating;
             simulatingSince = Time.time;
+
             if (juicer != null) juicer.PlayStamp();
         }
 
@@ -578,7 +653,9 @@ namespace GameJam.Prototype
 
             turn.NextTurn();
             staged.Clear();
+            skipsUsed  = 0;          // 新回合，行动次数重置
             lastPlayed = "";
+            notice     = "";
             phase = TablePhase.Select;
 
             LayoutHand();
@@ -701,18 +778,25 @@ namespace GameJam.Prototype
 
         void Update()
         {
-            // 暂停 / 设置面板开着的时候，模拟计时也停住 ——
-            // 否则暂停回来会发现"模拟中"直接跳过了
+            // 暂停 / 设置面板开着的时候，模拟也停住 ——
+            // 否则暂停回来会发现模拟凭空跑了半截
             if (paused || settingsOpen) return;
 
             if (phase != TablePhase.Simulating) return;
 
-            bool longEnough = (Time.time - simulatingSince) >= SimulateSeconds;
+            cup.Tick(Time.deltaTime);
 
-            // 冲压动画没放完就先不切，否则结算面板会盖在机器动作上
-            bool machineIdle = (juicer == null) || !juicer.IsStamping;
+            if (!cup.Finished) return;
 
-            if (longEnough && machineIdle) phase = TablePhase.TurnResult;
+            // 规格：模拟结束后清除所有飘字，再进回合结算
+            cup.ClearFloaters();
+
+            // 得分以 cup 为准 —— 它跨回合累积，turn.score 跟着它走，
+            // 免得两边各加一次、越差越多
+            turn.score = cup.totalScore;
+
+            SyncJuicer();
+            phase = TablePhase.TurnResult;
         }
 
         // ══════════════════════════════════════════════════════════════
