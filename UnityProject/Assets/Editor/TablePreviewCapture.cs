@@ -103,6 +103,58 @@ namespace GameJam.EditorTools
             }
         }
 
+        /// <summary>
+        /// 验证自由转头的圆锥约束：猛拖一通，看方向能不能拱出锥外。
+        ///
+        /// 直接跑真实的 CameraRig 代码（不是复现公式），
+        /// 因为最容易出错的地方是"夹取后的朝向写回 yaw/pitch"这一步的往返换算，
+        /// 那是 Unity 四元数 / 欧拉角的具体行为，只有真跑才算数。
+        ///
+        /// 命令行：-executeMethod GameJam.EditorTools.TablePreviewCapture.VerifyCone
+        /// </summary>
+        public static void VerifyCone()
+        {
+            GameObject camGo = new GameObject("[ConeTestCamera]");
+            Camera cam = camGo.AddComponent<Camera>();
+            CameraRig rig = camGo.AddComponent<CameraRig>();
+            rig.cam = cam;
+
+            // 用和实际工程一样的锚点
+            rig.Register(CameraRig.FreeView,
+                         new Vector3(0f, 1.16f, -1.28f), new Vector3(0f, 0f, 0.04f));
+            rig.SnapTo(CameraRig.FreeView);
+
+            Vector3 axis = cam.transform.forward;
+            float maxAng = 0f;
+            int samples = 0;
+
+            // 螺旋式往外拱：每一圈换一个方向、每过一圈把步长加大，
+            // 尽量把朝向推出锥外
+            for (int pass = 0; pass < 40; pass++)
+            {
+                float mag = 25f + pass * 20f;
+                for (int i = 0; i < 180; i++)
+                {
+                    float rad = i * Mathf.Deg2Rad;
+                    rig.Rotate(Mathf.Cos(rad) * mag, Mathf.Sin(rad) * mag);
+
+                    float a = Vector3.Angle(axis, cam.transform.forward);
+                    if (a > maxAng) maxAng = a;
+                    samples++;
+                }
+            }
+
+            float half = rig.freeLookConeAngle * 0.5f;
+            bool ok = maxAng <= half + 0.5f;
+
+            Debug.Log("[ConeTest] 圆锥角 " + rig.freeLookConeAngle + "°（半径 " + half + "°）"
+                      + "，猛拖 " + samples + " 次后偏离轴最大 " + maxAng.ToString("F2") + "°"
+                      + " -> " + (ok ? "PASS 约束有效" : "FAIL 转出锥外了"));
+
+            Object.DestroyImmediate(camGo);
+            EditorApplication.Exit(ok ? 0 : 1);
+        }
+
         /// <summary>把一台相机渲染成一张 PNG。</summary>
         private static void RenderToFile(Camera cam, string path)
         {

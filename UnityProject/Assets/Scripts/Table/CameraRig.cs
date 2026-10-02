@@ -48,6 +48,15 @@ namespace GameJam.Prototype
         private float yaw;
         private float pitch;
 
+        /// <summary>
+        /// 自由转头的活动范围：以进入自由转头时的朝向为轴，张开一个圆锥。
+        /// 120° 就是「中心方向两侧各 60°」，转到锥面就顶住，不会再转过去看到背后。
+        /// </summary>
+        public float freeLookConeAngle = 120f;
+
+        /// <summary>圆锥的中心轴（单位向量）。进入自由转头时按当时的朝向定下来。</summary>
+        private Vector3 coneAxis = Vector3.forward;
+
         public string CurrentView { get { return currentName; } }
         public bool   IsFreeLook  { get { return freeLook; } }
 
@@ -106,6 +115,8 @@ namespace GameJam.Prototype
         ///
         /// **只改朝向、绝不改位置** —— 位置固定正是"自由转头"和"自由飞行"的区别。
         /// 拖动会立刻取消正在进行的机位过渡，否则 Update 会每帧把朝向插值覆盖回去。
+        /// 转出来的方向会被**圆锥约束**夹一次（见 ClampToCone），
+        /// 所以怎么拖都转不出活动范围。
         /// </summary>
         public void Rotate(float dx, float dy)
         {
@@ -118,7 +129,41 @@ namespace GameJam.Prototype
             yaw += dx;
             pitch = Mathf.Clamp(pitch - dy, PitchMin, PitchMax);
 
-            cam.transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
+            Vector3 dir = ClampToCone(Quaternion.Euler(pitch, yaw, 0f) * Vector3.forward);
+            Quaternion final = Quaternion.LookRotation(dir, Vector3.up);
+            cam.transform.rotation = final;
+
+            // ★ 把夹取之后**实际的**朝向写回 yaw / pitch。
+            //   不写回的话，鼠标继续往锥外推时 yaw/pitch 会一路累加，
+            //   等你想往回转，得先把那一段"空转"抵消掉才动得起来 ——
+            //   手感就是顶到边之后卡住、然后突然猛跳一大截。
+            Vector3 e = final.eulerAngles;
+            yaw = e.y;
+            pitch = NormalizePitch(e.x);
+        }
+
+        /// <summary>
+        /// 把朝向夹进圆锥里。
+        ///
+        /// 【为什么不能靠分别夹 yaw 和 pitch】
+        /// 分别夹两个角得到的是一个**矩形**活动区
+        /// （yaw ∈ [−60,60] 且 pitch ∈ [−60,60]），
+        /// 它的四个角离中心有 85°，比要求的 60° 远得多 —— 斜着拖就转出范围了。
+        /// 圆锥是圆形的边界，必须对**最终方向向量**做角度检查。
+        /// </summary>
+        private Vector3 ClampToCone(Vector3 dir)
+        {
+            float half = Mathf.Clamp(freeLookConeAngle, 1f, 179f) * 0.5f;
+            float ang = Vector3.Angle(coneAxis, dir);
+
+            if (ang <= half) return dir;
+
+            // 和轴正好反向时 Slerp 的插值平面退化了，直接退回轴
+            if (ang > 179f) return coneAxis;
+
+            // 在 axis 与 dir 张成的平面内沿球面插值到正好 half 度 ——
+            // 效果是"贴着锥面滑动"，而不是把方向硬拽回轴心
+            return Vector3.Slerp(coneAxis, dir, half / ang).normalized;
         }
 
         /// <summary>把 yaw / pitch 从某个朝向同步过来。enable=false 时顺便退出自由转头。</summary>
@@ -130,6 +175,10 @@ namespace GameJam.Prototype
             Vector3 e = rot.eulerAngles;
             yaw = e.y;
             pitch = NormalizePitch(e.x);
+
+            // 圆锥的轴 = 进入自由转头那一刻的朝向。
+            // 也就是"你正看着哪儿，就以哪儿为中心，最多再偏 60 度"。
+            coneAxis = (rot * Vector3.forward).normalized;
         }
 
         /// <summary>eulerAngles 是 0..360，转成 −180..180 再夹到俯仰范围内。</summary>
