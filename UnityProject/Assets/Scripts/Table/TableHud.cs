@@ -55,6 +55,32 @@ namespace GameJam.Prototype
                 if (Input.GetKeyDown(KeyCode.Alpha1 + i))
                     setup.rig.GoTo(TableSetup.ViewNames[i]);
             }
+
+            HandleScoreDemoKeys();
+        }
+
+        // ── 得分 / 冲压的演示按键 ─────────────────────────────────────
+        // 数值系统还没接进来，先用手动按键把罐子和冲压效果跑起来，
+        // 好确认表现对不对。等回合结算接上之后这几个键就可以删掉。
+        private int demoScore;
+
+        private void HandleScoreDemoKeys()
+        {
+            if (setup == null || setup.juicer == null) return;
+
+            bool changed = false;
+
+            if (Input.GetKeyDown(KeyCode.LeftBracket))  { demoScore -= 100; changed = true; }
+            if (Input.GetKeyDown(KeyCode.RightBracket)) { demoScore += 100; changed = true; }
+            if (Input.GetKeyDown(KeyCode.Alpha0))       { demoScore = 0;    changed = true; }
+
+            if (changed)
+            {
+                demoScore = Mathf.Clamp(demoScore, 0, 1200);
+                setup.juicer.SetScore(demoScore, 1000);
+            }
+
+            if (Input.GetKeyDown(KeyCode.S)) setup.juicer.PlayStamp();
         }
 
         private void EnsureStyles()
@@ -160,7 +186,7 @@ namespace GameJam.Prototype
         // ── 左下角：操作提示 ──────────────────────────────────────────
         private void DrawHints()
         {
-            const float w = 440f, h = 146f;
+            const float w = 440f, h = 168f;
             float y = Screen.height - h - 14f;
 
             GUI.Label(new Rect(16f, y, w, 24f), "拖动卡牌放到桌面卡槽", h1);
@@ -169,6 +195,8 @@ namespace GameJam.Prototype
             GUI.Label(new Rect(16f, y + 68f, w, 22f), "右键拖动 / 中键拖动 → 原地转头（位置固定）", dim);
             GUI.Label(new Rect(16f, y + 88f, w, 22f), "1 / 2 / 3 固定视角　　4 自由视角　　G 开关物理", dim);
             GUI.Label(new Rect(16f, y + 108f, w, 22f),
+                      "罐子得分面板：　[ 减 100　　] 加 100　　0 归零　　S 冲压刀片", dim);
+            GUI.Label(new Rect(16f, y + 130f, w, 22f),
                       "物理：" + (interaction.PhysicsOn ? "开（受重力）" : "关（脚本控制）")
                       + "　　视角：" + (setup != null && setup.rig != null && setup.rig.IsFreeLook
                                         ? "自由转头中" : "固定机位"), dim);

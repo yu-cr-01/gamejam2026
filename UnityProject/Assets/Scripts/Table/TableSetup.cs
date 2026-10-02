@@ -32,15 +32,15 @@ namespace GameJam.Prototype
         public TableInteraction interaction;
         public Transform        cardsRoot;
 
-        /// <summary>视角名，供 HUD 和快捷键使用。最后一个是自由转头。</summary>
+        /// <summary>视角名，供 HUD 和快捷键使用。最后两个是自由转头和榨汁机特写。</summary>
         public static readonly string[] ViewNames =
         {
-            "board", "hand", "top", CameraRig.FreeView
+            "board", "hand", "top", "juicer", CameraRig.FreeView
         };
 
         public static readonly string[] ViewLabels =
         {
-            "桌面视角", "手牌特写", "俯视", "自由视角"
+            "桌面视角", "手牌特写", "俯视", "榨汁机特写", "自由视角"
         };
 
         private static readonly Color TableColor  = new Color(0.20f, 0.155f, 0.125f);
@@ -49,6 +49,9 @@ namespace GameJam.Prototype
 
         /// <summary>本局用的牌组名 —— 右键检视面板要显示"这张牌属于哪副牌组"。</summary>
         public string deckName = "";
+
+        /// <summary>榨汁机 + 液体罐（得分面板在罐身的刻度上）</summary>
+        public JuicerRig juicer;
 
         // ─────────────────────────────────────────────────────────────
 
@@ -61,7 +64,27 @@ namespace GameJam.Prototype
             BuildSlots();
             BuildRoots();
             DealHand();
+            BuildJuicer();
             BuildInteraction();
+        }
+
+        // ── 榨汁机 + 液体罐 ───────────────────────────────────────────
+        private void BuildJuicer()
+        {
+            GameObject go = new GameObject("JuicerRig");
+            go.transform.SetParent(transform, false);
+
+            // 放桌子右侧偏内。卡槽占 x ∈ [−0.45, 0.45]、手牌在 z=−0.58，
+            // 这里两边都不挡。
+            go.transform.localPosition = new Vector3(0.74f, 0f, 0.16f);
+
+            // 整体缩到 0.75。
+            // 原始尺寸（高 0.70）在桌面上像个 70 厘米的机器，压过卡牌；
+            // 缩完约 0.53 高，和 0.335 深的卡牌比例才对得上。
+            go.transform.localScale = Vector3.one * 0.75f;
+
+            juicer = go.AddComponent<JuicerRig>();
+            juicer.Build();
         }
 
         // ── 清掉空场景自带的相机和灯，避免两套渲染叠在一起 ──
@@ -94,6 +117,10 @@ namespace GameJam.Prototype
             rig.Register("board", new Vector3(0f, 1.05f, -1.02f), new Vector3(0f, 0f, 0.10f));
             rig.Register("hand",  new Vector3(0f, 0.52f, -1.00f), new Vector3(0f, 0f, -0.56f));
             rig.Register("top",   new Vector3(0f, 1.55f, 0.02f),  new Vector3(0f, 0f, 0.02f));
+
+            // 榨汁机特写：从近侧斜上方看罐子和冲压腔
+            rig.Register("juicer", new Vector3(0.30f, 0.46f, -0.42f),
+                                   new Vector3(0.74f, 0.20f, 0.16f));
 
             // 自由转头的锚点：比"桌面视角"稍微退后一点，
             // 站定了能看全整张桌子，然后**原地转头**看细节（位置不再变）。

@@ -346,6 +346,52 @@ namespace GameJam.Prototype
         }
 
         // ══════════════════════════════════════════════════════════════
+        //  拉丝金属
+        // ══════════════════════════════════════════════════════════════
+
+        private static Texture2D metalTex;
+
+        /// <summary>
+        /// 拉丝金属：沿一个方向的高频细纹 + 大块明暗。
+        /// 榨汁机机身的圆柱侧面 UV 是环向的，所以竖纹贴上去正好是"环向拉丝"。
+        /// </summary>
+        public static Texture2D BrushedMetal()
+        {
+            if (metalTex != null) return metalTex;
+
+            const int S = 256;
+            Color32[] px = new Color32[S * S];
+
+            for (int y = 0; y < S; y++)
+            {
+                for (int x = 0; x < S; x++)
+                {
+                    float u = (float)x / S;
+                    float v = (float)y / S;
+
+                    // 高频细纹（沿 U 变化）
+                    float brush = Mathf.PerlinNoise(u * 240f, v * 4f);
+                    // 大块明暗，避免整块死板
+                    float broad = Mathf.PerlinNoise(u * 3f + 11f, v * 3f + 7f);
+
+                    float t = Mathf.Clamp01(0.72f + (brush - 0.5f) * 0.35f + (broad - 0.5f) * 0.30f);
+
+                    // 冷灰的金属色，整体压暗一点，免得在暗场里太跳
+                    float g = 0.44f + t * 0.30f;
+                    Color c = new Color(g * 0.98f, g, g * 1.04f);
+                    c.a = 1f;
+                    px[y * S + x] = c;
+                }
+            }
+
+            metalTex = NewTex(S, S);
+            metalTex.wrapMode = TextureWrapMode.Repeat;
+            metalTex.SetPixels32(px);
+            metalTex.Apply(false, false);
+            return metalTex;
+        }
+
+        // ══════════════════════════════════════════════════════════════
         //  工具
         // ══════════════════════════════════════════════════════════════
 

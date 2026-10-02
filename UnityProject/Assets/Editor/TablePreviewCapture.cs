@@ -29,8 +29,8 @@ namespace GameJam.EditorTools
         private const int ShotWidth  = 1143;
         private const int ShotHeight = 510;
 
-        /// <summary>要出图的机位名（对应 CameraRig 里注册的 board / hand / top / free）。</summary>
-        private static readonly string[] Views = { "board", "top", "hand", CameraRig.FreeView };
+        /// <summary>要出图的机位名（对应 CameraRig 里注册的 board / hand / top / juicer / free）。</summary>
+        private static readonly string[] Views = { "board", "juicer", "top", "hand", CameraRig.FreeView };
 
         [MenuItem("工具/截图 3D 桌面")]
         public static void CaptureFromMenu()
@@ -71,6 +71,14 @@ namespace GameJam.EditorTools
                 }
 
                 setup.cam.aspect = (float)ShotWidth / ShotHeight;
+
+                // 给罐子灌点汁，好确认液面和刻度对得上。
+                // 编辑模式下 Update 不跑，所以要用 Snap 版本一步设到位。
+                if (setup.juicer != null)
+                {
+                    setup.juicer.SetScore(600, 1000);
+                    setup.juicer.SnapLevelToScore();
+                }
 
                 for (int i = 0; i < Views.Length; i++)
                 {
