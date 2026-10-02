@@ -61,14 +61,19 @@ namespace GameJam.Prototype
         /// <summary>开场界面（书 / 木牌 / 蜡烛）</summary>
         public TableTitleRig  titleRig;
 
-        /// <summary>本关的过程数据（手牌 / 刀片 / 杯内 / 得分）</summary>
-        public TurnState turn = new TurnState();
+        /// <summary>当前这一关（关卡定义 + 过程数据 + 进行状态）</summary>
+        public Level level = new Level();
+
+        /// <summary>
+        /// 这一关的过程数据。**转发**到 level.turn，不是另存一份 ——
+        /// TurnState 是"一关之内的过程数据"，天然属于某一关，
+        /// 原来它飘在循环上，等于"这条命是谁的"没有主。
+        /// 留这个属性只是让调用方少写一层 .turn。
+        /// </summary>
+        public TurnState turn { get { return level.turn; } }
 
         /// <summary>玩家做过的选择 —— 和 TurnState 互不依赖，各记各的</summary>
         public SelectionLog selections = new SelectionLog();
-
-        /// <summary>当前关卡（选择环节、目标分都在它身上）</summary>
-        public LevelData level;
 
         public TablePhase phase = TablePhase.DeckPick;
 
@@ -146,19 +151,12 @@ namespace GameJam.Prototype
 
         /// <summary>
         /// 按 id 找选择环节。
-        /// LevelData 只暴露 ChoiceAt/ChoiceCount，没有按 id 查的接口 ——
-        /// 走一遍就够了，不值得为它给数据层加方法。
+        /// 直接转发给 LevelData.FindChoice —— 原来这里自己遍历了一遍，
+        /// 而数据层早就有这个方法，等于把同一件事写了两份。
         /// </summary>
         public Choice FindChoice(string id)
         {
-            if (level == null) return null;
-
-            for (int i = 0; i < level.ChoiceCount; i++)
-            {
-                Choice c = level.ChoiceAt(i);
-                if (c != null && c.id == id) return c;
-            }
-            return null;
+            return level != null ? level.FindChoice(id) : null;
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -169,7 +167,7 @@ namespace GameJam.Prototype
         public void Begin()
         {
             GameConfig.EnsureLoaded();
-            level = GameConfig.Level();
+            level = new Level(GameConfig.Level());
 
             selections.Clear();
             turn.Reset();
@@ -231,7 +229,11 @@ namespace GameJam.Prototype
         /// <summary>确定牌组之后：数据层重开一局，再把桌面摆出来。</summary>
         private void StartLevelWith(Deck deck)
         {
-            turn.PrepareLoadout(level, deck, GameConfig.DefaultBlade());
+            // ★ 每次都换一个全新的关卡对象。
+            //   复用同一个的话，上一把的分数、杯内食材、卡牌状态会带进新一局 ——
+            //   重开一关就该是干净的一关。
+            level = new Level(GameConfig.Level());
+            level.Begin(deck, GameConfig.DefaultBlade());
 
             if (setup != null)
             {
@@ -495,7 +497,19 @@ namespace GameJam.Prototype
             LayoutHand();
         }
 
-        /// <summary>回到开场：桌面清干净，重新开一局。</summary>
+        /// <summary>
+        /// 退出关卡：这一把既不算赢也不算输，进度丢掉，回到开场。
+        ///
+        /// 和"手牌打完"不是一回事 —— 那条路会走到结算界面、由 Level.Finish()
+        /// 判定过没过。中途退出只是放弃，不该记一次失败。
+        /// </summary>
+        public void ExitLevel()
+        {
+            if (level != null) level.Abandon();
+            ReturnToTitle();
+        }
+
+        /// <summary>回到开场：桌面清干净，等玩家重新开始。</summary>
         public void ReturnToTitle()
         {
             paused       = false;
@@ -504,7 +518,8 @@ namespace GameJam.Prototype
             lastPlayed = "";
             notice     = "";
 
-            turn.Reset();
+            // 换一关全新的 —— 上一把的分数、杯内食材、进行状态都不该带过来
+            level = new Level(GameConfig.Level());
             selections.Clear();
 
             if (choiceRig != null) choiceRig.ClearDeckCards();
@@ -541,14 +556,15 @@ namespace GameJam.Prototype
 #endif
         }
 
-        /// <summary>关卡结束 → 总结算。</summary>
+        /// <summary>关卡结束 → 总结算。到这里才真正判定这一关过没过。</summary>
         public void ShowLevelResult()
         {
+            if (level != null) level.Finish();
             phase = TablePhase.LevelResult;
         }
 
-        /// <summary>本关是否达标（今天得分恒为 0，所以实际上一定不达标）。</summary>
-        public bool Passed { get { return turn.score >= turn.targetScore; } }
+        /// <summary>本关是否达标。判定在 Level 里，这里只是转发。</summary>
+        public bool Passed { get { return level != null && level.IsCleared; } }
 
         /// <summary>
         /// 把得分推给罐子的液面。

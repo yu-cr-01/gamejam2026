@@ -247,7 +247,7 @@ namespace GameJam.Prototype
 
         private void DrawPausePanel()
         {
-            const float w = 400f, h = 292f;
+            const float w = 400f, h = 312f;
             Rect r = CenterBox(w, h);
             GUI.Box(r, GUIContent.none, panelBox);
 
@@ -271,10 +271,10 @@ namespace GameJam.Prototype
             }
             by += bh + gap;
 
-            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "返回开场", btn))
+            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "退出关卡", btn))
             {
                 GUI.FocusControl(null);
-                turnLoop.ReturnToTitle();
+                turnLoop.ExitLevel();
             }
             by += bh + gap;
 
@@ -284,7 +284,9 @@ namespace GameJam.Prototype
                 turnLoop.QuitGame();
             }
 
-            GUI.Label(new Rect(r.x + 22f, r.y + h - 28f, w - 44f, 22f),
+            GUI.Label(new Rect(r.x + 22f, r.y + h - 44f, w - 44f, 20f),
+                      "退出关卡：放弃这一把，回到开场（不算失败）", dimPanel);
+            GUI.Label(new Rect(r.x + 22f, r.y + h - 24f, w - 44f, 20f),
                       "Esc 也可以直接继续", dimPanel);
         }
 
@@ -556,7 +558,8 @@ namespace GameJam.Prototype
             GUI.Box(new Rect(x, y, w, 126f), GUIContent.none, panelBox);
 
             GUI.Label(new Rect(x + 18f, y + 8f, w - 36f, 30f),
-                      "第 " + t.turnNumber + " 回合　　得分 " + t.score + " / " + t.targetScore,
+                      turnLoop.level.Name + "　第 " + t.turnNumber + " 回合"
+                      + "　　得分 " + t.score + " / " + t.targetScore,
                       h1Panel);
 
             GUI.Label(new Rect(x + 18f, y + 40f, w - 36f, 24f),
@@ -674,8 +677,8 @@ namespace GameJam.Prototype
             GUI.Box(r, GUIContent.none, panelBox);
 
             GUI.Label(new Rect(r.x + 22f, r.y + 16f, w - 44f, 34f),
-                      "总分 " + t.score + " / 目标分 " + t.targetScore + "　"
-                      + (turnLoop.Passed ? "通过" : "未通过"),
+                      turnLoop.level.Name + "　总分 " + t.score + " / 目标分 " + t.targetScore
+                      + "　" + (turnLoop.Passed ? "通过" : "未通过"),
                       h1Panel);
 
             float y = r.y + 62f;
