@@ -23,6 +23,17 @@ namespace GameJam.Prototype
         private Font cjkFont;
         private GUIStyle h1, body, dim, btn, btnOn;
 
+        // ── 面板专用样式 ──
+        // 单独一套是因为 h1/body/dim 是给"没有背景"的场景配的：
+        // dim 本身就是浅灰，铺到浅色面板上直接糊掉看不见。
+        // 面板统一走"深色底 + 浅色字"，和游戏整体调子也一致。
+        private GUIStyle panelBox, panelBoxInner, h1Panel, bodyPanel, dimPanel, btnClose;
+
+        // ── 检视窗口 ──
+        private const int   InspectWindowId = 0x54A1;
+        private Rect        inspectRect = new Rect(16f, 14f, 450f, 520f);
+        private bool        inspectPlaced;
+
         /// <summary>按主题色缓存的标题条样式（见 HeaderStyle）</summary>
         private readonly Dictionary<string, GUIStyle> headerStyles = new Dictionary<string, GUIStyle>();
 
@@ -73,6 +84,41 @@ namespace GameJam.Prototype
                 {
                     h1.font = cjkFont; body.font = cjkFont; dim.font = cjkFont;
                     btn.font = cjkFont; btnOn.font = cjkFont;
+                }
+
+                // ── 面板：深色底 + 浅色字 ──
+                // border 走 9 宫格，所以底图只有 32×32，拉到多大圆角都不变形。
+                panelBox = new GUIStyle(GUI.skin.box)
+                {
+                    border = new RectOffset(ProceduralArt.PanelBorder, ProceduralArt.PanelBorder,
+                                            ProceduralArt.PanelBorder, ProceduralArt.PanelBorder),
+                    padding = new RectOffset(12, 12, 12, 12)
+                };
+                panelBox.normal.background = ProceduralArt.PanelBackdrop();
+
+                panelBoxInner = new GUIStyle(panelBox)
+                {
+                    padding = new RectOffset(9, 9, 7, 7)
+                };
+
+                h1Panel   = new GUIStyle(h1)   { fontSize = 19 };
+                bodyPanel = new GUIStyle(body) { fontSize = 15 };
+                dimPanel  = new GUIStyle(dim)  { fontSize = 13 };
+                h1Panel.normal.textColor   = new Color(0.95f, 0.96f, 0.98f);
+                bodyPanel.normal.textColor = new Color(0.87f, 0.90f, 0.94f);
+                dimPanel.normal.textColor  = new Color(0.62f, 0.68f, 0.77f);
+
+                btnClose = new GUIStyle(GUI.skin.button)
+                {
+                    fontSize = 20, fontStyle = FontStyle.Bold,
+                    alignment = TextAnchor.MiddleCenter,
+                    padding = new RectOffset(0, 0, 0, 0)
+                };
+
+                if (cjkFont != null)
+                {
+                    h1Panel.font = cjkFont; bodyPanel.font = cjkFont;
+                    dimPanel.font = cjkFont; btnClose.font = cjkFont;
                 }
             }
         }
@@ -128,43 +174,94 @@ namespace GameJam.Prototype
                                         ? "自由转头中" : "固定机位"), dim);
         }
 
-        // ── 左上角：当前卡详情 ────────────────────────────────────────
+        // ── 划过时的小信息条 ──────────────────────────────────────────
         private void DrawCardInfo()
         {
             PlayCard card = interaction.FocusCard;
             if (card == null || card.data == null) return;
 
-            const float w = 300f, h = 190f;
-            GUI.Box(new Rect(16f, 14f, w, h), GUIContent.none);
+            const float w = 320f;
+            float h = 130f + AttrCatalog.Count * 22f;
+
+            GUI.Box(new Rect(16f, 14f, w, h), GUIContent.none, panelBox);
 
             Ingredient ing = card.data;
-            GUI.Label(new Rect(28f, 22f, w - 24f, 28f), ing.name, h1);
+            GUI.Label(new Rect(30f, 26f, w - 28f, 28f), ing.name, h1Panel);
 
-            float y = 56f;
+            float y = 60f;
             foreach (AttrDef def in AttrCatalog.All())
             {
                 int v = ing.attrs.Get(def.id);
-                GUI.Label(new Rect(28f, y, w - 24f, 22f),
-                          def.Label + "：" + def.Format(v), v != 0 ? body : dim);
-                y += 20f;
+                GUI.Label(new Rect(30f, y, w - 28f, 22f),
+                          def.Label + "：" + def.Format(v), v != 0 ? bodyPanel : dimPanel);
+                y += 22f;
             }
 
-            if (!card.IsDragging && card.slotIndex >= 0)
-                GUI.Label(new Rect(28f, y + 4f, w - 24f, 22f), "已放在卡槽 " + (card.slotIndex + 1), dim);
+            GUI.Label(new Rect(30f, y + 4f, w - 28f, 22f),
+                      card.IsDragging ? "拿在手上"
+                      : card.slotIndex >= 0 ? "已放在卡槽 " + (card.slotIndex + 1)
+                      : "在手牌里", dimPanel);
+
+            GUI.Label(new Rect(30f, y + 26f, w - 28f, 22f), "右键单击查看完整数据", dimPanel);
         }
 
         // ══════════════════════════════════════════════════════════════
-        //  右键检视面板
+        //  右键检视窗口（可拖拽）
         // ══════════════════════════════════════════════════════════════
 
         /// <summary>
-        /// 右键卡牌弹出的完整数据面板。
+        /// 右键卡牌弹出的完整数据**窗口**。
         ///
-        /// 和卡面上那三行缩略不同，这里把每个属性的**作用说明**整段摊开 ——
-        /// 卡面只够放"是什么"，"意味着什么"得在这里看。
-        /// 面板用 GUILayout 自动排版，属性说明长短不一也不会错位。
+        /// 【为什么用 GUILayout.Window 而不是自己画固定面板】
+        /// GUI.Window 自带了拖拽移动、置顶绘制、焦点独占这三件麻烦事。
+        /// 自己用 BeginArea 实现"拖标题栏挪窗口"得手动记录按下点、算偏移、
+        /// 每帧重设矩形，还很容易和别的输入打架（比如转视角的右键拖动）。
+        ///
+        /// 窗口化真正解决的问题：面板原来钉死在左上角，
+        /// 挡住的地方正好是你想看的牌。现在能拖走。
         /// </summary>
         private void DrawInspectPanel()
+        {
+            if (interaction.Inspected == null || interaction.Inspected.data == null) return;
+
+            if (!inspectPlaced)
+            {
+                inspectPlaced = true;
+
+                // ★ 初始高度故意给小。
+                //   GUILayout.Window 的自动适配是"只增不减"的：它会按内容高度把窗口
+                //   撑大，但不会把你传入的过大的高度收回来。所以一开始给 560，
+                //   底部就会永远空着；给一个小值，它自己会长到刚好够。
+                inspectRect = new Rect(16f, 14f, 460f, 120f);
+            }
+
+            ClampInspectRect();
+
+            // 返回值是拖拽之后的最新矩形，必须接回来，否则拖不动。
+            //
+            // ★ 不要在这里手动改 height。
+            //   GUILayout.Window 本身就会把窗口高度收缩到内容高度（Unity 的经典行为），
+            //   前提是内容里没有"强制撑满"的东西（ScrollView / ExpandHeight）。
+            //   之前两版之所以底部空一大块，正是因为内容里放了 ScrollView ——
+            //   它在 Window 里永远撑满可用空间，窗口自然收不回去。
+            //   去掉 ScrollView 之后，自动适配就能正常工作了。
+            inspectRect = GUILayout.Window(InspectWindowId, inspectRect,
+                                           DrawInspectContents, GUIContent.none, panelBox);
+        }
+
+        /// <summary>
+        /// 别让窗口被拖到完全看不见 —— 至少留 100 像素在屏幕内，好抓回来。
+        /// 没有这一步，一次手滑把窗口推出边界就再也找不回来了。
+        /// </summary>
+        private void ClampInspectRect()
+        {
+            const float keep = 100f;
+            inspectRect.x = Mathf.Clamp(inspectRect.x, -(inspectRect.width - keep), Screen.width - keep);
+            inspectRect.y = Mathf.Clamp(inspectRect.y, 0f, Mathf.Max(0f, Screen.height - 34f));
+        }
+
+        /// <summary>窗口内容。id 是 GUI.Window 回调要求的参数。</summary>
+        private void DrawInspectContents(int id)
         {
             PlayCard card = interaction.Inspected;
             if (card == null || card.data == null) return;
@@ -174,15 +271,32 @@ namespace GameJam.Prototype
             AttrId dominant = ProceduralArt.DominantAttr(ing);
             AttrDef domDef = AttrCatalog.Get(dominant);
 
-            // 宽度固定，高度撑满可视区域（内容超了会自动滚动条，不用自己算）
-            GUILayout.BeginArea(new Rect(16f, 14f, 430f, Screen.height - 28f), GUI.skin.box);
-            GUILayout.BeginVertical();
+            const float headerH = 42f;
+            const float closeW  = 34f;
+            float width = inspectRect.width;
 
-            // 标题条 —— 用卡面同款主题色，一眼对得上桌上那张
+            // ── 标题条：卡面同款主题色，兼作拖拽把手 ──
+            GUILayout.BeginHorizontal();
+
             GUILayout.Box(ing.name, HeaderStyle(accent),
-                          GUILayout.Height(50f), GUILayout.ExpandWidth(true));
+                          GUILayout.Height(headerH - 8f), GUILayout.ExpandWidth(true));
 
-            GUILayout.Space(10f);
+            if (GUILayout.Button("×", btnClose, GUILayout.Width(closeW), GUILayout.Height(headerH - 8f)))
+                interaction.Inspect(null);
+
+            GUILayout.EndHorizontal();
+
+            // ★ 拖拽区域要把右边关闭按钮那块**挖掉**，
+            //   否则 DragWindow 会把按钮的点击一起吃掉，× 就点不动了。
+            GUI.DragWindow(new Rect(0f, 0f, Mathf.Max(20f, width - closeW - 26f), headerH));
+
+            // ── 内容区 ──
+            // ★ 这里**故意不用 ScrollView**。
+            //   滚动视图在 Window 里永远撑满可用空间，于是"量内容高度"这个动作
+            //   永远量到窗口高度本身，窗口就永远收不回去（踩过两次）。
+            //   卡牌数据是固定长度（印记 + 4 行 + 3 个属性块），直接自然排布就行；
+            //   真长到超过屏幕时，下面的高度夹取会兜住，不会溢出到看不见。
+            GUILayout.Space(4f);
 
             // 印记 + 基本信息
             GUILayout.BeginHorizontal();
@@ -191,19 +305,19 @@ namespace GameJam.Prototype
                             GUILayout.Width(88f), GUILayout.Height(88f));
 
             GUILayout.BeginVertical();
-            GUILayout.Label("类型：食材", body);
+            GUILayout.Label("类型：食材", bodyPanel);
             GUILayout.Label("牌组：" + (setup != null && !string.IsNullOrEmpty(setup.deckName)
-                                       ? setup.deckName : "（未知）"), body);
-            GUILayout.Label("位置：" + PositionText(card), body);
+                                       ? setup.deckName : "（未知）"), bodyPanel);
+            GUILayout.Label("位置：" + PositionText(card), bodyPanel);
             GUILayout.Label("主属性：" + (domDef != null
                                         ? domDef.Label + "（" + domDef.tendency + "）"
-                                        : "?"), dim);
+                                        : "?"), dimPanel);
             GUILayout.EndVertical();
 
             GUILayout.EndHorizontal();
 
-            GUILayout.Space(12f);
-            GUILayout.Label("── 三属性完整数据 ──", h1);
+            GUILayout.Space(10f);
+            GUILayout.Label("── 三属性完整数据 ──", h1Panel);
             GUILayout.Space(4f);
 
             foreach (AttrDef def in AttrCatalog.All())
@@ -211,23 +325,20 @@ namespace GameJam.Prototype
                 int v = ing.attrs.Get(def.id);
                 bool isDominant = (def.id == dominant);
 
-                GUILayout.BeginVertical(GUI.skin.box);
+                GUILayout.BeginVertical(panelBoxInner);
 
                 GUILayout.Label(def.Label + "　" + def.Format(v) + "　（" + def.tendency + "）"
                                 + (isDominant ? "　← 主属性" : ""),
-                                v != 0 ? body : dim);
+                                v != 0 ? bodyPanel : dimPanel);
 
-                GUILayout.Label(def.description, dim);
+                GUILayout.Label(def.description, dimPanel);
 
                 GUILayout.EndVertical();
                 GUILayout.Space(4f);
             }
 
-            GUILayout.Space(8f);
-            GUILayout.Label("右键空白处或按 Esc 关闭", dim);
-
-            GUILayout.EndVertical();
-            GUILayout.EndArea();
+            GUILayout.Space(6f);
+            GUILayout.Label("拖动标题栏移动窗口　｜　右键空白处或 Esc 关闭", dimPanel);
         }
 
         /// <summary>卡牌现在在哪 —— 检视面板上要显示。</summary>

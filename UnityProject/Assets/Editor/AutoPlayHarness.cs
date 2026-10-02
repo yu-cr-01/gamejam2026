@@ -113,9 +113,10 @@ namespace GameJam.EditorTools
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                // ⑥ 截图是帧末异步写的，等一拍再退
+                // ⑥ 截图是帧末异步写盘的，要多等一会儿再退，
+                //    否则进程先结束，文件根本没落盘（踩过：日志显示截了，磁盘上没有）。
                 case 5:
-                    if (EditorApplication.timeSinceStartup - stageTime < 1.5) return;
+                    if (EditorApplication.timeSinceStartup - stageTime < 4.0) return;
                     Debug.Log("[AutoPlay] 截图完成，退出。");
                     EditorApplication.Exit(0);
                     return;

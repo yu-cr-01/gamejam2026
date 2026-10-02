@@ -59,6 +59,7 @@ namespace GameJam.Prototype
         private static readonly Dictionary<int, Texture2D> emblemCache = new Dictionary<int, Texture2D>();
         private static Texture2D slotFrameTex;
         private static Texture2D tableTex;
+        private static Texture2D panelTex;
 
         // ══════════════════════════════════════════════════════════════
         //  食材配色
@@ -292,6 +293,56 @@ namespace GameJam.Prototype
             tableTex.SetPixels32(px);
             tableTex.Apply(false, false);
             return tableTex;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  窗口底图
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>窗口底图按 9 宫格拉伸时的边距。</summary>
+        public const int PanelBorder = 8;
+
+        /// <summary>
+        /// 窗口 / 面板底图：深色填充 + 一圈浅描边 + 圆角。
+        ///
+        /// 只做 32×32 就够了 —— 配 GUIStyle.border = 8 走 **9 宫格拉伸**，
+        /// 四个角的圆角原样保留，中间随窗口大小自由拉伸，拉多大都不糊。
+        /// 这就是 NGUI / UGUI 里那些 panel 贴图的标准做法。
+        ///
+        /// 底色调深而不是浅：HUD 的文字样式本来就是给深底配的浅色字，
+        /// 换成浅底图那些字会直接糊掉看不见。
+        /// </summary>
+        public static Texture2D PanelBackdrop()
+        {
+            if (panelTex != null) return panelTex;
+
+            const int S = 32;
+            Color32[] px = new Color32[S * S];
+
+            Color fill = new Color(0.112f, 0.126f, 0.152f);
+            Color edge = new Color(0.400f, 0.455f, 0.545f);
+
+            float half = S * 0.5f;
+
+            for (int y = 0; y < S; y++)
+            {
+                float py = (y + 0.5f) - half;
+                for (int x = 0; x < S; x++)
+                {
+                    float pxx = (x + 0.5f) - half;
+                    float d = RoundRectSDF(pxx, py, half - 0.5f, half - 0.5f, 6f);
+
+                    Color c = (d > -1.3f) ? edge : fill;   // 靠近轮廓的一圈画成描边色
+                    c.a = Mathf.Clamp01(0.5f - d);         // 圆角外自然透明，边缘抗锯齿
+
+                    px[y * S + x] = c;
+                }
+            }
+
+            panelTex = NewTex(S, S);
+            panelTex.SetPixels32(px);
+            panelTex.Apply(false, false);
+            return panelTex;
         }
 
         // ══════════════════════════════════════════════════════════════
