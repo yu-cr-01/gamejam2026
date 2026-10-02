@@ -56,6 +56,7 @@ namespace GameJam.Prototype
 
         // ── 缓存 ──────────────────────────────────────────────────────
         private static readonly Dictionary<int, Texture2D> faceCache = new Dictionary<int, Texture2D>();
+        private static readonly Dictionary<int, Texture2D> emblemCache = new Dictionary<int, Texture2D>();
         private static Texture2D slotFrameTex;
         private static Texture2D tableTex;
 
@@ -157,13 +158,7 @@ namespace GameJam.Prototype
 
                         // 框内几何印记（描边）
                         float markR = Mathf.Min(iconHalfW, iconHalfH) * 0.52f;
-                        float dMark;
-                        switch (dominant)
-                        {
-                            case AttrId.Mercury: dMark = Mathf.Abs(new Vector2(px_ - iconCx, py - iconCy).magnitude - markR); break;
-                            case AttrId.Sulfur:  dMark = Mathf.Abs(Mathf.Abs(px_ - iconCx) + Mathf.Abs(py - iconCy) - markR * 1.25f); break;
-                            default:             dMark = Mathf.Abs(RoundRectSDF(px_ - iconCx, py - iconCy, markR * 0.82f, markR * 0.82f, markR * 0.22f)); break;
-                        }
+                        float dMark = ShapeSDF(px_ - iconCx, py - iconCy, dominant, markR);
                         if (dMark < 2.2f) c = Color.Lerp(c, accent, 0.85f);
                     }
 
@@ -312,6 +307,94 @@ namespace GameJam.Prototype
             float ax = Mathf.Max(qx, 0f);
             float ay = Mathf.Max(qy, 0f);
             return Mathf.Sqrt(ax * ax + ay * ay) + Mathf.Min(Mathf.Max(qx, qy), 0f) - r;
+        }
+
+        /// <summary>
+        /// 属性印记的形状 —— 返回"到轮廓的距离"。
+        ///   H 盐性（固体）→ 方形　　D 汞性（液体）→ 圆形　　V 硫性（气体）→ 菱形
+        /// 卡面和检视面板共用这一个函数，保证两处看到的是同一个符号。
+        /// </summary>
+        private static float ShapeSDF(float px, float py, AttrId kind, float r)
+        {
+            switch (kind)
+            {
+                case AttrId.Mercury:
+                    return Mathf.Abs(new Vector2(px, py).magnitude - r);
+
+                case AttrId.Sulfur:
+                    return Mathf.Abs(Mathf.Abs(px) + Mathf.Abs(py) - r * 1.25f);
+
+                default:   // Salt
+                    return Mathf.Abs(RoundRectSDF(px, py, r * 0.82f, r * 0.82f, r * 0.22f));
+            }
+        }
+
+        /// <summary>三属性里数值最高的那个 —— 决定印记形状。没有数据时按盐性算。</summary>
+        public static AttrId DominantAttr(Ingredient ing)
+        {
+            AttrId best = AttrId.Salt;
+            if (ing == null || ing.attrs == null) return best;
+
+            int bestValue = int.MinValue;
+            foreach (AttrDef def in AttrCatalog.All())
+            {
+                int v = ing.attrs.Get(def.id);
+                if (v > bestValue) { bestValue = v; best = def.id; }
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// 单独出一张方形印记图（带透明底），给检视面板这类 2D 界面用。
+        /// 形状规则和卡面完全一致，所以面板上和卡上看到的是同一个符号。
+        /// </summary>
+        public static Texture2D Emblem(AttrId dominant, Color accent, int size)
+        {
+            int key = size * 31 + (int)dominant
+                    + (Mathf.RoundToInt(accent.r * 255f) << 8)
+                    + (Mathf.RoundToInt(accent.g * 255f) << 16)
+                    + (Mathf.RoundToInt(accent.b * 255f) << 24);
+
+            Texture2D cached;
+            if (emblemCache.TryGetValue(key, out cached) && cached != null) return cached;
+
+            Color32[] px = new Color32[size * size];
+            float half = size * 0.5f;
+            float r = half * 0.62f;
+            float stroke = Mathf.Max(2f, size * 0.045f);
+
+            for (int y = 0; y < size; y++)
+            {
+                float py = (y + 0.5f) - half;
+                for (int x = 0; x < size; x++)
+                {
+                    float pxx = (x + 0.5f) - half;
+                    float d = ShapeSDF(pxx, py, dominant, r);
+
+                    Color c;
+                    if (d < 0f)
+                    {
+                        // 内部：淡色填充，中心再实一点，看起来像个印章
+                        float t = Mathf.Clamp01(-d / (r * 0.8f));
+                        c = Color.Lerp(accent, Paper, 0.55f - 0.30f * t);
+                        c.a = 0.30f + 0.30f * t;
+                    }
+                    else
+                    {
+                        c = accent;
+                        c.a = Mathf.Clamp01(stroke - d);
+                    }
+
+                    px[y * size + x] = c;
+                }
+            }
+
+            Texture2D tex = NewTex(size, size);
+            tex.SetPixels32(px);
+            tex.Apply(false, false);
+
+            emblemCache[key] = tex;
+            return tex;
         }
 
         /// <summary>FNV-1a —— 比 string.GetHashCode() 稳，跨运行、跨平台结果一致。</summary>

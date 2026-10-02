@@ -40,6 +40,9 @@ namespace GameJam.Prototype
 
         public readonly List<PlayCard> hand = new List<PlayCard>();
 
+        /// <summary>本局用的牌组名 —— 右键检视面板要显示"这张牌属于哪副牌组"。</summary>
+        public string deckName = "";
+
         // ─────────────────────────────────────────────────────────────
 
         void Awake()
@@ -199,6 +202,7 @@ namespace GameJam.Prototype
 
             List<Deck> decks = GameConfig.Decks();
             Deck deck = decks.Count > 0 ? decks[0] : null;
+            deckName = deck != null ? deck.name : "";
 
             List<Ingredient> data = deck != null
                 ? deck.InitialHandIngredients()

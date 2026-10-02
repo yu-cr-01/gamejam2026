@@ -33,6 +33,12 @@ namespace GameJam.Prototype
         public PlayCard Dragging  { get; private set; }
         public bool     PhysicsOn { get; private set; }
 
+        /// <summary>
+        /// 右键检视中的那张牌（null = 没开检视面板）。
+        /// 这里只管"现在在看哪张"，具体画成什么样是 TableHud 的事。
+        /// </summary>
+        public PlayCard Inspected { get; private set; }
+
         private Plane  dragPlane;
         private int    hotSlot = -1;
         private float  markerAlpha;      // 角标当前透明度（拖动时淡入、松手后淡出）
@@ -66,7 +72,44 @@ namespace GameJam.Prototype
                 else                           MoveDrag(ray);
             }
 
+            HandleInspect(ray);
             UpdateSlotMarkers();
+        }
+
+        /// <summary>
+        /// 从外面指定要检视哪张牌（传 null 关闭）。
+        /// 右键那条路自己会用，留着给 HUD 按钮 / 编辑器工具复用。
+        /// </summary>
+        public void Inspect(PlayCard card) { Inspected = card; }
+
+        /// <summary>
+        /// 右键检视。
+        ///
+        /// 规则（和大部分卡牌游戏一致，不用记）：
+        ///   右键一张牌 → 打开它的检视面板
+        ///   右键同一张 → 关掉
+        ///   右键另一张 → 直接切换过去，不用先关再开
+        ///   右键空白 / Esc → 关掉
+        ///
+        /// 拖动中不响应，免得手忙脚乱时面板乱弹。
+        /// </summary>
+        private void HandleInspect(Ray ray)
+        {
+            // 检视的那张牌被清掉了（比如回主菜单重建桌面）就自动收起
+            if (Inspected != null && Inspected.data == null) Inspected = null;
+
+            if (Dragging != null) return;
+
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                Inspected = null;
+                return;
+            }
+
+            if (!Input.GetMouseButtonDown(1)) return;
+
+            PlayCard hit = RaycastCard(ray);
+            Inspected = (hit != null && hit != Inspected) ? hit : null;
         }
 
         private void HandlePhysicsToggle()

@@ -118,7 +118,7 @@ namespace GameJam.Prototype
 
             // 按 id 稳定取一个主题色，再按"三属性里最高的那个"决定图标印记的形状
             Color accent = ProceduralArt.IngredientColor(ing != null ? ing.id : "");
-            AttrId dominant = DominantAttr(ing);
+            AttrId dominant = ProceduralArt.DominantAttr(ing);
 
             // ① 根节点：scale = 1，挂脚本和刚体
             GameObject root = new GameObject("Card_" + title);
@@ -203,21 +203,6 @@ namespace GameJam.Prototype
                 sb.Append(def.Label).Append(' ').Append(ing.attrs.Get(def.id));
             }
             return sb.ToString();
-        }
-
-        /// <summary>三属性里数值最高的那个，用来决定卡面印记的形状。</summary>
-        private static AttrId DominantAttr(Ingredient ing)
-        {
-            AttrId best = AttrId.Salt;
-            if (ing == null || ing.attrs == null) return best;
-
-            int bestValue = int.MinValue;
-            foreach (AttrDef def in AttrCatalog.All())
-            {
-                int v = ing.attrs.Get(def.id);
-                if (v > bestValue) { bestValue = v; best = def.id; }
-            }
-            return best;
         }
 
         // ── 文字 ──────────────────────────────────────────────────────
