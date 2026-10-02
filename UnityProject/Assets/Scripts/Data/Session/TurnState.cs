@@ -21,8 +21,25 @@ namespace GameJam.Data
         /// <summary>当前回合数，从 1 开始</summary>
         public int turnNumber = 1;
 
-        /// <summary>手牌</summary>
+        /// <summary>手牌里的食材</summary>
         public List<Ingredient> hand = new List<Ingredient>();
+
+        /// <summary>
+        /// 手牌里的变速模块。
+        ///
+        /// 【Day 3 起模块也进手牌】
+        /// 之前模块是"带上就自动生效"的被动加成，直接并进 activeEffects。
+        /// 现在改成一局开始时进手牌，玩家每回合挑一个投放，投出去才生效。
+        /// 所以手牌实际上是"食材 + 模块"两类东西 —— 界面按类型标签区分。
+        ///
+        /// 单独一个列表而不是混进 hand：两者的类型不同（Ingredient / SpeedModule），
+        /// 混在一起就得给 List 换个能装两种类型的类型，所有取值处都要改。
+        /// 分两个列表 + 界面上合并显示，够用而且改动面小。
+        /// </summary>
+        public List<SpeedModule> modules = new List<SpeedModule>();
+
+        /// <summary>已经投放过的模块，按投放顺序留档（界面上要显示"已应用"）。</summary>
+        public List<SpeedModule> appliedModules = new List<SpeedModule>();
 
         /// <summary>当前刀片（也是一个 Ingredient）</summary>
         public Ingredient blade;
@@ -36,10 +53,30 @@ namespace GameJam.Data
         /// <summary>本关目标分</summary>
         public int targetScore;
 
-        /// <summary>本局累积的效果组合（牌组模块 + 关卡规则 + 食材自带效果）</summary>
+        /// <summary>本局累积的效果组合（关卡规则 + 已投放的模块 + 食材自带效果）</summary>
         public EffectGroup activeEffects = new EffectGroup("本局效果");
 
-        public bool IsHandEmpty { get { return hand == null || hand.Count == 0; } }
+        /// <summary>手牌（食材 + 模块）是否已经全空 —— 关卡结束的判据。</summary>
+        public bool IsHandEmpty
+        {
+            get
+            {
+                bool noIngredients = (hand == null || hand.Count == 0);
+                bool noModules     = (modules == null || modules.Count == 0);
+                return noIngredients && noModules;
+            }
+        }
+
+        /// <summary>手牌总项数 = 食材数 + 模块数。</summary>
+        public int HandCount
+        {
+            get
+            {
+                int n = hand != null ? hand.Count : 0;
+                if (modules != null) n += modules.Count;
+                return n;
+            }
+        }
 
         // ── 生命周期 ──────────────────────────────────────────────────
 
@@ -65,12 +102,13 @@ namespace GameJam.Data
             Reset();
             targetScore = level != null ? level.targetScore : 0;
 
-            // 本局效果 = 关卡规则 组合 牌组模块效果
+            // 本局效果 = 关卡规则。
+            // 牌组的模块**不再**在这里自动并进来 —— 它们要进手牌等玩家自己投。
             activeEffects = new EffectGroup("本局效果");
             if (level != null) activeEffects.Append(level.rules);
-            if (deck != null) activeEffects.Append(deck.CombinedModuleEffects());
 
             if (hand == null) hand = new List<Ingredient>();
+            if (modules == null) modules = new List<SpeedModule>();
 
             // 牌组为空（或没配）→ 只放兜底刀片
             if (deck == null || deck.ingredients == null || deck.ingredients.Count == 0)
@@ -92,6 +130,15 @@ namespace GameJam.Data
             {
                 if (i == bladeIndex) continue;
                 if (deck.ingredients[i] != null) hand.Add(deck.ingredients[i].Clone());
+            }
+
+            // 牌组的变速模块也进手牌（Day 3 规则：模块要玩家自己投，不是自动生效）
+            if (deck.modules != null)
+            {
+                for (int i = 0; i < deck.modules.Count; i++)
+                {
+                    if (deck.modules[i] != null) modules.Add(deck.modules[i].Clone());
+                }
             }
         }
 
@@ -132,6 +179,8 @@ namespace GameJam.Data
             score = 0;
             targetScore = 0;
             hand = new List<Ingredient>();
+            modules = new List<SpeedModule>();
+            appliedModules = new List<SpeedModule>();
             cup = new List<Ingredient>();
             blade = null;
             activeEffects = new EffectGroup("本局效果");
@@ -154,6 +203,30 @@ namespace GameJam.Data
             hand.RemoveAt(index);
             if (ing != null) cup.Add(ing);
             return ing;
+        }
+
+        /// <summary>
+        /// 投放一个变速模块：从手牌移除，效果并进本局效果，并留档到已应用列表。
+        ///
+        /// 【为什么不直接把效果写死在刀片属性上】
+        /// 刀片属性是"基础值 + 本局效果"算出来的（BladeResolvedAttrs），
+        /// 把模块效果并进 activeEffects，刀片显示的数值会自动跟着变；
+        /// 直接改刀片的基础值的话，"换刀片"之后那些加成就会跟着跑到新刀片上，
+        /// 这是不对的 —— 模块加的是本局的加工能力，不是某一把刀片的属性。
+        /// </summary>
+        public SpeedModule PlayModule(int index)
+        {
+            if (modules == null || index < 0 || index >= modules.Count) return null;
+
+            SpeedModule m = modules[index];
+            modules.RemoveAt(index);
+
+            if (m != null)
+            {
+                if (m.effects != null) activeEffects.Append(m.effects);
+                appliedModules.Add(m);
+            }
+            return m;
         }
 
         // ── 查询 ──────────────────────────────────────────────────────

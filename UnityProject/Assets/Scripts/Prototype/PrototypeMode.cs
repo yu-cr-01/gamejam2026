@@ -30,6 +30,6 @@ namespace GameJam.Prototype
         }
 
         /// <summary>当前启用哪套原型。改这里切换。</summary>
-        public static Kind Current = Kind.Board2D;
+        public static Kind Current = Kind.Flow2D;
     }
 }

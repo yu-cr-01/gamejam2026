@@ -27,6 +27,28 @@ namespace GameJam.Prototype
             // 场景里已经手动挂了就不再重复创建
             if (Object.FindObjectOfType<GameFlow>() != null) return;
 
+            // 留一台"什么都不渲染"的相机专门刷背景色。
+            // 一台相机都不留的话，Game 视图正中会打出 "No cameras rendering"，
+            // 而且空场景的天空盒会从 IMGUI 面板背后透出来 —— 蓝白色调很出戏。
+            Camera cam = Camera.main;
+            if (cam == null)
+            {
+                GameObject camGo = new GameObject("Flow2DBackgroundCamera");
+                Object.DontDestroyOnLoad(camGo);
+                cam = camGo.AddComponent<Camera>();
+                cam.tag = "MainCamera";
+            }
+            cam.enabled = true;
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.075f, 0.082f, 0.098f);
+            cam.cullingMask = 0;      // 只负责清屏，不渲染任何物体
+            cam.orthographic = true;
+            cam.depth = -100;
+
+            Camera[] cams = Object.FindObjectsOfType<Camera>();
+            for (int i = 0; i < cams.Length; i++)
+                if (cams[i] != null && cams[i] != cam) cams[i].enabled = false;
+
             GameObject go = new GameObject("[GameFlow]");
             Object.DontDestroyOnLoad(go);
             go.AddComponent<GameFlow>();

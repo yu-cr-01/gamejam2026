@@ -93,6 +93,54 @@ namespace GameJam.Prototype
             toastUntil = 0f;
             State = GameFlowState.MainMenu;
             scroll = Vector2.zero;
+
+            SkipChoicesForDebug();
+        }
+
+        /// <summary>
+        /// 调试用：跳过牌组/刀片两个选择环节，直接进回合循环。
+        ///
+        /// 触发方式是在工程根目录放一个 Temp/skip_choices 空文件。
+        /// 整段包在 UNITY_EDITOR 里，出包时会被编译器直接裁掉，正式版本不存在这个后门。
+        ///
+        /// 为什么要这么绕：验证"回合循环"这一屏必须先过两道鼠标点击的选择题，
+        /// 而截图自动化点不了鼠标，环境变量也传不进一个已经在跑的编辑器进程。
+        /// 用文件当开关，可以在编辑器不重启的前提下随时开、随时关。
+        /// </summary>
+        private static bool DebugSkipRequested()
+        {
+#if UNITY_EDITOR
+            try
+            {
+                string root = System.IO.Path.Combine(Application.dataPath, "..");
+                return System.IO.File.Exists(System.IO.Path.Combine(root, "Temp/skip_choices"));
+            }
+            catch { return false; }
+#else
+            return false;
+#endif
+        }
+
+        private void SkipChoicesForDebug()
+        {
+            if (!DebugSkipRequested()) return;
+            if (level == null || level.ChoiceCount == 0) return;
+
+            // 牌组：取第一个候选。LevelData 只暴露 ChoiceAt/ChoiceCount，没有按 id 查的接口，
+            // 这里自己走一遍就行 —— 反正是调试路径，不值得为它给数据层加方法。
+            for (int i = 0; i < level.ChoiceCount; i++)
+            {
+                Choice c = level.ChoiceAt(i);
+                if (c == null || c.id != GameConfig.DeckPickId) continue;
+                if (c.options.Count > 0) selections.Record(c.id, 0, c.options[0].id);
+                break;
+            }
+
+            // 刀片 + 手牌：按已记录的牌组准备
+            EnsureLoadout();
+
+            choiceIndex = level.ChoiceCount;
+            State = GameFlowState.TurnStart;
         }
 
         private void GoTo(GameFlowState next)
@@ -784,75 +832,261 @@ namespace GameJam.Prototype
             }
         }
 
+        // ══════════════════════════════════════════════════════════════
+        //  回合循环（Day 3）
+        //  版面：顶部信息栏 / 中部杯内食材 / 底部手牌
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>手牌里被点选的那一项（handEntries 的下标）。-1 = 没选。</summary>
+        private int handSelected = -1;
+
+        /// <summary>进入「模拟中」的时刻，用来做 1 秒占位。</summary>
+        private float simulatingSince = -1f;
+
+        /// <summary>
+        /// 手牌显示项 —— 把食材和模块合成一张列表，靠类型标签区分。
+        ///
+        /// 数据层里它们是两个列表（Ingredient / SpeedModule 类型不同），
+        /// 但界面上玩家看到的应该是**一条手牌**，所以在这里合并一次。
+        /// </summary>
+        private struct HandEntry
+        {
+            public bool isModule;
+            public int index;      // 在 turn.hand 或 turn.modules 里的下标
+            public string name;
+            public string tag;     // 「食材」/「模块」
+        }
+
+        private readonly List<HandEntry> handEntries = new List<HandEntry>();
+
+        private void RebuildHandEntries()
+        {
+            handEntries.Clear();
+
+            if (turn.hand != null)
+                for (int i = 0; i < turn.hand.Count; i++)
+                    if (turn.hand[i] != null)
+                        handEntries.Add(new HandEntry
+                        { isModule = false, index = i, name = turn.hand[i].name, tag = "食材" });
+
+            if (turn.modules != null)
+                for (int i = 0; i < turn.modules.Count; i++)
+                    if (turn.modules[i] != null)
+                        handEntries.Add(new HandEntry
+                        { isModule = true, index = i, name = turn.modules[i].name, tag = "模块" });
+        }
+
         private void DrawTurnStart()
         {
-            GUILayout.Label("回合 " + turn.turnNumber + "，手牌：" + turn.HandNames(), h1);
-            GUILayout.Label("刀片：" + turn.BladeName() + "（实际硬度 " + turn.BladeHardness() + "）"
-                            + "　　杯内：" + turn.CupNames()
-                            + "　　得分：" + turn.score, body);
-            GUILayout.Space(14f);
+            // 进这一帧就已经没牌了 → 直接进关卡结束，不显示选择界面
+            if (turn.IsHandEmpty) { GoTo(GameFlowState.LevelEnd); return; }
 
-            if (turn.hand.Count == 0)
+            RebuildHandEntries();
+            if (handSelected >= handEntries.Count) handSelected = -1;
+
+            DrawTurnHeader();
+            GUILayout.Space(16f);
+            DrawCupSection();
+            GUILayout.Space(16f);
+            DrawHandSection();
+        }
+
+        /// <summary>顶部信息栏：回合数 / 得分 / 当前刀片（全部属性）</summary>
+        private void DrawTurnHeader()
+        {
+            GUILayout.Label("第 " + turn.turnNumber + " 回合", h1);
+            GUILayout.Label("得分：" + turn.score + "　（今天固定 0，不做真实模拟）", dim);
+            GUILayout.Space(8f);
+
+            GUILayout.BeginVertical(GUI.skin.box);
+
+            GUILayout.Label("当前刀片：" + turn.BladeName(), h2);
+
+            AttrSet resolved = turn.BladeResolvedAttrs();
+            foreach (AttrDef def in AttrCatalog.All())
             {
-                GUILayout.Label("手牌已空。", body);
-                GUILayout.Space(10f);
-                if (GUILayout.Button("下一回合", btn, GUILayout.Height(52f))) GoTo(GameFlowState.LevelEnd);
-                return;
+                GUILayout.Label("　" + def.FormatLabeled(resolved.Get(def.id))
+                                + "　（" + def.tendency + "）", body);
             }
 
-            GUILayout.Label("点击手牌打出：", h2);
+            if (turn.appliedModules != null && turn.appliedModules.Count > 0)
+            {
+                string s = "";
+                for (int i = 0; i < turn.appliedModules.Count; i++)
+                {
+                    if (turn.appliedModules[i] == null) continue;
+                    if (s.Length > 0) s += "、";
+                    s += turn.appliedModules[i].name;
+                }
+                GUILayout.Label("　已应用模块：" + s, dim);
+            }
+
+            GUILayout.EndVertical();
+        }
+
+        /// <summary>中部：杯内食材（今天只列名字，不参与模拟）</summary>
+        private void DrawCupSection()
+        {
+            GUILayout.Label("杯内食材", h2);
+
+            GUILayout.BeginVertical(GUI.skin.box);
+            if (turn.cup == null || turn.cup.Count == 0)
+            {
+                GUILayout.Label("（空）", dim);
+            }
+            else
+            {
+                for (int i = 0; i < turn.cup.Count; i++)
+                    if (turn.cup[i] != null) GUILayout.Label("· " + turn.cup[i].name, body);
+            }
+            GUILayout.EndVertical();
+        }
+
+        /// <summary>底部：手牌区。点一项 → 高亮 + 亮出详细数据 + 「确认投放」</summary>
+        private void DrawHandSection()
+        {
+            GUILayout.Label("手牌", h2);
+            GUILayout.Label("请选择要投放的食材或模块", dim);
             GUILayout.Space(6f);
 
-            for (int i = 0; i < turn.hand.Count; i++)
+            for (int i = 0; i < handEntries.Count; i++)
             {
-                Ingredient ing = turn.hand[i];
-                string label = ing.name + "\n　　" + ing.attrs.DescribeAll();
-                if (GUILayout.Button(label, btn, GUILayout.Height(64f)))
+                HandEntry e = handEntries[i];
+                bool picked = (i == handSelected);
+
+                string label = (picked ? "◆ " : "◇ ") + e.name + "　【" + e.tag + "】";
+                if (GUILayout.Button(label, picked ? btnPicked : btn, GUILayout.Height(46f)))
                 {
-                    Ingredient played = turn.PlayFromHand(i);
-                    lastPlayed = played != null ? played.name : "";
-                    GoTo(GameFlowState.Simulating);
+                    GUI.FocusControl(null);
+                    handSelected = picked ? -1 : i;   // 再点一次取消选择
                     return;
                 }
             }
 
-            GUILayout.Space(14f);
-            DrawDataPanel();
+            if (handSelected < 0) return;
+
+            HandEntry sel = handEntries[handSelected];
+
+            GUILayout.Space(12f);
+            GUILayout.BeginVertical(GUI.skin.box);
+
+            if (!sel.isModule)
+            {
+                Ingredient ing = turn.hand[sel.index];
+                GUILayout.Label("食材：" + ing.name, h2);
+                GUILayout.Label("　" + ing.attrs.DescribeLabeled(), body);
+                GUILayout.Label("　投放后进杯子，今天不参与模拟。", dim);
+            }
+            else
+            {
+                SpeedModule m = turn.modules[sel.index];
+                GUILayout.Label("模块：" + m.name, h2);
+                GUILayout.Label("　效果：" + m.Description(), body);
+                GUILayout.Label("　投放后立即作用到当前刀片。", dim);
+            }
+
+            GUILayout.EndVertical();
+            GUILayout.Space(10f);
+
+            if (GUILayout.Button("确认投放", btn, GUILayout.Height(52f)))
+            {
+                GUI.FocusControl(null);
+                ConfirmPlaySelected(sel);
+            }
         }
 
+        /// <summary>执行投放：食材进杯子；模块并进本局效果并作用到刀片。</summary>
+        private void ConfirmPlaySelected(HandEntry e)
+        {
+            if (e.isModule)
+            {
+                SpeedModule m = turn.PlayModule(e.index);
+                lastPlayed = m != null ? m.name : "";
+            }
+            else
+            {
+                Ingredient ing = turn.PlayFromHand(e.index);
+                lastPlayed = ing != null ? ing.name : "";
+            }
+
+            handSelected = -1;
+            simulatingSince = -1f;
+            GoTo(GameFlowState.Simulating);
+        }
+
+        /// <summary>手牌摘要（食材 + 模块），结算界面用。</summary>
+        private string HandSummary()
+        {
+            if (turn.HandCount == 0) return "（空）";
+
+            string s = "";
+            for (int i = 0; i < turn.hand.Count; i++)
+            {
+                if (turn.hand[i] == null) continue;
+                if (s.Length > 0) s += "、";
+                s += turn.hand[i].name;
+            }
+            for (int i = 0; i < turn.modules.Count; i++)
+            {
+                if (turn.modules[i] == null) continue;
+                if (s.Length > 0) s += "、";
+                s += turn.modules[i].name;
+            }
+            return s;
+        }
+
+        /// <summary>模拟中 —— 今天纯占位，1 秒后自动进入结算，也可以点「继续」跳过。</summary>
         private void DrawSimulating()
         {
+            if (simulatingSince < 0f) simulatingSince = Time.realtimeSinceStartup;
+
             GUILayout.Label("模拟中…", h1);
-            GUILayout.Label("本回合打出：" + lastPlayed, body);
-            GUILayout.Label("今天不做真实模拟，点一下直接进结算。", dim);
+            GUILayout.Label("本回合投放：" + lastPlayed, body);
+            GUILayout.Label("今天不做真实模拟，1 秒后自动进入结算（也可点「继续」）。", dim);
             GUILayout.Space(24f);
 
-            if (GUILayout.Button("回合结束", btn, GUILayout.Height(52f))) GoTo(GameFlowState.TurnResult);
+            // ★ 先画按钮再判断超时。
+            //   写成 if (超时 || GUILayout.Button(...)) 的话，
+            //   超时那一帧按钮根本不会被画出来 —— Layout 和 Repaint 的元素数量不一致，IMGUI 会报错。
+            bool clicked = GUILayout.Button("继续", btn, GUILayout.Height(52f));
+            bool timedOut = Time.realtimeSinceStartup - simulatingSince >= 1f;
+
+            if (clicked || timedOut)
+            {
+                simulatingSince = -1f;
+                GoTo(GameFlowState.TurnResult);
+            }
         }
 
         private void DrawTurnResult()
         {
-            GUILayout.Label("回合结算，得分 " + turn.score, h1);
-            GUILayout.Label("本回合得分固定为 0（今天不做数值）。", body);
-            GUILayout.Label("剩余手牌：" + turn.HandNames(), body);
-            GUILayout.Label("杯内食材：" + turn.CupNames(), body);
+            GUILayout.Label("第 " + turn.turnNumber + " 回合结算", h1);
+            GUILayout.Label("本回合得分：0　（今天不做数值）", body);
+            GUILayout.Label("当前关卡总得分：" + turn.score, body);
+            GUILayout.Space(12f);
+            GUILayout.Label("剩余手牌：" + HandSummary(), dim);
+            GUILayout.Label("杯内食材：" + turn.CupNames(), dim);
             GUILayout.Space(18f);
 
-            if (turn.IsHandEmpty) GUILayout.Label("手牌已空 —— 再点一次将结束本关。", body);
+            if (turn.IsHandEmpty) GUILayout.Label("手牌已用完 —— 点「下一回合」将结束本关。", body);
 
             if (GUILayout.Button("下一回合", btn, GUILayout.Height(52f)))
             {
                 if (turn.IsHandEmpty) GoTo(GameFlowState.LevelEnd);
-                else { turn.NextTurn(); GoTo(GameFlowState.TurnStart); }
+                else
+                {
+                    turn.NextTurn();
+                    handSelected = -1;
+                    GoTo(GameFlowState.TurnStart);
+                }
             }
         }
 
         private void DrawLevelEnd()
         {
-            GUILayout.Label("关卡结束", h1);
-            GUILayout.Label("手牌已空。", body);
-            GUILayout.Space(24f);
-            if (GUILayout.Button("查看结算", btn, GUILayout.Height(52f))) GoTo(GameFlowState.LevelResult);
+            GUILayout.Label("手牌已用完，关卡结束", h1);
+            GUILayout.Space(22f);
+            if (GUILayout.Button("进入结算", btn, GUILayout.Height(52f))) GoTo(GameFlowState.LevelResult);
         }
 
         private void DrawLevelResult()
