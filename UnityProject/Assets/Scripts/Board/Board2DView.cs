@@ -256,19 +256,19 @@ namespace GameJam.Prototype
             y += 24f;
 
             DrawMiniBlender(new Rect(x, y, w, boxH));
-            y += boxH + 14f;
-
-            // ── 天平 ──
-            GUI.Label(new Rect(x, y, w, 22f), "天平", dim);
-            y += 24f;
-            DrawScale(new Rect(x, y, w * 0.5f, 64f));
-            y += 74f;
+            y += boxH + 16f;
 
             // ── 附加卡位 ──
+            // （原来这里还有一台「天平」，照参考图画的装饰件。
+            //   它在我们的规则里没有任何对应物，确认不需要，已删掉。）
             if (y + 60f < r.y + r.height)
             {
-                GUI.Box(new Rect(x, y, w * 0.42f, 54f), GUIContent.none, slotStyle);
-                GUI.Label(new Rect(x + 10f, y + 18f, w * 0.42f - 20f, 22f), "附加位 ×1", dim);
+                GUI.Label(new Rect(x, y, w, 22f), "附加位", dim);
+
+                Rect slot = new Rect(x, y + 24f, w * 0.42f, 56f);
+                GUI.Box(slot, GUIContent.none, slotStyle);
+                GUI.Label(new Rect(slot.x + 10f, slot.y + slot.height * 0.5f - 11f,
+                                   slot.width - 20f, 22f), "×1", body);
             }
         }
 
@@ -637,23 +637,6 @@ namespace GameJam.Prototype
 
                 DrawRect(new Rect(px - size * 0.5f, py - size * 0.5f, size, size), juice);
             }
-        }
-
-        /// <summary>天平：一个简单的等臂天平图形，两边各 ×1。</summary>
-        private void DrawScale(Rect r)
-        {
-            Color metal = new Color(0.72f, 0.76f, 0.82f);
-
-            float midY = r.y + r.height * 0.32f;
-            DrawRect(new Rect(r.x, midY, r.width, 3f), metal);                       // 横梁
-            DrawRect(new Rect(r.center.x - 2f, midY, 4f, r.height * 0.5f), metal);   // 立柱
-
-            float panY = midY + r.height * 0.38f;
-            DrawRect(new Rect(r.x + r.width * 0.12f, panY, r.width * 0.22f, 4f), metal);
-            DrawRect(new Rect(r.x + r.width * 0.66f, panY, r.width * 0.22f, 4f), metal);
-
-            GUI.Label(new Rect(r.x + r.width * 0.06f, panY + 6f, 60f, 18f), "×1", small);
-            GUI.Label(new Rect(r.x + r.width * 0.60f, panY + 6f, 60f, 18f), "×1", small);
         }
 
         /// <summary>画一块纯色矩形。IMGUI 里最省事的办法就是贴一张 1×1 白图再染色。</summary>
