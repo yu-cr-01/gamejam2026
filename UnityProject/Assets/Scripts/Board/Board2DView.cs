@@ -55,6 +55,33 @@ namespace GameJam.Prototype
         /// <summary>液面平滑值（0..1），别让杯子里的水位瞬间跳</summary>
         private float shownLevel;
 
+        // ── 拖动状态 ──────────────────────────────────────────────────
+        /// <summary>正在被拖的是手牌第几张。-1 = 没在拖</summary>
+        private int dragIndex = -1;
+
+        /// <summary>抓取点相对卡牌左上角的偏移 —— 抓哪拎哪，卡不会"跳"到鼠标中心</summary>
+        private Vector2 dragGrab;
+
+        /// <summary>拖动中的鼠标位置（用来画那张跟着走的牌）</summary>
+        private Vector2 dragMouse;
+
+        // ── 飞牌动画（松手之后）───────────────────────────────────────
+        private Ingredient flyCard;
+        private Rect  flyFrom;
+        private Rect  flyTo;
+        private float flyT = -1f;
+
+        /// <summary>飞到哪个槽（≥0）；-1 表示没拖到槽位、要飞回手牌</summary>
+        private int flySlot = -1;
+
+        private const float FlyDuration = 0.22f;
+
+        // ── 版面缓存（拖动判定要用）───────────────────────────────────
+        private readonly Rect[] slotRects = new Rect[PlaySlots];
+        private readonly List<Rect> handRects = new List<Rect>();
+        private Rect centerPanelRect;
+        private Rect handPanelRect;
+
         // ── 样式 ──────────────────────────────────────────────────────
         private Font cjk;
         private GUIStyle h1, h2, body, dim, small, bigNum, cardName, cardAttr, btn;
@@ -107,9 +134,46 @@ namespace GameJam.Prototype
                 shownLevel = Mathf.Lerp(shownLevel, want, 1f - Mathf.Exp(-6f * Time.deltaTime));
 
             AdvanceBlend();
+            AdvanceFly();
 
             // 空格 / B 播放一次破壁机动画
             if (Input.GetKeyDown(KeyCode.B)) PlayBlend(0);
+        }
+
+        /// <summary>
+        /// 飞牌动画推进。飞到了才真正把牌并进打出区、并启动破壁机动画 ——
+        /// 这样"牌飞过去 → 破壁机压它 → 爆浆 → 分数入杯"是一条顺序链，
+        /// 不会出现牌还在半路、机器已经压完了的错位。
+        /// </summary>
+        private void AdvanceFly()
+        {
+            if (flyT < 0f) return;
+
+            flyT += Time.deltaTime;
+            if (flyT < FlyDuration) return;
+
+            if (flySlot >= 0 && flyCard != null)
+            {
+                if (played.Count >= PlaySlots) played.RemoveAt(0);   // 打满了挤掉最早那张
+                played.Add(flyCard);
+
+                // 分数先记账，等破壁机动画演完再加
+                PlayBlend(ScoreOf(flyCard));
+            }
+
+            // flySlot < 0 是回弹 —— 牌一直留在 hand 里没动过，什么都不用做
+            flyCard = null;
+            flySlot = -1;
+            flyT = -1f;
+        }
+
+        /// <summary>一张牌值多少分（临时算法，等回合结算接进来再换）。</summary>
+        private static int ScoreOf(Ingredient ing)
+        {
+            if (ing == null) return 0;
+            return ing.attrs.Get(AttrId.Salt) * 8
+                 + ing.attrs.Get(AttrId.Mercury) * 8
+                 + ing.attrs.Get(AttrId.Sulfur) * 8;
         }
 
         private void AdvanceBlend()
@@ -222,9 +286,17 @@ namespace GameJam.Prototype
             DrawRightPanel(new Rect(rightX, topY, rightW, topH));
             DrawHand(new Rect(leftX, handY, W - leftX - 0.010f * W, handH));
 
+            // 拖动/松手的事件处理放在所有面板画完之后 —— 保证它拿到的是最新位置
+            HandleDragGlobal();
+
+            // 正在拖的牌、正在飞的牌，都画在最后面，盖住所有面板
+            DrawDraggingCard();
+            DrawFlyingCard();
+
             // 左下角操作提示
-            GUI.Label(new Rect(leftX + 8f, handY + handH - 22f, 600f, 20f),
-                      "点手牌打出　｜　B / 空格 播放破壁机动画　｜　" + deckNameText(), small);
+            GUI.Label(new Rect(leftX + 8f, handY + handH - 22f, 700f, 20f),
+                      "拖动卡牌到打出区打出（拖到别处会飞回手牌）　｜　B / 空格 播放破壁机动画　｜　"
+                      + deckNameText(), small);
         }
 
         private string deckNameText()
@@ -375,6 +447,8 @@ namespace GameJam.Prototype
 
         private void DrawCenterPanel(Rect r)
         {
+            centerPanelRect = r;          // 拖动判定要用
+
             GUI.Box(r, GUIContent.none, panelStyle);
 
             float pad = 14f;
@@ -395,6 +469,8 @@ namespace GameJam.Prototype
             for (int i = 0; i < PlaySlots; i++)
             {
                 Rect s = new Rect(x + i * (slotW + slotGap), y, slotW, slotH);
+                slotRects[i] = s;      // 记下来，拖动时判定落点用
+
                 GUI.Box(s, GUIContent.none, slotStyle);
 
                 if (i < played.Count && played[i] != null)
@@ -405,6 +481,11 @@ namespace GameJam.Prototype
                 {
                     GUI.Label(s, "↓", h1);
                 }
+
+                // 拖动时把"要落进去的那个槽"描一圈琥珀色 ——
+                // 玩家松手之前就知道会落到哪，不用试错
+                if (dragIndex >= 0 && i == HoveredSlot())
+                    DrawFrame(s, new Color(1.00f, 0.76f, 0.26f), 3f);
             }
             y += slotH + 18f;
 
@@ -511,6 +592,7 @@ namespace GameJam.Prototype
 
         private void DrawHand(Rect r)
         {
+            handPanelRect = r;
             GUI.Box(r, GUIContent.none, panelStyle);
 
             float pad = 12f;
@@ -519,6 +601,8 @@ namespace GameJam.Prototype
 
             GUI.Label(new Rect(x, y, 200f, 24f), "手牌区", h2);
             y += 26f;
+
+            handRects.Clear();
 
             if (hand.Count == 0)
             {
@@ -532,32 +616,121 @@ namespace GameJam.Prototype
             for (int i = 0; i < hand.Count; i++)
             {
                 Rect c = new Rect(x + i * (cardW + 10f), y, cardW, cardH);
+                handRects.Add(c);
 
-                if (GUI.Button(c, GUIContent.none, GUIStyle.none))
-                {
-                    PlayCardAt(i);
-                    return;      // 布局变了，本帧到此为止
-                }
+                // 正在被拖的那张不在这里画 —— 它跟着鼠标走，画在最后面（盖在所有面板上）
+                if (i == dragIndex) continue;
 
+                HandleCardMouseDown(i, c);
                 DrawCardFace(c, hand[i], false);
             }
         }
 
-        /// <summary>把手牌第 i 张打到中间，并播放一轮破壁机动画。</summary>
-        private void PlayCardAt(int index)
+        /// <summary>
+        /// 手牌按下 → 开始拖。
+        ///
+        /// 用 Event.current 手动判定而不是 GUI.Button：
+        /// 拖动需要"按下"和"松开"分开处理（中间还要跟着鼠标画），
+        /// Button 只有"点完"一个回调，表达不了这个过程。
+        /// </summary>
+        private void HandleCardMouseDown(int index, Rect rect)
         {
-            if (index < 0 || index >= hand.Count) return;
-            if (played.Count >= PlaySlots) played.RemoveAt(0);   // 打满了就把最早那张挤掉
+            Event e = Event.current;
+            if (e == null) return;
+            if (e.type != EventType.MouseDown || e.button != 0) return;
+            if (!rect.Contains(e.mousePosition)) return;
 
-            Ingredient ing = hand[index];
-            hand.RemoveAt(index);
-            played.Add(ing);
+            dragIndex = index;
+            dragMouse = e.mousePosition;
+            dragGrab  = e.mousePosition - new Vector2(rect.x, rect.y);   // 抓哪拎哪
+            e.Use();
+        }
 
-            // 分数先记账，等动画演完再加 —— 分数和表现对齐
-            int gain = ing.attrs.Get(AttrId.Salt) * 8
-                     + ing.attrs.Get(AttrId.Mercury) * 8
-                     + ing.attrs.Get(AttrId.Sulfur) * 8;
-            PlayBlend(gain);
+        /// <summary>拖动 / 松手的全局处理。放在所有面板画完之后调，保证优先拿到事件。</summary>
+        private void HandleDragGlobal()
+        {
+            Event e = Event.current;
+            if (e == null || dragIndex < 0) return;
+
+            dragMouse = e.mousePosition;
+
+            if (e.type == EventType.MouseUp && e.button == 0)
+            {
+                BeginFly(HoveredSlot());
+                e.Use();
+            }
+        }
+
+        /// <summary>
+        /// 松手时牌该落到哪个槽。
+        ///
+        /// 判定故意放宽：先看有没有落在某个槽的矩形里，
+        /// 没落在槽里但落在整个"打出区"面板里也算 ——
+        /// 玩家不会抠着边框对得那么准，丢进那块区域就是"我要打出去"。
+        /// 都不沾就返回 −1，牌飞回手牌。
+        /// </summary>
+        private int HoveredSlot()
+        {
+            for (int i = 0; i < slotRects.Length; i++)
+                if (slotRects[i].Contains(dragMouse)) return i;
+
+            if (centerPanelRect.width > 0f && centerPanelRect.Contains(dragMouse))
+                return Mathf.Min(played.Count, PlaySlots - 1);
+
+            return -1;
+        }
+
+        /// <summary>松手 → 起一段飞牌动画。落位和回弹只差一个目标矩形。</summary>
+        private void BeginFly(int slot)
+        {
+            if (dragIndex < 0 || dragIndex >= hand.Count) { dragIndex = -1; return; }
+
+            flyCard = hand[dragIndex];
+            flyFrom = new Rect(dragMouse.x - dragGrab.x, dragMouse.y - dragGrab.y,
+                               handRects.Count > dragIndex ? handRects[dragIndex].width  : 120f,
+                               handRects.Count > dragIndex ? handRects[dragIndex].height : 120f);
+
+            flySlot = slot;
+            flyTo = (slot >= 0 && slot < slotRects.Length) ? slotRects[slot] : flyFrom;
+
+            // 落进槽位：现在就把它从手牌摘掉（动画期间由 flyCard 代表它）
+            // 回弹：牌一直留在 hand 里，动画结束什么都不用做
+            if (slot >= 0) hand.RemoveAt(dragIndex);
+
+            dragIndex = -1;
+            flyT = 0f;
+        }
+
+        /// <summary>把飞行中的那张牌画出来，盖在所有面板之上。</summary>
+        private void DrawFlyingCard()
+        {
+            if (flyT < 0f || flyCard == null) return;
+
+            float k = Mathf.Clamp01(flyT / FlyDuration);
+            float e = k * k * (3f - 2f * k);      // SmoothStep，起停有加速感
+
+            Rect r = new Rect(
+                Mathf.Lerp(flyFrom.x, flyTo.x, e),
+                Mathf.Lerp(flyFrom.y, flyTo.y, e),
+                Mathf.Lerp(flyFrom.width, flyTo.width, e),
+                Mathf.Lerp(flyFrom.height, flyTo.height, e));
+
+            DrawCardFace(r, flyCard, false);
+        }
+
+        /// <summary>拖动中的那张牌：跟着鼠标，并且抬起来一点（画得稍大 + 描边）</summary>
+        private void DrawDraggingCard()
+        {
+            if (dragIndex < 0 || dragIndex >= hand.Count) return;
+
+            Rect hr = handRects.Count > dragIndex ? handRects[dragIndex] : new Rect(0, 0, 120, 120);
+            Rect r = new Rect(dragMouse.x - dragGrab.x, dragMouse.y - dragGrab.y, hr.width, hr.height);
+
+            // 抬起效果：往外扩 6 像素 + 琥珀描边，看着像"拎起来了"
+            DrawFrame(new Rect(r.x - 6f, r.y - 6f, r.width + 12f, r.height + 12f),
+                      new Color(1.00f, 0.76f, 0.26f, 0.85f), 3f);
+
+            DrawCardFace(r, hand[dragIndex], false);
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -646,6 +819,19 @@ namespace GameJam.Prototype
             GUI.color = c;
             GUI.DrawTexture(r, Texture2D.whiteTexture);
             GUI.color = prev;
+        }
+
+        /// <summary>
+        /// 画一圈描边（中空矩形）。
+        /// 四边各画一条就够了 —— IMGUI 没有现成的"空心框"，
+        /// 自己拼四条比去生成一张九宫格边框贴图省事。
+        /// </summary>
+        private void DrawFrame(Rect r, Color c, float thickness)
+        {
+            DrawRect(new Rect(r.x, r.y, r.width, thickness), c);
+            DrawRect(new Rect(r.x, r.y + r.height - thickness, r.width, thickness), c);
+            DrawRect(new Rect(r.x, r.y, thickness, r.height), c);
+            DrawRect(new Rect(r.x + r.width - thickness, r.y, thickness, r.height), c);
         }
     }
 }
