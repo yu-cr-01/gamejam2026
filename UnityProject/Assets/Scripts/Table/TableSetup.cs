@@ -32,9 +32,16 @@ namespace GameJam.Prototype
         public TableInteraction interaction;
         public Transform        cardsRoot;
 
-        /// <summary>视角名，供 HUD 和快捷键使用</summary>
-        public static readonly string[] ViewNames = { "board", "hand", "top" };
-        public static readonly string[] ViewLabels = { "桌面视角", "手牌特写", "俯视" };
+        /// <summary>视角名，供 HUD 和快捷键使用。最后一个是自由转头。</summary>
+        public static readonly string[] ViewNames =
+        {
+            "board", "hand", "top", CameraRig.FreeView
+        };
+
+        public static readonly string[] ViewLabels =
+        {
+            "桌面视角", "手牌特写", "俯视", "自由视角"
+        };
 
         private static readonly Color TableColor  = new Color(0.20f, 0.155f, 0.125f);
 
@@ -83,10 +90,15 @@ namespace GameJam.Prototype
             rig = go.AddComponent<CameraRig>();
             rig.cam = cam;
 
-            // 三个机位
+            // 三个固定机位
             rig.Register("board", new Vector3(0f, 1.05f, -1.02f), new Vector3(0f, 0f, 0.10f));
             rig.Register("hand",  new Vector3(0f, 0.52f, -1.00f), new Vector3(0f, 0f, -0.56f));
             rig.Register("top",   new Vector3(0f, 1.55f, 0.02f),  new Vector3(0f, 0f, 0.02f));
+
+            // 自由转头的锚点：比"桌面视角"稍微退后一点，
+            // 站定了能看全整张桌子，然后**原地转头**看细节（位置不再变）。
+            rig.Register(CameraRig.FreeView,
+                         new Vector3(0f, 1.16f, -1.28f), new Vector3(0f, 0f, 0.04f));
 
             rig.SnapTo("board");
         }
@@ -240,6 +252,7 @@ namespace GameJam.Prototype
 
             interaction = go.AddComponent<TableInteraction>();
             interaction.cam = cam;
+            interaction.rig = rig;
             interaction.board = board;
             interaction.cardsRoot = cardsRoot;
             interaction.slotMarkers = slotMarkers;

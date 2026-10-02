@@ -20,6 +20,7 @@ namespace GameJam.Prototype
     public class TableInteraction : MonoBehaviour
     {
         public Camera     cam;
+        public CameraRig  rig;
         public TableBoard board;
         public Transform  cardsRoot;
 
@@ -44,6 +45,18 @@ namespace GameJam.Prototype
         private float  markerAlpha;      // 角标当前透明度（拖动时淡入、松手后淡出）
         private float  markerApplied = -1f;
 
+        // ── 转视角拖动 / 右键单击 的区分 ──────────────────────────────
+        private Vector3 rightDownPos;
+        private Vector3 middleDownPos;
+        private bool    rightDragging;
+        private bool    middleDragging;
+
+        /// <summary>超过这个像素距离才算"拖动"，否则算"单击"。</summary>
+        private const float LookDragThreshold = 6f;
+
+        /// <summary>转头灵敏度（度 / 鼠标单位）。</summary>
+        private const float LookSensitivity = 3.2f;
+
         /// <summary>卡槽角标的颜色。贴图只出白色形状，颜色在这里染 —— TableSetup 建槽时也要用。</summary>
         public static readonly Color MarkerIdle = new Color(0.30f, 0.34f, 0.42f);
         public static readonly Color MarkerHot  = new Color(0.35f, 0.95f, 0.60f);
@@ -58,12 +71,18 @@ namespace GameJam.Prototype
 
             Ray ray = cam.ScreenPointToRay(Input.mousePosition);
 
-            if (Dragging == null)
+            // 转视角时不刷新悬停 —— 一边转头一边有牌弹起来很干扰。
+            // （rightDragging / middleDragging 是上一帧的值，差一帧看不出来）
+            if (Dragging == null && !rightDragging && !middleDragging)
             {
                 SetHovered(RaycastCard(ray));
 
                 if (Input.GetMouseButtonDown(0) && Hovered != null && !PhysicsOn)
                     BeginDrag(Hovered, ray);
+            }
+            else if (Dragging == null)
+            {
+                SetHovered(null);
             }
 
             if (Dragging != null)
@@ -72,7 +91,7 @@ namespace GameJam.Prototype
                 else                           MoveDrag(ray);
             }
 
-            HandleInspect(ray);
+            HandleCameraAndInspect(ray);
             UpdateSlotMarkers();
         }
 
@@ -83,33 +102,76 @@ namespace GameJam.Prototype
         public void Inspect(PlayCard card) { Inspected = card; }
 
         /// <summary>
-        /// 右键检视。
+        /// 相机自由转头 + 右键检视。这两件事都挂在右键上，靠**移动距离**区分。
         ///
-        /// 规则（和大部分卡牌游戏一致，不用记）：
-        ///   右键一张牌 → 打开它的检视面板
-        ///   右键同一张 → 关掉
-        ///   右键另一张 → 直接切换过去，不用先关再开
-        ///   右键空白 / Esc → 关掉
+        ///   右键只按下不移动 → 单击 → 检视这张牌
+        ///   右键按住走一段 → 拖动 → 转视角（并且不再触发检视）
         ///
-        /// 拖动中不响应，免得手忙脚乱时面板乱弹。
+        /// 阈值 6 像素。这是 3D / 建模软件的通用做法，玩家不用记规则。
+        /// 中键拖动也转视角 —— 它不和任何东西冲突，鼠标有中键的话更顺手。
+        ///
+        /// 转头是**位置固定、只转朝向**：CameraRig.Rotate 只改 pitch/yaw。
+        /// 走的是 TableInteraction 而不是单独的脚本，因为鼠标状态只能有一处权威，
+        /// 两个脚本各读各的 Input 迟早会打架。
         /// </summary>
-        private void HandleInspect(Ray ray)
+        private void HandleCameraAndInspect(Ray ray)
         {
             // 检视的那张牌被清掉了（比如回主菜单重建桌面）就自动收起
             if (Inspected != null && Inspected.data == null) Inspected = null;
 
-            if (Dragging != null) return;
+            bool looking = false;
 
-            if (Input.GetKeyDown(KeyCode.Escape))
+            // ── 中键拖动 ──
+            if (Input.GetMouseButtonDown(2))
             {
-                Inspected = null;
-                return;
+                middleDownPos = Input.mousePosition;
+                middleDragging = false;
+            }
+            if (Input.GetMouseButton(2))
+            {
+                if (!middleDragging &&
+                    (Input.mousePosition - middleDownPos).magnitude > LookDragThreshold)
+                    middleDragging = true;
+
+                looking |= middleDragging;
+            }
+            if (Input.GetMouseButtonUp(2)) middleDragging = false;
+
+            // ── 右键：先按下，看接下来是单击还是拖动 ──
+            if (Input.GetMouseButtonDown(1))
+            {
+                rightDownPos = Input.mousePosition;
+                rightDragging = false;
+            }
+            if (Input.GetMouseButton(1))
+            {
+                if (!rightDragging &&
+                    (Input.mousePosition - rightDownPos).magnitude > LookDragThreshold)
+                    rightDragging = true;
+
+                looking |= rightDragging;
+            }
+            if (Input.GetMouseButtonUp(1))
+            {
+                // 从按下到松开都没怎么动 → 当成单击，走检视
+                if (!rightDragging && Dragging == null)
+                {
+                    PlayCard hit = RaycastCard(ray);
+                    Inspected = (hit != null && hit != Inspected) ? hit : null;
+                }
+                rightDragging = false;
             }
 
-            if (!Input.GetMouseButtonDown(1)) return;
+            if (looking) ApplyLook();
 
-            PlayCard hit = RaycastCard(ray);
-            Inspected = (hit != null && hit != Inspected) ? hit : null;
+            if (Input.GetKeyDown(KeyCode.Escape)) Inspected = null;
+        }
+
+        private void ApplyLook()
+        {
+            if (rig == null) return;
+            rig.Rotate(Input.GetAxis("Mouse X") * LookSensitivity,
+                       Input.GetAxis("Mouse Y") * LookSensitivity);
         }
 
         private void HandlePhysicsToggle()

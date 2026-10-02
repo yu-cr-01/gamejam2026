@@ -35,12 +35,15 @@ namespace GameJam.Prototype
 
         private void Update()
         {
-            // 1 / 2 / 3 切机位
             if (setup == null || setup.rig == null) return;
 
-            if (Input.GetKeyDown(KeyCode.Alpha1)) setup.rig.GoTo(TableSetup.ViewNames[0]);
-            if (Input.GetKeyDown(KeyCode.Alpha2)) setup.rig.GoTo(TableSetup.ViewNames[1]);
-            if (Input.GetKeyDown(KeyCode.Alpha3)) setup.rig.GoTo(TableSetup.ViewNames[2]);
+            // 1 / 2 / 3 / 4 切机位（4 = 自由转头）。
+            // 写成循环，以后加机位不用再补一行。
+            for (int i = 0; i < TableSetup.ViewNames.Length && i < 9; i++)
+            {
+                if (Input.GetKeyDown(KeyCode.Alpha1 + i))
+                    setup.rig.GoTo(TableSetup.ViewNames[i]);
+            }
         }
 
         private void EnsureStyles()
@@ -111,15 +114,18 @@ namespace GameJam.Prototype
         // ── 左下角：操作提示 ──────────────────────────────────────────
         private void DrawHints()
         {
-            const float w = 400f, h = 122f;
+            const float w = 440f, h = 146f;
             float y = Screen.height - h - 14f;
 
             GUI.Label(new Rect(16f, y, w, 24f), "拖动卡牌放到桌面卡槽", h1);
             GUI.Label(new Rect(16f, y + 28f, w, 22f), "松手时附近有空槽就吸附，否则回手牌", dim);
-            GUI.Label(new Rect(16f, y + 48f, w, 22f), "右键卡牌 → 查看完整数据（Esc 关闭）", dim);
-            GUI.Label(new Rect(16f, y + 68f, w, 22f), "1 / 2 / 3 切换视角　　G 开关物理（碰撞演示）", dim);
-            GUI.Label(new Rect(16f, y + 88f, w, 22f),
-                      "物理：" + (interaction.PhysicsOn ? "开（受重力）" : "关（脚本控制）"), dim);
+            GUI.Label(new Rect(16f, y + 48f, w, 22f), "右键单击卡牌 → 查看完整数据（Esc 关闭）", dim);
+            GUI.Label(new Rect(16f, y + 68f, w, 22f), "右键拖动 / 中键拖动 → 原地转头（位置固定）", dim);
+            GUI.Label(new Rect(16f, y + 88f, w, 22f), "1 / 2 / 3 固定视角　　4 自由视角　　G 开关物理", dim);
+            GUI.Label(new Rect(16f, y + 108f, w, 22f),
+                      "物理：" + (interaction.PhysicsOn ? "开（受重力）" : "关（脚本控制）")
+                      + "　　视角：" + (setup != null && setup.rig != null && setup.rig.IsFreeLook
+                                        ? "自由转头中" : "固定机位"), dim);
         }
 
         // ── 左上角：当前卡详情 ────────────────────────────────────────

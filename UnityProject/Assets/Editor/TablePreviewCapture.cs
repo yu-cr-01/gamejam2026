@@ -29,8 +29,8 @@ namespace GameJam.EditorTools
         private const int ShotWidth  = 1143;
         private const int ShotHeight = 510;
 
-        /// <summary>要出图的机位名（对应 CameraRig 里注册的 board / hand / top）。</summary>
-        private static readonly string[] Views = { "board", "top", "hand" };
+        /// <summary>要出图的机位名（对应 CameraRig 里注册的 board / hand / top / free）。</summary>
+        private static readonly string[] Views = { "board", "top", "hand", CameraRig.FreeView };
 
         [MenuItem("工具/截图 3D 桌面")]
         public static void CaptureFromMenu()
