@@ -20,9 +20,31 @@ namespace GameJam.Prototype
 
             if (Object.FindObjectOfType<Board2DView>() != null) return;
 
-            // 棋盘是纯 2D 的，场景自带的主相机只会露个天空盒出来，先关掉
+            // ★ 不能把所有相机都 disable 掉。
+            //   一个启用的相机都没有时，Unity 会在 Game 视图正中打出
+            //   "Display 1 / No cameras rendering"，正好压在棋盘中间，很显眼。
+            //   正确做法是**留一台启用但什么都不渲染**的相机：
+            //   cullingMask 清成 0 + 纯色清屏，它只负责把背景刷成深色。
+            Camera cam = Camera.main;
+            if (cam == null)
+            {
+                GameObject camGo = new GameObject("Board2DBackgroundCamera");
+                Object.DontDestroyOnLoad(camGo);
+                cam = camGo.AddComponent<Camera>();
+                cam.tag = "MainCamera";
+            }
+
+            cam.enabled = true;
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.075f, 0.082f, 0.098f);
+            cam.cullingMask = 0;            // 什么都不渲染，只清屏
+            cam.orthographic = true;        // 别让它因为透视参数报什么警告
+
+            // 其余相机（如果有第二台）才关掉，避免两套渲染叠在一起
             Camera[] cams = Object.FindObjectsOfType<Camera>();
-            for (int i = 0; i < cams.Length; i++) cams[i].enabled = false;
+            for (int i = 0; i < cams.Length; i++)
+                if (cams[i] != null && cams[i] != cam) cams[i].enabled = false;
+
             Light[] lights = Object.FindObjectsOfType<Light>();
             for (int i = 0; i < lights.Length; i++) lights[i].enabled = false;
 
