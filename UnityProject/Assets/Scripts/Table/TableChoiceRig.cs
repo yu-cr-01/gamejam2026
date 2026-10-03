@@ -257,8 +257,17 @@ namespace GameJam.Prototype
         {
             if (cam == null || loop == null) return;
 
-            if (loop.phase == TablePhase.DeckPick)       TickDeckPick();
-            else if (loop.phase == TablePhase.BladePick) TickBladePick();
+            // ★ 三个"点一张大卡"的环节**都必须在这里**，漏一个就会出现
+            //   "卡片建出来了、鼠标放上去也亮，但点了没反应、确认键永远灰着"。
+            //
+            //   关卡界面（LevelSelect）就漏过一次 —— 加那个阶段时只顾着建卡片，
+            //   忘了接进输入分派。而且自动探针没测出来，因为它调的是
+            //   SelectDeck() 这个 API，**绕过了鼠标那条路**。
+            //   这种"界面建好了但不响应"的 bug，只有真按一遍才发现。
+            if (loop.phase == TablePhase.LevelSelect || loop.phase == TablePhase.DeckPick)
+                TickDeckPick();
+            else if (loop.phase == TablePhase.BladePick)
+                TickBladePick();
         }
 
         /// <summary>
