@@ -83,8 +83,22 @@ namespace GameJam.Data
         public bool IsIngredient { get { return kind == CardKind.Ingredient; } }
         public bool IsModule     { get { return kind == CardKind.Module; } }
 
+        /// <summary>
+        /// 这张牌是**素材**（按新规格的术语）。
+        ///
+        /// 【为什么是别名而不是新类型】
+        /// 素材和新规格里的「素材」是同一个概念 —— H/D/V 三属性、外星合金、水，
+        /// 一直都是 Ingredient 在承担。改名要动 20 个文件，留到下一步单独做，
+        /// 这一步先把**术语和卡槽规则**对齐，免得界面上写着"食材"、
+        /// 规格里写着"素材"，两边对不上。
+        /// </summary>
+        public bool IsMaterial { get { return IsIngredient; } }
+
+        /// <summary>这张牌是**法术**（按新规格的术语）。</summary>
+        public bool IsSpell { get { return IsModule; } }
+
         /// <summary>类型标签，界面直接显示。</summary>
-        public string TypeTag { get { return IsModule ? "变速模块" : "食材"; } }
+        public string TypeTag { get { return IsSpell ? "法术" : "素材"; } }
 
         /// <summary>这张牌带的效果。两类都有，取不到就给空组合。</summary>
         public EffectGroup Effects

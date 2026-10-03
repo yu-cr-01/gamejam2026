@@ -272,6 +272,16 @@ namespace GameJam.Prototype
             card.EndDrag();
 
             int slot = board.FindDropTarget(card.transform.position, snapSlackX, snapSlackZ);
+
+            // 槽位有归属（素材槽 / 法术槽），放错了直接退回手牌并说明原因 ——
+            // 让牌停在错误的槽里，玩家会以为放对了。
+            if (slot >= 0 && turnLoop != null && !turnLoop.CanStageInto(slot, card))
+            {
+                card.ReturnHome();
+                turnLoop.RejectSlot(card, slot);
+                return;
+            }
+
             if (slot >= 0 && board.Place(slot, card))
             {
                 card.SnapTo(board.SlotPosition(slot));

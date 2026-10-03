@@ -487,6 +487,37 @@ namespace GameJam.Prototype
         //  投放区
         // ══════════════════════════════════════════════════════════════
 
+        /// <summary>卡槽下标 —— 0 素材、1 法术。和 TableSetup.BuildSlots 的顺序一致。</summary>
+        public const int SlotMaterial = 0;
+        public const int SlotSpell    = 1;
+
+        /// <summary>
+        /// 这个槽收不收这张牌。
+        ///
+        /// 素材槽只收素材、法术槽只收法术。规则跟着槽走而不是跟着牌走 ——
+        /// 牌自己不知道"我该放哪"，是桌面规定了哪里放什么。
+        /// </summary>
+        public bool CanStageInto(int slot, PlayCard card)
+        {
+            if (card == null || card.card == null) return false;
+
+            if (slot == SlotMaterial) return card.card.IsMaterial;
+            if (slot == SlotSpell)    return card.card.IsSpell;
+
+            return true;
+        }
+
+        /// <summary>放错槽了：说清楚这个槽收什么、你手里这张是什么。</summary>
+        public void RejectSlot(PlayCard card, int slot)
+        {
+            string want = (slot == SlotMaterial) ? "素材" : "法术";
+            string got  = (card != null && card.card != null) ? card.card.TypeTag : "?";
+
+            notice = (slot == SlotMaterial ? "素材槽" : "法术槽")
+                   + "只放" + want + "　——　" + (card != null ? card.DisplayName : "?")
+                   + " 是" + got;
+        }
+
         /// <summary>
         /// 某张牌落进了投放区，记为待投放。
         ///

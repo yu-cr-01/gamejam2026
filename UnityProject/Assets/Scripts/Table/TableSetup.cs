@@ -247,8 +247,12 @@ namespace GameJam.Prototype
             go.transform.SetParent(transform, false);
             board = go.AddComponent<TableBoard>();
 
-            // 4 列 × 2 行。卡是 0.24 × 0.335，留一点间隙
-            board.BuildGrid(4, 2, 0.30f, 0.40f, new Vector3(0f, 0f, 0.17f));
+            // ★ 只有两个卡槽：左边素材、右边法术。
+            //
+            //   原来是 4 列 × 2 行共 8 个，那是"每回合随便放几张"时期的产物。
+            //   现在规则是"每回合最多 1 张素材 + 1 张法术"，
+            //   8 个槽里 6 个永远是空的 —— 空槽会误导玩家以为能多放。
+            board.BuildGrid(2, 1, 0.46f, 0f, new Vector3(0f, 0f, 0.17f));
 
             // 把卡槽矩形尺寸告诉 board —— 吸附判定要用它当"框"。
             // 和下面指示块的 scale 用同一组常量，免得两边各写一个数、改一处忘一处。
@@ -287,6 +291,32 @@ namespace GameJam.Prototype
                     mr.enabled = false;     // 初始隐形，拿起牌时由 TableInteraction 打开
                 }
                 slotMarkers[i] = mr;
+            }
+
+            BuildSlotLabels(go.transform);
+        }
+
+        /// <summary>
+        /// 把槽位名字刻在桌面上（每个槽靠玩家这一侧）。
+        /// 两个槽收的东西不一样，不写清楚玩家会往法术槽里拖素材。
+        /// </summary>
+        private void BuildSlotLabels(Transform parent)
+        {
+            string[] names = { "素　材 槽", "法　术 槽" };
+
+            for (int i = 0; i < board.SlotCount && i < names.Length; i++)
+            {
+                Vector3 at = board.SlotPosition(i)
+                           + new Vector3(0f, 0f, -(SlotSizeZ * 0.5f + 0.055f));
+
+                GameObject go = new GameObject("SlotLabel" + i);
+                go.transform.SetParent(parent, false);
+                go.transform.position = at;
+
+                // localZ = 0。这几张桌面文字只能落在负半区或原点 ——
+                // 正的 localZ 完全不渲染，原因见 TableChoiceRig 里那段说明。
+                CardFactory.AddText(go.transform, names[i], 0f, 0.0072f,
+                                    new Color(0.60f, 0.56f, 0.50f), 0.0022f);
             }
         }
 
