@@ -399,7 +399,12 @@ namespace GameJam.Prototype
                 selections.Record(c.id, 0, picked);
             }
 
-            KillBladeCard();
+            // ★ 不销毁刀片卡。
+            //   刀片是这一局的**友方单位**，整局都该坐在桌面中心 ——
+            //   原来确认之后就把卡收掉了，玩家打到一半就看不见自己的单位了。
+            //   换刀片 / 过关 / 回开场时由 BuildBladeCard / KillBladeCard 负责换掉。
+            //
+            // KillBladeCard();
 
             notice = "刀片已定：" + turn.BladeName();
             phase  = turn.IsHandEmpty ? TablePhase.LevelEnd : TablePhase.Select;
@@ -487,9 +492,15 @@ namespace GameJam.Prototype
         //  投放区
         // ══════════════════════════════════════════════════════════════
 
-        /// <summary>卡槽下标 —— 0 素材、1 法术。和 TableSetup.BuildSlots 的顺序一致。</summary>
-        public const int SlotMaterial = 0;
-        public const int SlotSpell    = 1;
+        /// <summary>
+        /// 卡槽下标 —— 0 左、1 右。和 TableSetup.BuildSlots 的顺序一致。
+        ///
+        /// 规格原话是"左边一个右边一个，一个法术槽一个素材槽"，
+        /// 按列举顺序理解为**左法术、右素材**。要换回来只需要对调这两行，
+        /// 槽的归属规则是跟着下标走的，别处不用动。
+        /// </summary>
+        public const int SlotSpell    = 0;
+        public const int SlotMaterial = 1;
 
         /// <summary>
         /// 这个槽收不收这张牌。

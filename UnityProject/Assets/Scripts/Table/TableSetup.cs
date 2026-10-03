@@ -247,12 +247,15 @@ namespace GameJam.Prototype
             go.transform.SetParent(transform, false);
             board = go.AddComponent<TableBoard>();
 
-            // ★ 只有两个卡槽：左边素材、右边法术。
+            // ★ 只有两个卡槽：**左法术、右素材**，摆在玩家面前（近侧）。
             //
-            //   原来是 4 列 × 2 行共 8 个，那是"每回合随便放几张"时期的产物。
-            //   现在规则是"每回合最多 1 张素材 + 1 张法术"，
-            //   8 个槽里 6 个永远是空的 —— 空槽会误导玩家以为能多放。
-            board.BuildGrid(2, 1, 0.46f, 0f, new Vector3(0f, 0f, 0.17f));
+            //   原来是 4 列 × 2 行共 8 个、摆在桌子中间，那是"每回合随便放几张"
+            //   时期的产物。现在规则是"每回合最多 1 张素材 + 1 张法术"，
+            //   8 个槽里 6 个永远是空的 —— 空槽会让玩家以为能多放。
+            //
+            //   z 从 0.17 挪到 -0.20：中间那段要空出来给刀片
+            //   （刀片是"友方单位"，坐镇桌面中心）。
+            board.BuildGrid(2, 1, 0.46f, 0f, new Vector3(0f, 0f, -0.20f));
 
             // 把卡槽矩形尺寸告诉 board —— 吸附判定要用它当"框"。
             // 和下面指示块的 scale 用同一组常量，免得两边各写一个数、改一处忘一处。
@@ -302,7 +305,8 @@ namespace GameJam.Prototype
         /// </summary>
         private void BuildSlotLabels(Transform parent)
         {
-            string[] names = { "素　材 槽", "法　术 槽" };
+            // 顺序跟着槽的下标走：下标 0 在左、1 在右
+            string[] names = { "法　术 槽", "素　材 槽" };
 
             for (int i = 0; i < board.SlotCount && i < names.Length; i++)
             {
