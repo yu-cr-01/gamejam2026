@@ -343,44 +343,33 @@ namespace GameJam.Prototype
             if (turnLoop == null || cardsRoot == null) return;
 
             TurnState st = turnLoop.turn;
-
-            int ingCount = st.hand    != null ? st.hand.Count    : 0;
-            int modCount = st.modules != null ? st.modules.Count : 0;
-            int total    = ingCount + modCount;
+            System.Collections.Generic.List<Card> cards = st.hand;
 
             Vector3 pos, euler;
 
             // 兜底：配置表空掉了也至少摆一张，免得桌面光着没法验证
-            if (total == 0)
+            if (cards == null || cards.Count == 0)
             {
                 Ingredient fb = GameConfig.DefaultBlade();
                 if (fb == null) return;
 
                 TableTurnLoop.HandSlot(0, 1, out pos, out euler);
-                hand.Add(CardFactory.Create(fb, cardsRoot, pos, euler));
+                hand.Add(CardFactory.Create(Card.Of(fb), cardsRoot, pos, euler));
                 return;
             }
 
+            int total = cards.Count;
             int k = 0;
 
-            // 食材在前、模块在后 —— 和 Flow2D 那份的顺序保持一致
-            if (st.hand != null)
-                for (int i = 0; i < st.hand.Count; i++)
-                {
-                    if (st.hand[i] == null) continue;
-                    TableTurnLoop.HandSlot(k, total, out pos, out euler);
-                    hand.Add(CardFactory.Create(st.hand[i], cardsRoot, pos, euler));
-                    k++;
-                }
-
-            if (st.modules != null)
-                for (int i = 0; i < st.modules.Count; i++)
-                {
-                    if (st.modules[i] == null) continue;
-                    TableTurnLoop.HandSlot(k, total, out pos, out euler);
-                    hand.Add(CardFactory.Create(st.modules[i], cardsRoot, pos, euler));
-                    k++;
-                }
+            // ★ 一条循环就够了 —— 食材和模块现在都是"一张牌"。
+            //   以前要分别遍历 hand 和 modules 两个列表，写两遍。
+            for (int i = 0; i < cards.Count; i++)
+            {
+                if (cards[i] == null) continue;
+                TableTurnLoop.HandSlot(k, total, out pos, out euler);
+                hand.Add(CardFactory.Create(cards[i], cardsRoot, pos, euler));
+                k++;
+            }
         }
 
         // ── 交互层 ────────────────────────────────────────────────────

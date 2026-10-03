@@ -21,34 +21,29 @@ namespace GameJam.Prototype
     /// </summary>
     public class PlayCard : MonoBehaviour
     {
-        /// <summary>对应的食材数据（模块牌这里是 null）</summary>
-        public Ingredient data;
-
         /// <summary>
-        /// 对应的变速模块数据（食材牌这里是 null）。
+        /// 这张牌的数据。
         ///
-        /// 【为什么是两个字段而不是一个 object】
-        /// Ingredient 和 SpeedModule 是两个互不相干的 [Serializable] 类，没有共同基类。
-        /// 塞进 object 会丢掉类型安全，每处取值都得强转 + 判空 + 猜类型。
-        /// 两个字段加一个 IsModule 判断，读写反而更干净。
+        /// 【为什么不再分 data / module 两个字段】
+        /// 以前是 `Ingredient data` + `SpeedModule module` + IsModule 判断。
+        /// 那个设计把"这张是哪种牌"的判断留在了**表现层**，
+        /// 结果同一个判断在四个文件里抄了 15 遍。
+        /// 现在统一成 Card —— 3D 卡不需要知道自己是食材还是模块，
+        /// 需要的时候问 card.kind 就行。
         /// </summary>
-        public SpeedModule module;
+        public Card card;
 
-        /// <summary>这张牌是变速模块还是食材。</summary>
-        public bool IsModule { get { return module != null; } }
+        /// <summary>这张牌是变速模块。</summary>
+        public bool IsModule { get { return card != null && card.IsModule; } }
 
-        /// <summary>界面上显示的名字（食材名 / 模块名）。</summary>
-        public string DisplayName
-        {
-            get
-            {
-                if (module != null) return module.name;
-                return data != null ? data.name : "?";
-            }
-        }
+        /// <summary>这张牌是食材。</summary>
+        public bool IsIngredient { get { return card != null && card.IsIngredient; } }
+
+        /// <summary>界面上显示的名字。</summary>
+        public string DisplayName { get { return card != null ? card.name : "?"; } }
 
         /// <summary>类型标签 —— HUD 和检视面板靠它区分两类牌。</summary>
-        public string TypeTag { get { return IsModule ? "变速模块" : "食材"; } }
+        public string TypeTag { get { return card != null ? card.TypeTag : "?"; } }
 
         /// <summary>所在卡槽索引。-1 表示不在槽位上（在手牌 / 被拿在手里）</summary>
         public int slotIndex = -1;
@@ -113,24 +108,13 @@ namespace GameJam.Prototype
             return c;
         }
 
-        /// <summary>绑定食材数据并放到手牌原位。</summary>
-        public void Setup(Ingredient ing, Vector3 home, Vector3 euler)
+        /// <summary>绑定一张牌并放到手牌原位。食材和模块都走这一条。</summary>
+        public void Setup(Card c, Vector3 home, Vector3 euler)
         {
-            data = ing;
-            module = null;
+            card = c;
             SetHome(home, euler);
             Teleport(home, euler);
-            gameObject.name = "Card_" + (ing != null ? ing.name : "?");
-        }
-
-        /// <summary>绑定变速模块数据并放到手牌原位。</summary>
-        public void SetupModule(SpeedModule mod, Vector3 home, Vector3 euler)
-        {
-            module = mod;
-            data = null;
-            SetHome(home, euler);
-            Teleport(home, euler);
-            gameObject.name = "Module_" + (mod != null ? mod.name : "?");
+            gameObject.name = (c != null ? c.TypeTag : "Card") + "_" + (c != null ? c.name : "?");
         }
 
         /// <summary>

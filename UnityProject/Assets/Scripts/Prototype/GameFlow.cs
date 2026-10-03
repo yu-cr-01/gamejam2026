@@ -790,36 +790,33 @@ namespace GameJam.Prototype
                 GUILayout.Label("手牌里没有食材，无法更换刀片。", dim);
             }
 
+            // ★ 一条循环 —— 手牌里食材和模块是混在一起的，按类型决定点了做什么。
+            //   以前是"先遍历 turn.hand 列食材、再遍历 deck.modules 列模块"两套，
+            //   而且模块那份读的还是**牌组**而不是手牌，两边早就对不上了。
             for (int i = 0; i < turn.hand.Count; i++)
             {
-                Ingredient ing = turn.hand[i];
-                if (ing == null) continue;
+                Card hc = turn.hand[i];
+                if (hc == null) continue;
 
-                string label = "【食材】" + ing.name + "\n　　" + ing.attrs.DescribeLabeled();
+                string label = "【" + hc.TypeTag + "】" + hc.name + "\n　　" + hc.Describe();
+
                 if (GUILayout.Button(label, btn, GUILayout.Height(64f)))
                 {
                     GUI.FocusControl(null);
-                    toast = "";                        // 换成功就把上次的提示清掉
-                    turn.SwapBladeWithHand(i);
-                    return;                            // 布局已经变了，本帧到此为止
-                }
-            }
 
-            // 模块也列在手牌区里，但有类型标签、点了不换
-            if (deck != null && deck.modules != null)
-            {
-                for (int i = 0; i < deck.modules.Count; i++)
-                {
-                    SpeedModule m = deck.modules[i];
-                    if (m == null) continue;
-
-                    string label = "【模块】" + m.name + "\n　　" + m.Description();
-                    if (GUILayout.Button(label, btn, GUILayout.Height(64f)))
+                    if (hc.IsModule)
                     {
-                        GUI.FocusControl(null);
+                        // 模块不能当刀片 —— 规则在数据层拦着，这里只负责说清楚
                         toast = t.moduleRejected;
                         toastUntil = Time.realtimeSinceStartup + 2.5f;
                     }
+                    else
+                    {
+                        toast = "";                    // 换成功就把上次的提示清掉
+                        turn.SwapBladeWithHand(i);
+                    }
+
+                    return;                            // 布局已经变了，本帧到此为止
                 }
             }
 
@@ -863,17 +860,22 @@ namespace GameJam.Prototype
         {
             handEntries.Clear();
 
+            // ★ 一条循环 —— 手牌现在是一个列表（Card），
+            //   以前要分别遍历 hand 和 modules 两个列表、写两遍。
             if (turn.hand != null)
                 for (int i = 0; i < turn.hand.Count; i++)
-                    if (turn.hand[i] != null)
-                        handEntries.Add(new HandEntry
-                        { isModule = false, index = i, name = turn.hand[i].name, tag = "食材" });
+                {
+                    Card c = turn.hand[i];
+                    if (c == null) continue;
 
-            if (turn.modules != null)
-                for (int i = 0; i < turn.modules.Count; i++)
-                    if (turn.modules[i] != null)
-                        handEntries.Add(new HandEntry
-                        { isModule = true, index = i, name = turn.modules[i].name, tag = "模块" });
+                    handEntries.Add(new HandEntry
+                    {
+                        isModule = c.IsModule,
+                        index    = i,
+                        name     = c.name,
+                        tag      = c.TypeTag
+                    });
+                }
         }
 
         private void DrawTurnStart()
@@ -970,19 +972,14 @@ namespace GameJam.Prototype
             GUILayout.Space(12f);
             GUILayout.BeginVertical(GUI.skin.box);
 
-            if (!sel.isModule)
+            Card selCard = turn.hand[sel.index];
+            if (selCard != null)
             {
-                Ingredient ing = turn.hand[sel.index];
-                GUILayout.Label("食材：" + ing.name, h2);
-                GUILayout.Label("　" + ing.attrs.DescribeLabeled(), body);
-                GUILayout.Label("　投放后进杯子，今天不参与模拟。", dim);
-            }
-            else
-            {
-                SpeedModule m = turn.modules[sel.index];
-                GUILayout.Label("模块：" + m.name, h2);
-                GUILayout.Label("　效果：" + m.Description(), body);
-                GUILayout.Label("　投放后立即作用到当前刀片。", dim);
+                GUILayout.Label(selCard.TypeTag + "：" + selCard.name, h2);
+                GUILayout.Label("　" + selCard.Describe(), body);
+                GUILayout.Label(selCard.IsModule
+                                ? "　投放后立即并入本局效果，作用在当前刀片上。"
+                                : "　投放后进杯子，参与杯内模拟。", dim);
             }
 
             GUILayout.EndVertical();
@@ -995,19 +992,11 @@ namespace GameJam.Prototype
             }
         }
 
-        /// <summary>执行投放：食材进杯子；模块并进本局效果并作用到刀片。</summary>
+        /// <summary>执行投放。做什么由 Card.PlayInto 决定，这里不再分情况。</summary>
         private void ConfirmPlaySelected(HandEntry e)
         {
-            if (e.isModule)
-            {
-                SpeedModule m = turn.PlayModule(e.index);
-                lastPlayed = m != null ? m.name : "";
-            }
-            else
-            {
-                Ingredient ing = turn.PlayFromHand(e.index);
-                lastPlayed = ing != null ? ing.name : "";
-            }
+            Card c = turn.Play(e.index);
+            lastPlayed = c != null ? c.name : "";
 
             handSelected = -1;
             simulatingSince = -1f;
@@ -1020,17 +1009,12 @@ namespace GameJam.Prototype
             if (turn.HandCount == 0) return "（空）";
 
             string s = "";
+            // 一条循环 —— 手牌是一个列表，食材和模块都在里面
             for (int i = 0; i < turn.hand.Count; i++)
             {
                 if (turn.hand[i] == null) continue;
                 if (s.Length > 0) s += "、";
                 s += turn.hand[i].name;
-            }
-            for (int i = 0; i < turn.modules.Count; i++)
-            {
-                if (turn.modules[i] == null) continue;
-                if (s.Length > 0) s += "、";
-                s += turn.modules[i].name;
             }
             return s;
         }

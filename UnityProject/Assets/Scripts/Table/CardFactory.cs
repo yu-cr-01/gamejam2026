@@ -128,40 +128,40 @@ namespace GameJam.Prototype
             else                       Object.DestroyImmediate(o);
         }
 
-        public static PlayCard Create(Ingredient ing, Transform parent, Vector3 home, Vector3 euler)
-        {
-            string title = ing != null ? ing.name : "?";
-            Color accent = ProceduralArt.IngredientColor(ing != null ? ing.id : "");
-
-            // 按"三属性里最高的那个"决定图标印记的形状
-            AttrId dominant = ProceduralArt.DominantAttr(ing);
-
-            string sub = (ing != null && ing.attrs != null) ? StatsText(ing) : null;
-
-            PlayCard card = BuildCard(title, accent, dominant, sub, parent);
-            card.Setup(ing, home, euler);
-            return card;
-        }
-
         /// <summary>
-        /// 造一张变速模块卡。
-        ///
-        /// 和食材卡共用同一套建模，区别只有两处：
-        ///   配色走冷色区（ModuleColor），
-        ///   副文本写的是效果描述而不是三属性 ——
-        ///   模块本身没有属性值，它的数值是加到刀片上去的。
+        /// 按一张牌造 3D 卡。食材和模块共用这一条路径 ——
+        /// 以前是两个重载，调用方得先判断是哪一种再挑一个调，
+        /// 而那个判断在四个文件里各抄了一遍。
         /// </summary>
-        public static PlayCard Create(SpeedModule mod, Transform parent, Vector3 home, Vector3 euler)
+        public static PlayCard Create(Card c, Transform parent, Vector3 home, Vector3 euler)
         {
-            string title = mod != null ? mod.name : "?";
-            Color accent = ProceduralArt.ModuleColor(mod != null ? mod.id : "");
+            if (c == null) return null;
 
-            // 模块没有"主属性"，印记形状固定给液体形；
-            // 卡面文字已经写明它是模块，形状这里不需要再承担区分职责。
-            string sub = "【变速模块】" + (mod != null ? "\n" + mod.Description() : "");
+            Color  accent;
+            AttrId dominant;
+            string sub;
 
-            PlayCard card = BuildCard(title, accent, AttrId.Mercury, sub, parent);
-            card.SetupModule(mod, home, euler);
+            if (c.IsModule)
+            {
+                // 模块走冷色区，和食材一眼分得开
+                accent   = ProceduralArt.ModuleColor(c.id);
+
+                // 模块没有"自己的属性"，印记形状固定给液体形；
+                // 卡面文字已经写明它是模块，形状不用再承担区分职责
+                dominant = AttrId.Mercury;
+
+                sub = "【变速模块】\n" + (c.module != null ? c.module.Description() : "");
+            }
+            else
+            {
+                accent   = ProceduralArt.IngredientColor(c.id);
+                dominant = ProceduralArt.DominantAttr(c.ingredient);
+                sub      = (c.ingredient != null && c.ingredient.attrs != null)
+                           ? StatsText(c.ingredient) : null;
+            }
+
+            PlayCard card = BuildCard(c.name, accent, dominant, sub, parent);
+            card.Setup(c, home, euler);
             return card;
         }
 

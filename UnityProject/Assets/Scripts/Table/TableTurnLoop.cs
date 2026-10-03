@@ -415,9 +415,10 @@ namespace GameJam.Prototype
         {
             KillBladeCard();
 
-            if (turn.blade == null || setup == null || setup.cardsRoot == null) return;
+            Card c = turn.blade != null ? Card.Of(turn.blade) : null;
+            if (c == null) return;
 
-            bladeCard = CardFactory.Create(turn.blade, setup.cardsRoot,
+            bladeCard = CardFactory.Create(c, setup.cardsRoot,
                                            TableChoiceRig.BladeSpot, Vector3.zero);
         }
 
@@ -465,10 +466,11 @@ namespace GameJam.Prototype
         }
 
         /// <summary>把某张手牌换成另一份数据（位置不变）。</summary>
-        private void ReplaceHandCard(int index, Ingredient data)
+        private void ReplaceHandCard(int index, Card c)
         {
             if (setup == null || setup.hand == null) return;
             if (index < 0 || index >= setup.hand.Count) return;
+            if (c == null) return;
 
             PlayCard old = setup.hand[index];
             if (old == null) return;
@@ -478,7 +480,7 @@ namespace GameJam.Prototype
 
             CardFactory.DestroySafe(old.gameObject);
 
-            setup.hand[index] = CardFactory.Create(data, setup.cardsRoot, home, euler);
+            setup.hand[index] = CardFactory.Create(c, setup.cardsRoot, home, euler);
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -585,19 +587,12 @@ namespace GameJam.Prototype
 
                 string name = card.DisplayName;
 
-                // ── 1. 先动数据层 ──
-                if (card.IsModule)
-                {
-                    int idx = turn.modules != null ? turn.modules.IndexOf(card.module) : -1;
-                    SpeedModule m = idx >= 0 ? turn.PlayModule(idx) : null;
-                    if (m != null) name = m.name;
-                }
-                else
-                {
-                    int idx = turn.hand != null ? turn.hand.IndexOf(card.data) : -1;
-                    Ingredient ing = idx >= 0 ? turn.PlayFromHand(idx) : null;
-                    if (ing != null) name = ing.name;
-                }
+                // ★ 一条路径 —— 打出去的后果由 Card.PlayInto 决定。
+                //   以前这里是"食材走 PlayFromHand、模块走 PlayModule"两套，
+                //   界面层凭空多出一处业务判断。
+                int idx = turn.hand != null ? turn.hand.IndexOf(card.card) : -1;
+                Card playedCard = idx >= 0 ? turn.Play(idx) : null;
+                if (playedCard != null) name = playedCard.name;
 
                 played.Add(name);
 
@@ -881,13 +876,10 @@ namespace GameJam.Prototype
 
             List<string> names = new List<string>();
 
+            // 一条循环 —— 手牌现在是一个列表
             if (turn.hand != null)
                 for (int i = 0; i < turn.hand.Count; i++)
                     if (turn.hand[i] != null) names.Add(turn.hand[i].name);
-
-            if (turn.modules != null)
-                for (int i = 0; i < turn.modules.Count; i++)
-                    if (turn.modules[i] != null) names.Add(turn.modules[i].name);
 
             return names.Count > 0 ? string.Join("、", names.ToArray()) : "（空）";
         }

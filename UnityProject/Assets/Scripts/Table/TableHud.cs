@@ -794,7 +794,7 @@ namespace GameJam.Prototype
         {
             PlayCard card = interaction.FocusCard;
             if (card == null) return;
-            if (card.data == null && card.module == null) return;
+            if (card.card == null) return;
 
             const float w = 320f;
             float h = 130f + AttrCatalog.Count * 22f;
@@ -809,12 +809,12 @@ namespace GameJam.Prototype
             {
                 GUI.Label(new Rect(30f, y, w - 28f, 22f), "类型：变速模块", bodyPanel);
                 GUI.Label(new Rect(30f, y + 24f, w - 28f, 44f),
-                          "效果：" + card.module.Description(), bodyPanel);
+                          "效果：" + card.card.Describe(), bodyPanel);
                 y += 72f;
             }
             else
             {
-                Ingredient ing = card.data;
+                Ingredient ing = card.card.ingredient;
                 foreach (AttrDef def in AttrCatalog.All())
                 {
                     int v = ing.attrs.Get(def.id);
@@ -845,7 +845,7 @@ namespace GameJam.Prototype
         /// </summary>
         private void DrawInspectPanel()
         {
-            if (interaction.Inspected == null || interaction.Inspected.data == null) return;
+            if (interaction.Inspected == null || interaction.Inspected.card == null) return;
 
             if (!inspectPlaced)
             {
@@ -888,17 +888,18 @@ namespace GameJam.Prototype
         {
             PlayCard card = interaction.Inspected;
             if (card == null) return;
-            if (card.data == null && card.module == null) return;
+            if (card.card == null) return;
 
-            // 两类牌的主题色来源不同：模块走冷色区，食材按 id 哈希取色
+            // 两类牌的主题色来源不同：模块走冷色区，食材按 id 哈希取色。
+            // Card.id 对两类都等于底层数据的 id，所以这里不用再分情况。
             Color accent = card.IsModule
-                ? ProceduralArt.ModuleColor(card.module.id)
-                : ProceduralArt.IngredientColor(card.data.id);
+                ? ProceduralArt.ModuleColor(card.card.id)
+                : ProceduralArt.IngredientColor(card.card.id);
 
             // 模块没有"自己的属性"，印记固定给液体形；食材取数值最高的那个
             AttrId dominant = card.IsModule
                 ? AttrId.Mercury
-                : ProceduralArt.DominantAttr(card.data);
+                : ProceduralArt.DominantAttr(card.card.ingredient);
 
             AttrDef domDef = AttrCatalog.Get(dominant);
 
@@ -959,14 +960,14 @@ namespace GameJam.Prototype
                 GUILayout.Space(4f);
 
                 GUILayout.BeginVertical(panelBoxInner);
-                GUILayout.Label(card.module.Description(), bodyPanel);
+                GUILayout.Label(card.card.Describe(), bodyPanel);
                 GUILayout.Label("投出去之后效果并入本局，作用在当前刀片上；"
                                 + "之后换刀片不会把这份加成带走。", dimPanel);
                 GUILayout.EndVertical();
             }
             else
             {
-                Ingredient ing = card.data;
+                Ingredient ing = card.card.ingredient;
 
                 GUILayout.Space(10f);
                 GUILayout.Label("── 三属性完整数据 ──", h1Panel);

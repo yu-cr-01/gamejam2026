@@ -393,10 +393,10 @@ namespace GameJam.EditorTools
             TableInteraction it = Object.FindObjectOfType<TableInteraction>();
             TableSetup setup = Object.FindObjectOfType<TableSetup>();
 
-            if (it != null && setup != null && setup.hand.Count > 0 && setup.hand[0].data != null)
+            if (it != null && setup != null && setup.hand.Count > 0 && setup.hand[0].card != null)
             {
                 it.Inspect(setup.hand[0]);
-                Debug.Log("[AutoPlay] 已打开检视面板：" + setup.hand[0].data.name);
+                Debug.Log("[AutoPlay] 已打开检视面板：" + setup.hand[0].DisplayName);
             }
             else
             {

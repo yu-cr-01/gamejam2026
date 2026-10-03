@@ -138,7 +138,7 @@ namespace GameJam.Prototype
         private void HandleCameraAndInspect(Ray ray)
         {
             // 检视的那张牌被清掉了（比如回主菜单重建桌面）就自动收起
-            if (Inspected != null && Inspected.data == null) Inspected = null;
+            if (Inspected != null && Inspected.card == null) Inspected = null;
 
             bool looking = false;
 
