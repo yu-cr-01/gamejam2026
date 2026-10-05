@@ -117,7 +117,21 @@ namespace GameJam.Prototype
             BuildPress();
 
             // 美术给了整机立绘就顶掉程序化机身（交的是 2D 立绘，不是模型贴图）
-            BlenderArt art = BlenderArt.Attach(this);
+            //
+            // ★ 整段包 try / catch：立绘出任何问题都只该是"这次的立绘没挂上"，
+            //   绝不能让它冒出去 —— Build() 是在 TableSetup.Awake() 里调的，
+            //   一抛异常后面的发牌 / HUD / 交互全都不执行，表现就是"桌上一张卡都没有"。
+            //   （真踩过：贴图不可读时 GetPixels32 抛异常，卡全没了查了半天。）
+            BlenderArt art = null;
+            try
+            {
+                art = BlenderArt.Attach(this);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[JuicerRig] 立绘挂载失败，继续用程序化机身：" + e);
+            }
+
             if (art != null && HideProceduralMachineWhenArtPresent)
             {
                 if (frameRoot != null) frameRoot.SetActive(false);

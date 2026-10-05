@@ -282,7 +282,7 @@ namespace GameJam.Prototype
         /// </summary>
         private static void Blit(Color32[] dst, Texture2D src, int x, int y, bool harden)
         {
-            Color32[] s = src.GetPixels32();
+            Color32[] s = ArtTextures.Read(src);   // 没开 Read/Write 也能读（见 ArtTextures）
             int w = src.width, h = src.height;
             int rowStart = RefH - y - h;          // PNG 顶边坐标 → 贴图底边坐标
 

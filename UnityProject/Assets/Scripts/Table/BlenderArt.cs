@@ -141,8 +141,28 @@ namespace GameJam.Prototype
             // 立绘的"3D 版"：按贴图 alpha 的剪影挤出一层厚度 ——
             // 正面贴原图、背面同图染深、侧面纯深色，看着像一块立在桌上的厚板而不是纸片。
             // 用四帧的**并集**剪影建一次网格：动画只换贴图，不用重建几何。
-            float depthLocal = ThicknessWorld / Mathf.Max(0.0001f, owner.transform.lossyScale.y);
-            mf.sharedMesh = BuildCutout(idle, moves, CutoutCols, depthLocal);
+            bool flat = false;
+            Mesh mesh = null;
+            try
+            {
+                float depthLocal = ThicknessWorld / Mathf.Max(0.0001f, owner.transform.lossyScale.y);
+                mesh = BuildCutout(idle, moves, CutoutCols, depthLocal);
+            }
+            catch (System.Exception e)
+            {
+                // ★ 这一条是拿"卡全没了"换来的教训：
+                //   Attach 是在 JuicerRig.Build() 里调的，这里抛异常 = TableSetup.Awake 半路停住，
+                //   后面发牌/HUD/交互全都不会执行 —— 表现就是桌面搭了一半、一张卡都没有。
+                //   所以立绘出任何问题都只降级成"平面立绘"，绝不往外抛。
+                Debug.LogWarning("[BlenderArt] 剪影网格建不出来，先用平面立绘顶着：" + e.Message);
+            }
+
+            if (mesh == null)
+            {
+                flat = true;
+                mesh = BuildFlatQuad();
+            }
+            mf.sharedMesh = mesh;
 
             MeshRenderer r = go.AddComponent<MeshRenderer>();
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
@@ -160,7 +180,9 @@ namespace GameJam.Prototype
             Material back = CardFactory.MakeUnlit(idle);
             back.color = BackTint;
             Material front = CardFactory.MakeUnlit(idle);
-            r.sharedMaterials = new Material[] { wall, back, front };
+
+            // 平面兜底时只有"正面"一个子网格，材质数组也要跟着短
+            r.sharedMaterials = flat ? new Material[] { front } : new Material[] { wall, back, front };
 
             BlenderArt art = go.AddComponent<BlenderArt>();
             art.rig = owner;
@@ -171,6 +193,27 @@ namespace GameJam.Prototype
             art.frontMat = front;
             art.Setup();
             return art;
+        }
+
+        /// <summary>兜底：剪影网格建不出来时退回一块平面（至少不影响搭桌子）。</summary>
+        private static Mesh BuildFlatQuad()
+        {
+            Mesh m = new Mesh();
+            m.name = "BlenderArtFlat";
+            m.vertices = new Vector3[]
+            {
+                new Vector3(-0.5f, -0.5f, 0f), new Vector3(0.5f, -0.5f, 0f),
+                new Vector3(-0.5f,  0.5f, 0f), new Vector3(0.5f,  0.5f, 0f),
+            };
+            m.uv = new Vector2[]
+            {
+                new Vector2(0f, 0f), new Vector2(1f, 0f),
+                new Vector2(0f, 1f), new Vector2(1f, 1f),
+            };
+            m.triangles = new int[] { 0, 2, 3, 0, 3, 1 };   // 法线朝 -Z（朝相机那面）
+            m.RecalculateNormals();
+            m.RecalculateBounds();
+            return m;
         }
 
         /// <summary>
@@ -193,10 +236,10 @@ namespace GameJam.Prototype
             int w = idle.width, h = idle.height;
             int rows = Mathf.Max(4, Mathf.RoundToInt(cols * (h / (float)w)));
 
-            // 1) 采集并集剪影
+            // 1) 采集并集剪影（ArtTextures.Read：没开 Read/Write 也能读，见那个类的注释）
             Color32[][] frames = new Color32[moves.Length + 1][];
-            frames[0] = idle.GetPixels32();
-            for (int i = 0; i < moves.Length; i++) frames[i + 1] = moves[i].GetPixels32();
+            frames[0] = ArtTextures.Read(idle);
+            for (int i = 0; i < moves.Length; i++) frames[i + 1] = ArtTextures.Read(moves[i]);
 
             bool[] solid = new bool[cols * rows];
             for (int j = 0; j < rows; j++)
