@@ -68,6 +68,18 @@ namespace GameJam.Prototype
         private Transform residue;
         private Transform blade;
 
+        // 程序化机身的两组根节点 —— 有美术立绘时要整组关掉（见 Build 末尾）
+        private GameObject frameRoot;
+        private GameObject pressRoot;
+
+        /// <summary>
+        /// 有美术立绘（Art/Juicer/gameblender_*）时，是否把程序搭的机身盖掉。
+        /// true  = 立绘就是这台机器（Frame + Press 全关，只留液体罐和刻度）
+        /// false = 立绘和程序化机身同时出现（要对比造型时用）
+        /// 想只盖一半（比如保留刀片挤出来的反馈），把下面关掉、自己 SetActive 对应节点即可。
+        /// </summary>
+        public const bool HideProceduralMachineWhenArtPresent = true;
+
         private int   score;
         private int   target = 1000;
 
@@ -103,6 +115,14 @@ namespace GameJam.Prototype
             BuildJar();
             BuildFrame();
             BuildPress();
+
+            // 美术给了整机立绘就顶掉程序化机身（交的是 2D 立绘，不是模型贴图）
+            BlenderArt art = BlenderArt.Attach(this);
+            if (art != null && HideProceduralMachineWhenArtPresent)
+            {
+                if (frameRoot != null) frameRoot.SetActive(false);
+                if (pressRoot != null) pressRoot.SetActive(false);
+            }
 
             SetScore(0, target);
             shownLevel = 0f;
@@ -200,6 +220,7 @@ namespace GameJam.Prototype
         {
             GameObject root = new GameObject("Frame");
             root.transform.SetParent(transform, false);
+            frameRoot = root;
 
             Material metal = MakeMetal(1.00f);
 
@@ -230,6 +251,7 @@ namespace GameJam.Prototype
         {
             GameObject root = new GameObject("Press");
             root.transform.SetParent(transform, false);
+            pressRoot = root;
 
             // 冲头：挂在顶板下面，靠改 y 上下运动
             GameObject ramGo = Cyl(root.transform, "Ram", RamR, RamH,

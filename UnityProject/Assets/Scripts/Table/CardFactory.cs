@@ -160,7 +160,7 @@ namespace GameJam.Prototype
                            ? StatsText(c.ingredient) : null;
             }
 
-            PlayCard card = BuildCard(c.name, accent, dominant, sub, parent);
+            PlayCard card = BuildCard(c.name, accent, dominant, sub, parent, CardArt.ElementOf(c));
             card.Setup(c, home, euler);
             return card;
         }
@@ -168,9 +168,12 @@ namespace GameJam.Prototype
         /// <summary>
         /// 两类卡共用的建模部分。
         /// 只负责"长什么样"，绑定数据交给调用方 —— 食材和模块的绑定接口不一样。
+        ///
+        /// artElement 是正式美术的元素皮肤名（见 CardArt）；给 null 或美术缺图时
+        /// 整张卡退回程序化卡面，连文字版面一起退 —— 两套版面不能混着用。
         /// </summary>
         private static PlayCard BuildCard(string title, Color accent, AttrId dominant,
-                                          string subText, Transform parent)
+                                          string subText, Transform parent, string artElement)
         {
             // ① 根节点：scale = 1，挂脚本和刚体
             GameObject root = new GameObject("Card_" + title);
@@ -219,15 +222,39 @@ namespace GameJam.Prototype
             if (faceCollider != null) faceCollider.enabled = false;   // 拾取只认 Body，别让卡面参与
 
             Renderer faceRenderer = face.GetComponent<Renderer>();
+
+            // 卡面贴图：优先正式美术（CardArt 会把通用卡底 + 元素插画 + 名字牌 + 数值牌拼好），
+            // 任何一个切片缺失都会退回程序化卡面，不会画成空白。
+            Texture2D faceTex = CardArt.Face(artElement);
+            bool artFace = faceTex != null;
+            if (!artFace) faceTex = ProceduralArt.CardFace(accent, dominant);
+
             if (faceRenderer != null)
-                faceRenderer.material = MakeUnlit(ProceduralArt.CardFace(accent, dominant));
+                faceRenderer.material = MakeUnlit(faceTex);
 
             // ④ 文字：挂在根节点上（scale=1），避免被 Body 的非等比缩放拉变形
-            AddText(root.transform, title, NameZ, NameSize, ProceduralArt.InkOn(accent));
+            //
+            // 两套版面：
+            //   程序化 —— 名字压在通栏色带上（居中）、三属性在下方属性区居中
+            //   正式美术 —— 名字落在左上角的名字牌里、三属性落在右侧数值牌上（位置量自美术效果图）
+            if (artFace)
+            {
+                float y = CardThick * 0.5f + 0.0022f;
+                AddText(root.transform, title, CardArt.NameOnPlate.z, CardArt.NameOnPlateSize,
+                        CardArt.InkOnPlate, y, CardArt.NameOnPlate.x);
 
-            // 副文本：食材写三属性，模块写效果描述
-            if (!string.IsNullOrEmpty(subText))
-                AddText(root.transform, subText, StatsZ, StatsSize, InkOnPaper());
+                if (!string.IsNullOrEmpty(subText))
+                    AddText(root.transform, subText, CardArt.StatsOnPlate.z, CardArt.StatsOnPlateSize,
+                            CardArt.InkOnPlate, y, CardArt.StatsOnPlate.x);
+            }
+            else
+            {
+                AddText(root.transform, title, NameZ, NameSize, ProceduralArt.InkOn(accent));
+
+                // 副文本：食材写三属性，模块写效果描述
+                if (!string.IsNullOrEmpty(subText))
+                    AddText(root.transform, subText, StatsZ, StatsSize, InkOnPaper());
+            }
 
             // 卡身和卡面都要跟着悬停/拖动变亮，所以两个渲染器都绑上
             card.BindRenderer(bodyRenderer, faceRenderer);
@@ -296,14 +323,17 @@ namespace GameJam.Prototype
         /// ★ 卡牌厚度不是处处都一样的：牌组卡有 0.018，手牌只有 0.008。
         ///   沿用默认高度的话，牌组卡的标题会被埋进卡身里，一个字都看不见 ——
         ///   （踩过：三张牌组卡的色带全是空白的。）所以把 Y 开出来当参数。
+        ///
+        /// localX 是给正式美术版面用的：美术的名字牌在左上角、数值牌在右侧，
+        /// 文字得跟着离开中线。程序化卡面继续传 0（居中）。
         /// </summary>
         public static void AddText(Transform parent, string text, float localZ, float size,
-                                   Color color, float localY)
+                                   Color color, float localY, float localX = 0f)
         {
             GameObject go = new GameObject("Text");
             go.transform.SetParent(parent, false);
 
-            go.transform.localPosition = new Vector3(0f, localY, localZ);
+            go.transform.localPosition = new Vector3(localX, localY, localZ);
             go.transform.localRotation = Quaternion.LookRotation(Vector3.down, Vector3.forward);
             go.transform.localScale = Vector3.one * size;
 
