@@ -375,7 +375,6 @@ namespace GameJam.Prototype
         {
             hand.Clear();
             if (turnLoop == null || cardsRoot == null) return;
-
             TurnState st = turnLoop.turn;
             System.Collections.Generic.List<Card> cards = st.hand;
 
@@ -404,6 +403,52 @@ namespace GameJam.Prototype
                 hand.Add(CardFactory.Create(cards[i], cardsRoot, pos, euler));
                 k++;
             }
+
+            ReframeHandView();
+        }
+
+        /// <summary>「手牌特写」的俯角。太低会把牌压成一条，太高就看不出牌的立体感。</summary>
+        private const float HandViewTiltDeg = 52f;
+
+        /// <summary>
+        /// 按**当前手牌的真实范围**重算「手牌特写」机位。
+        ///
+        /// 以前这个机位是写死的坐标，是按"4 张牌"调的；牌一多（换刀片后 5 张、
+        /// 或者扇形张开）最外侧两张就被切在画面外。
+        /// 现在每次手牌重新布局都按包围盒算一次，几张牌都装得下 ——
+        /// 装不下的时候也是整体拉远，而不是把牌切掉。
+        ///
+        /// 只更新机位、不切镜头：发牌过程中抢镜头会很跳，切视角仍然是玩家按键那一下。
+        /// </summary>
+        public void ReframeHandView()
+        {
+            if (rig == null || cam == null || hand == null || hand.Count == 0) return;
+
+            bool any = false;
+            Bounds box = new Bounds();
+
+            for (int i = 0; i < hand.Count; i++)
+            {
+                PlayCard c = hand[i];
+                if (c == null) continue;
+
+                // 手牌是扇形张开的，按卡的偏航算它真正的占地，
+                // 直接用 0.24 x 0.335 的轴对齐盒会漏掉外侧那点宽度
+                float yaw = c.transform.eulerAngles.y * Mathf.Deg2Rad;
+                float cos = Mathf.Abs(Mathf.Cos(yaw));
+                float sin = Mathf.Abs(Mathf.Sin(yaw));
+                float ex = CardFactory.CardWidth * cos + CardFactory.CardDepth * sin;
+                float ez = CardFactory.CardDepth * cos + CardFactory.CardWidth * sin;
+
+                Bounds cb = new Bounds(c.transform.position, new Vector3(ex, 0.02f, ez));
+                if (!any) { box = cb; any = true; }
+                else box.Encapsulate(cb);
+            }
+
+            if (!any) return;
+
+            box.Expand(new Vector3(0.07f, 0f, 0.07f));      // 边上留一圈空，别贴着画面边
+            rig.FrameTableBounds("hand", box, HandViewTiltDeg, 1.06f);
         }
 
         // ── 交互层 ────────────────────────────────────────────────────

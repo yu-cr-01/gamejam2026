@@ -106,7 +106,7 @@ namespace GameJam.EditorTools
             sb.AppendLine();
             sb.AppendLine("===== 破壁机立绘（" + BlenderArt.ArtRoot + "）");
             foreach (string f in JuicerFrames)
-                problems += ReportTexture(sb, BlenderArt.ArtRoot + f, false);
+                problems += ReportTexture(sb, BlenderArt.ArtRoot + f, true);   // 剪影要读 alpha，必须可读
 
             sb.AppendLine();
             sb.AppendLine("===== 元素映射（改 CardArt.ElementOf 后看这张表）");

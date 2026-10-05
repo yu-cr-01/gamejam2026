@@ -69,6 +69,44 @@ namespace GameJam.Prototype
             views[name] = v;
         }
 
+        /// <summary>
+        /// 按一个**躺在桌面上的包围盒**算机位：从盒子正前方、抬高 tiltDeg 度看过去，
+        /// 距离取"横向刚好装下"和"纵深刚好装下"里更远的那个，再乘 margin 留边。
+        ///
+        /// 【为什么要算而不是写死坐标】
+        ///   手牌数量是会变的（开局 4 张、换刀片后可能 5 张），固定机位在牌多的时候
+        ///   会把最外侧的牌切出画面。按实际范围算，几张牌都装得下。
+        ///
+        /// 【纵深为什么乘 sin(tilt)】
+        ///   俯视时地面上的纵深在屏幕上被压扁了，压扁系数就是 sin(tilt) ——
+        ///   不乘的话算出来的距离会偏大，镜头拉得太远。
+        ///
+        /// go = false 时只更新机位不切过去（发牌途中不该抢镜头）。
+        /// </summary>
+        public void FrameTableBounds(string name, Bounds box, float tiltDeg, float margin = 1.1f, bool go = false)
+        {
+            if (cam == null) return;
+
+            float tilt = Mathf.Clamp(tiltDeg, 10f, 85f) * Mathf.Deg2Rad;
+            float halfV = Mathf.Tan(Mathf.Clamp(cam.fieldOfView, 5f, 120f) * 0.5f * Mathf.Deg2Rad);
+            float halfH = halfV * Mathf.Max(0.2f, cam.aspect);
+
+            float needX = box.extents.x * margin;
+            float needZ = box.extents.z * margin;
+
+            float distX = needX / halfH;
+            float distZ = needZ * Mathf.Sin(tilt) / halfV;
+            float dist  = Mathf.Max(Mathf.Max(distX, distZ), 0.25f);
+
+            Vector3 dir = new Vector3(0f, Mathf.Sin(tilt), -Mathf.Cos(tilt));   // 中心 → 相机
+            Vector3 target = box.center;
+            Vector3 pos = target + dir * dist;
+
+            Register(name, pos, target);
+
+            if (go) GoTo(name);
+        }
+
         /// <summary>立刻切到某个机位（不做过渡）。</summary>
         public void SnapTo(string name)
         {

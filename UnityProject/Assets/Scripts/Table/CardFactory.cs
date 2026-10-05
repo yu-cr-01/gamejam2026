@@ -34,8 +34,13 @@ namespace GameJam.Prototype
         public const float CardThick = 0.008f;
         public const float CardDepth = 0.335f;
 
-        /// <summary>Body 相对卡面的缩小比例 —— 让圆角真的能透出桌面。</summary>
-        private const float BodyInset = 0.955f;
+        /// <summary>
+        /// Body 相对卡面的缩小比例 —— 让圆角真的能透出桌面。
+        ///
+        /// public 是因为 CardArt 要按**同一个数**把正式卡面正好铺满卡身：
+        /// 卡面和卡身对不齐，卡面边缘就会露出一圈卡身 / 桌面 —— 那就是"半透明边框"那股脏边的来源。
+        /// </summary>
+        public const float BodyInset = 0.955f;
 
         private static readonly Color CardEdgeColor = new Color(0.130f, 0.118f, 0.104f);
 

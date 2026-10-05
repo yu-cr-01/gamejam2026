@@ -13,10 +13,11 @@ namespace GameJam.EditorTools
     /// 【几个设置的理由】
     ///   mipmapEnabled = false  —— 卡面/立绘都是"屏幕尺寸级"的贴图，
     ///                             开 mip 只会在斜视角下把图案糊掉，还多占 33% 显存
-    ///   isReadable（只给卡面）—— CardArt 要在运行时 GetPixels32() 把
-    ///                             通用卡底 + 元素插画 + 名字牌 + 数值牌拼成一张卡面，
-    ///                             **没开读写会直接抛 "Texture is not readable"**；
-    ///                             立绘只是贴到材质上，用不着读写，省一半显存
+    ///   isReadable             —— **全部开读写**：两处都要在运行期用 CPU 读像素
+    ///                             · 卡面：CardArt 用 GetPixels32() 把切片拼成一张卡面
+    ///                             · 立绘：BlenderArt 读 alpha 剪影，挤出"3D 版"的厚度
+    ///                             不开会直接抛 "Texture is not readable"。
+    ///                             代价：立绘四帧 574x672 各约 1.5 MB 常驻，合计 ~6 MB，可接受。
     ///   alphaIsTransparency    —— 透明边缘向里渗色，避免 PNG 半透明边缘出现黑边
     ///   npotScale = None       —— ★ Unity 默认是 ToNearest：非 2 次幂的图会被**缩放**！
     ///                             实测 136x182 的卡底被压成 128x128、574x672 的立绘被压成 512x512，
@@ -29,8 +30,7 @@ namespace GameJam.EditorTools
     /// </summary>
     public class ArtImportSettings : AssetPostprocessor
     {
-        private const string Root     = "Assets/Resources/Art/";
-        private const string CardRoot = Root + "Card/";
+        private const string Root = "Assets/Resources/Art/";
 
         private void OnPreprocessTexture()
         {
@@ -39,8 +39,6 @@ namespace GameJam.EditorTools
 
             TextureImporter ti = assetImporter as TextureImporter;
             if (ti == null) return;
-
-            bool cardPiece = path.StartsWith(CardRoot);
 
             ti.textureType         = TextureImporterType.Default;
             ti.mipmapEnabled       = false;
@@ -51,7 +49,7 @@ namespace GameJam.EditorTools
             ti.textureCompression  = TextureImporterCompression.Uncompressed;
             ti.maxTextureSize      = 2048;
             ti.sRGBTexture         = true;
-            ti.isReadable          = cardPiece;
+            ti.isReadable          = true;    // 卡面拼图 + 立绘剪影都要 CPU 读像素
         }
     }
 }

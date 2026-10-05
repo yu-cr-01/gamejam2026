@@ -72,6 +72,17 @@ namespace GameJam.Prototype
         public const float NameOnPlateSize  = 0.0075f;
         public const float StatsOnPlateSize = 0.0038f;
 
+        /// <summary>
+        /// 卡底 / 铭牌的**软边阈值**：低于 Lo 当卡外（透明），高于 Hi 当卡内（不透明），
+        /// 中间压成 1~2 像素的过渡（保住抗锯齿，但不再有十几像素的半透明带）。
+        ///
+        /// 实测 card_common_bg 的 alpha：顶部 0~4 行全透明、第 8 行才 112、第 12 行 215，
+        /// 底部 172~179 行 195→146→0，左右各 3~4 列同理，**内部也只有 236~245**。
+        /// 直接用的话卡牌四周就是一圈透出背景的半透明边框（用户看到的那圈"脏边"）。
+        /// </summary>
+        private const float AlphaCutLo = 0.45f;
+        private const float AlphaCutHi = 0.62f;
+
         /// <summary>牌子是暖棕色，字用深墨色（程序化卡面用的是白字，两套不能混）。</summary>
         public static readonly Color InkOnPlate = new Color(0.145f, 0.132f, 0.118f);
 
@@ -163,53 +174,91 @@ namespace GameJam.Prototype
             // 先按效果图的坐标系拼（136x182），最后整体缩到卡面贴图尺寸
             Color32[] canvas = new Color32[RefW * RefH];   // 默认全透明
 
-            Blit(canvas, common, 0, 0);
+            // 卡底/铭牌带一圈很宽的软边（导出时带的），必须先把这层软边压硬，
+            // 否则游戏里卡牌外面会套一圈"半透明边框"（背景从半透明处透出来）。
+            Blit(canvas, common, 0, 0, true);
 
             // 元素底色块居中垫在插画后面（两者尺寸差 0~2 像素，按中心对齐）
+            // —— 这几层在卡内部，半透明是有意的（深色衬底），不要压硬
             if (elemBg != null)
             {
                 int bx = pos.x + (elemImg.width  - elemBg.width)  / 2;
                 int by = pos.y + (elemImg.height - elemBg.height) / 2;
-                Blit(canvas, elemBg, bx, by);
+                Blit(canvas, elemBg, bx, by, false);
             }
 
-            Blit(canvas, elemImg, pos.x, pos.y);
-            if (nameBg   != null) Blit(canvas, nameBg,   NamePlatePos.x,   NamePlatePos.y);
-            if (numberBg != null) Blit(canvas, numberBg, NumberPlatePos.x, NumberPlatePos.y);
+            Blit(canvas, elemImg, pos.x, pos.y, false);
+            if (nameBg   != null) Blit(canvas, nameBg,   NamePlatePos.x,   NamePlatePos.y,   true);
+            if (numberBg != null) Blit(canvas, numberBg, NumberPlatePos.x, NumberPlatePos.y, true);
 
-            return ToFaceTexture(canvas);
+            // 压硬之后卡牌的真实外轮廓 = 不透明像素的外接矩形（卡底那圈软边已经被削掉）
+            RectInt outline = OpaqueBounds(canvas);
+            if (outline.width < 8 || outline.height < 8) return null;
+
+            return ToFaceTexture(canvas, outline);
         }
 
-        /// <summary>把 136x182 的稿子按宽度等比放大到卡面贴图，纵向居中补透明边。</summary>
-        private static Texture2D ToFaceTexture(Color32[] canvas)
+        /// <summary>不透明像素的外接矩形（用来确定卡牌真正的外轮廓）。</summary>
+        private static RectInt OpaqueBounds(Color32[] canvas)
         {
-            int outW = ProceduralArt.CardTexW;
-            int outH = Mathf.RoundToInt(RefH * ((float)outW / RefW));      // 256x343
-            int oy   = (ProceduralArt.CardTexH - outH) / 2;                // 上下各留 7 像素
+            int minX = RefW, minY = RefH, maxX = -1, maxY = -1;
+            for (int y = 0; y < RefH; y++)
+            {
+                for (int x = 0; x < RefW; x++)
+                {
+                    if (canvas[y * RefW + x].a < 8) continue;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+            if (maxX < 0) return new RectInt(0, 0, 0, 0);
+            return new RectInt(minX, minY, maxX - minX + 1, maxY - minY + 1);
+        }
 
-            Texture2D tex = NewTex(ProceduralArt.CardTexW, ProceduralArt.CardTexH);
+        /// <summary>
+        /// 把稿子里**卡牌外轮廓**那一块，铺满卡面贴图里**卡身**占的矩形。
+        ///
+        /// 为什么不按宽度等比缩放、上下补透明边：卡身比卡面小一圈（CardFactory.BodyInset），
+        /// 卡面只要留出比那一圈更宽的透明边，透出去的就是卡身（深色）—— 看着就是一条脏边。
+        /// 所以这里直接把外轮廓拉伸填满卡身：美术出的卡是 0.75 的宽高比、游戏里的卡是 0.716，
+        /// 横向会压掉约 5%，换来的是卡牌边缘干干净净（宁可比例差一点，也不要缝）。
+        /// </summary>
+        private static Texture2D ToFaceTexture(Color32[] canvas, RectInt outline)
+        {
+            int texW = ProceduralArt.CardTexW;
+            int texH = ProceduralArt.CardTexH;
+
+            // 卡身在卡面贴图里占的矩形（和 CardFactory 用同一个 BodyInset）
+            int bodyW = Mathf.RoundToInt(texW * CardFactory.BodyInset);
+            int bodyH = Mathf.RoundToInt(texH * CardFactory.BodyInset);
+            int bodyX = (texW - bodyW) / 2;
+            int bodyY = (texH - bodyH) / 2;
+
+            Texture2D tex = NewTex(texW, texH);
             Color32[] dst = tex.GetPixels32();
 
-            float sx = (float)RefW / outW;
-            float sy = (float)RefH / outH;
+            float sx = (float)outline.width  / bodyW;
+            float sy = (float)outline.height / bodyH;
 
-            for (int y = 0; y < outH; y++)
+            for (int y = 0; y < bodyH; y++)
             {
-                float fy = (y + 0.5f) * sy - 0.5f;
+                float fy = outline.y + (y + 0.5f) * sy - 0.5f;
                 int y0 = Mathf.Clamp(Mathf.FloorToInt(fy), 0, RefH - 1);
                 int y1 = Mathf.Min(y0 + 1, RefH - 1);
                 float wy = Mathf.Clamp01(fy - y0);
 
-                for (int x = 0; x < outW; x++)
+                for (int x = 0; x < bodyW; x++)
                 {
-                    float fx = (x + 0.5f) * sx - 0.5f;
+                    float fx = outline.x + (x + 0.5f) * sx - 0.5f;
                     int x0 = Mathf.Clamp(Mathf.FloorToInt(fx), 0, RefW - 1);
                     int x1 = Mathf.Min(x0 + 1, RefW - 1);
                     float wx = Mathf.Clamp01(fx - x0);
 
                     Color c = Bilerp(canvas[y0 * RefW + x0], canvas[y0 * RefW + x1],
                                      canvas[y1 * RefW + x0], canvas[y1 * RefW + x1], wx, wy);
-                    dst[(oy + y) * ProceduralArt.CardTexW + x] = c;
+                    dst[(bodyY + y) * texW + bodyX + x] = c;
                 }
             }
 
@@ -221,6 +270,9 @@ namespace GameJam.Prototype
         /// <summary>
         /// 源图按左上角 (x,y) 做 source-over 叠加（straight alpha）。
         ///
+        /// harden = true 时把这一层的 alpha 压成窄过渡（见 AlphaCutLo / AlphaCutHi）：
+        /// 卡底和铭牌自带很宽的软边，直接叠上去在游戏里就是一圈"半透明边框"。
+        ///
         /// ★ 这里有一次坐标系换算，别删：
         ///   IllustPos / NamePlatePos 里的 y 是**从 PNG 顶边往下量**的（跟美术的效果图一致），
         ///   而 Texture2D.GetPixels32() 的行序是**从底边往上**（Unity 贴图 V=0 在下）。
@@ -228,7 +280,7 @@ namespace GameJam.Prototype
         ///   漏了这一步不会报任何错，只是整张卡面上下镜像 —— 卡面拼图能出图、取样像素也正常，
         ///   只有跟美术的效果图逐像素比才会发现（ArtCheck 出的 face_*.png 就是干这个用的）。
         /// </summary>
-        private static void Blit(Color32[] dst, Texture2D src, int x, int y)
+        private static void Blit(Color32[] dst, Texture2D src, int x, int y, bool harden)
         {
             Color32[] s = src.GetPixels32();
             int w = src.width, h = src.height;
@@ -248,6 +300,10 @@ namespace GameJam.Prototype
                     if (sp.a == 0) continue;
 
                     float sa = sp.a / 255f;
+                    if (harden)
+                        sa = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(AlphaCutLo, AlphaCutHi, sa));
+                    if (sa <= 0f) continue;
+
                     int di = dy * RefW + dx;
                     Color32 dp = dst[di];
 
