@@ -36,6 +36,10 @@ namespace GameJam.Prototype
         // ── 杯内 2D 模拟视图 ──
         private CupSimView cupView;
 
+        // ── v2.1 的规则解析报告面板（F2）──
+        private bool     rulesReportOpen;
+        private Vector2  rulesReportScroll;
+
         // ── 检视窗口 ──
         private const int   InspectWindowId = 0x54A1;
         private Rect        inspectRect = new Rect(16f, 14f, 450f, 520f);
@@ -66,6 +70,19 @@ namespace GameJam.Prototype
 
             HandleMenuKeys();
             HandleConfirmKey();
+            HandleRulesKeys();
+        }
+
+        /// <summary>
+        /// F2 = 打开"卡牌规则解析报告"（未识别清单全文）。
+        ///
+        /// 【为什么必须有这个入口】"3 条规则没实现"这句话本身没法行动 ——
+        /// 策划要知道是哪三张卡的哪句话、为什么没认出来、该怎么改。
+        /// 报告就是为这个存在的（RuleReport），不给入口等于没做。
+        /// </summary>
+        private void HandleRulesKeys()
+        {
+            if (Input.GetKeyDown(KeyCode.F2)) rulesReportOpen = !rulesReportOpen;
         }
 
         /// <summary>
@@ -245,6 +262,9 @@ namespace GameJam.Prototype
             if (turnLoop != null && turnLoop.settingsOpen)    DrawSettingsPanel();
             else if (turnLoop != null && turnLoop.paused)     DrawPausePanel();
 
+            // 规则解析报告盖在弹窗之上（它是"查资料"，任何时候都该能翻）
+            if (rulesReportOpen) DrawRulesReportPanel();
+
             // 检视面板和划过信息条是同一个位置，二选一
             if (interaction.Inspected != null) DrawInspectPanel();
             else                               DrawCardInfo();
@@ -309,7 +329,7 @@ namespace GameJam.Prototype
         /// </summary>
         private void DrawSettingsPanel()
         {
-            const float w = 470f, h = 274f;
+            const float w = 470f, h = 336f;
             Rect r = CenterBox(w, h);
             GUI.Box(r, GUIContent.none, panelBox);
 
@@ -318,6 +338,26 @@ namespace GameJam.Prototype
                       "（壳子：结构先立起来，挂上去的值都是生效的）", dimPanel);
 
             float y = r.y + 88f;
+
+            // ── 规则模式开关 ─────────────────────────────────────────
+            //   ★ 只改"下一关用哪套"，不做中途切换：两套玩法的状态完全不一样
+            //     （v2.1 是 BladeState + 桌面素材，旧流程是 TurnState + 杯内粒子），
+            //     打到一半换引擎只会留下半套脏状态 —— 那比"要多点一次重开"糟糕得多。
+            GUI.Label(new Rect(r.x + 22f, y, 210f, 26f), "规则模式", bodyPanel);
+            if (GUI.Button(new Rect(r.x + 232f, y, 200f, 28f),
+                           TableSettings.UseRulesV21 ? "v2.1 规则（默认）" : "旧流程",
+                           btn))
+            {
+                GUI.FocusControl(null);
+                TableSettings.UseRulesV21 = !TableSettings.UseRulesV21;
+                turnLoop.notice = "规则模式已切成「" + (TableSettings.UseRulesV21 ? "v2.1" : "旧流程") +
+                                  "」—— 退出关卡重进（或重开本关）才生效";
+            }
+            y += 32f;
+
+            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 20f),
+                      "两套玩法状态不通用，所以只对**下一关**生效；中途不换引擎。", dimPanel);
+            y += 26f;
 
             GUI.Label(new Rect(r.x + 22f, y, 210f, 26f),
                       "转头灵敏度　" + TableSettings.LookSensitivity.ToString("0.0"), bodyPanel);
@@ -343,7 +383,20 @@ namespace GameJam.Prototype
                 GUI.FocusControl(null);
                 TableSettings.ShowDebugInfo = !TableSettings.ShowDebugInfo;
             }
-            y += 40f;
+            y += 36f;
+
+            // ── 占位数值开关 ─────────────────────────────────────────
+            //   卡表里 h/d/v 都是 0 的卡（数值还没定）要不要兜一套临时值。
+            //   关掉之后那些卡的 H 就是 0 —— 刀片选它会一进关卡就爆刀。
+            //   所以这个开关必须有，而且默认开；HUD 上会标明用的是占位数值。
+            GUI.Label(new Rect(r.x + 22f, y, 240f, 26f), "卡表没数值时用占位值", bodyPanel);
+            if (GUI.Button(new Rect(r.x + 232f, y, 110f, 28f),
+                           TableSettings.UsePlaceholderCardValues ? "开" : "关", btn))
+            {
+                GUI.FocusControl(null);
+                TableSettings.UsePlaceholderCardValues = !TableSettings.UsePlaceholderCardValues;
+            }
+            y += 34f;
 
             if (GUI.Button(new Rect(r.x + 22f, y, 130f, 32f), "恢复默认", btn))
             {
@@ -465,6 +518,12 @@ namespace GameJam.Prototype
         {
             if (turnLoop == null) return;
 
+            // ── v2.1 分流 ──────────────────────────────────────────────
+            //   v2.1 的"选刀片"不是从配置里挑一把，而是**从初始手牌里点一张素材**
+            //   （正文 §2.5）。旧那一屏显示的是 turn.BladeName() / BladeAttrLine()，
+            //   在 v2.1 里那个 blade 是 null，会显示"（未选择）" —— 看不出规则。
+            if (turnLoop.V21 && turnLoop.phase == TablePhase.BladePick) { DrawBladePickV21(); return; }
+
             bool deckPhase = (turnLoop.phase == TablePhase.DeckPick);
             Choice c = turnLoop.CurrentChoice;
 
@@ -544,7 +603,71 @@ namespace GameJam.Prototype
             GUI.enabled = oldEnabled;
         }
 
-        // ── 右上角：视角切换 ──────────────────────────────────────────
+        /// <summary>
+        /// v2.1 的选刀片核心面板。
+        ///
+        /// 【为什么必须单独一屏】这一步是 v2.1 特有的一条规则（正文 §2.5）：
+        ///   玩家从**初始手牌**里点一张素材当核心，该卡的 H → 刀片初始 H、
+        ///   V → 刀片初始 V，而且这张卡**移出手牌、本关不再参与出牌**。
+        ///   旧的选刀片面版显示的是配置里那把刀片的属性，在 v2.1 里根本没有那回事。
+        ///
+        /// 手牌张数和"点哪张"都写出来 —— 不写的话玩家不知道要干什么，
+        /// 只会一直按确认，然后拿到一张默认的第一张牌。
+        /// </summary>
+        private void DrawBladePickV21()
+        {
+            TableRulesV21 r = turnLoop.rulesV21;
+            if (r == null) return;
+
+            const float w = 660f;
+            const float h = 168f;
+            float x = (Screen.width - w) * 0.5f;
+            const float y = 14f;
+            const float textW = w - 250f;
+
+            GUI.Box(new Rect(x, y, w, h), GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(x + 18f, y + 8f, w - 36f, 30f), "选择你的刀片核心", h1Panel);
+
+            float ty = y + 44f;
+
+            MaterialCard cand = turnLoop.bladeCoreCard != null
+                ? turnLoop.bladeCoreCard
+                : r.CoreCandidate();
+
+            GUI.Label(new Rect(x + 18f, ty, textW, 24f),
+                      "当前候选：" + (cand != null
+                                     ? cand.name + "（H " + cand.H + " · V " + cand.V + "）"
+                                     : "（没有可当核心的素材）"),
+                      bodyPanel);
+            ty += 26f;
+
+            GUI.Label(new Rect(x + 18f, ty, textW, 24f),
+                      "初始手牌：素材 " + r.hand.Count + " 张 + 法术 " + r.handSpells.Count + " 张"
+                      + "（正文 §2.6）", bodyPanel);
+            ty += 26f;
+
+            GUI.Label(new Rect(x + 18f, ty, textW, 24f),
+                      "点桌上手牌里的一张素材即改选。核心卡的 H/V 就是刀片的初始 H/V，该卡移出手牌。",
+                      dimPanel);
+            ty += 24f;
+
+            if (!string.IsNullOrEmpty(turnLoop.notice))
+                GUI.Label(new Rect(x + 18f, ty, textW, 24f), turnLoop.notice, dimPanel);
+
+            bool canConfirm = cand != null;
+
+            bool oldEnabled = GUI.enabled;
+            GUI.enabled = canConfirm;
+
+            if (GUI.Button(new Rect(x + w - 210f, y + 112f, 192f, 40f), "确认刀片，进入关卡", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.ConfirmBladePick();
+            }
+
+            GUI.enabled = oldEnabled;
+        }
         private void DrawViewButtons()
         {
             const float w = 110f, h = 32f, pad = 8f;
@@ -572,6 +695,28 @@ namespace GameJam.Prototype
 
             const float w = 480f, h = 214f;
             float y = Screen.height - h - 14f;
+
+            // v2.1 的操作方式完全不同（出牌不消耗行动、启动要点桌面素材、法术是点一下），
+            // 提示必须跟着换 —— 写旧那一套会让玩家一直找不到"怎么启动"。
+            if (turnLoop != null && turnLoop.V21)
+            {
+                GUI.Label(new Rect(16f, y, w, 24f), "把素材拖到桌面中间的投放区 → 按「放置到桌面」", h1);
+                GUI.Label(new Rect(16f, y + 28f, w, 22f), "点桌面上的素材 = 选它当「启动破壁机」的目标（会抬起来）", dim);
+                GUI.Label(new Rect(16f, y + 48f, w, 22f), "点手牌里的法术 = 直接附魔到刀片（不消耗行动机会）", dim);
+                GUI.Label(new Rect(16f, y + 68f, w, 22f), "「启动破壁机」消耗 1 行动机会 + 1 点刀片 H", dim);
+                GUI.Label(new Rect(16f, y + 88f, w, 22f), "每回合 5 次行动、每关 4 回合；本回合最后一次启动会献祭吞噬目标", dim);
+                GUI.Label(new Rect(16f, y + 108f, w, 22f), "刀片 H 归零 = 爆刀，关卡结束、当前分数 ×2", dim);
+                GUI.Label(new Rect(16f, y + 128f, w, 22f), "右键单击卡牌 → 查看完整数据　｜　右键拖动 → 转头", dim);
+                GUI.Label(new Rect(16f, y + 148f, w, 22f), "F2 → 卡牌规则解析报告（哪些规则没实现看这里）", dim);
+                GUI.Label(new Rect(16f, y + 168f, w, 22f), "Esc → 菜单（继续 / 设置 / 退出关卡 / 退出游戏）", dim);
+
+                if (TableSettings.ShowDebugInfo)
+                    GUI.Label(new Rect(16f, y + 190f, w, 22f),
+                              "物理：" + (interaction.PhysicsOn ? "开（受重力）" : "关（脚本控制）")
+                              + "　　视角：" + (setup != null && setup.rig != null && setup.rig.IsFreeLook
+                                                ? "自由转头中" : "固定机位"), dim);
+                return;
+            }
 
             GUI.Label(new Rect(16f, y, w, 24f), "拖动卡牌放到桌面中间的投放区", h1);
             GUI.Label(new Rect(16f, y + 28f, w, 22f), "一次可以放多张 —— 确认时效果会叠加发动", dim);
@@ -603,6 +748,12 @@ namespace GameJam.Prototype
         {
             if (turnLoop == null) return;
             if (turnLoop.IsPreparing) return;   // 这段由 DrawChoicePanel 负责
+
+            // ── v2.1 分流 ──────────────────────────────────────────────
+            //   两套玩法的状态完全不一样（v2.1 没有"已应用模块 / 投放区待确认"这回事，
+            //   多出的是回合 x/4、行动机会 x/5、刀片 H/V、四种附魔层数）。
+            //   旧那一份一行都没删，关掉开关就回到它。
+            if (turnLoop.V21) { DrawTurnPanelV21(); return; }
 
             TurnState t = turnLoop.turn;
 
@@ -657,8 +808,161 @@ namespace GameJam.Prototype
         }
 
         // ══════════════════════════════════════════════════════════════
-        //  阶段浮层：模拟中 / 回合结算 / 关卡结束 / 总结算
+        //  v2.1 状态区（回合 x/4、行动机会 x/5、刀片 H/V、四种附魔层数）
+        //
+        //  【为什么单独一块，而不是把旧信息栏改几个字】
+        //   旧信息栏的每一行在 v2.1 里都没有对应物（已应用模块、投放区待确认、
+        //   空打次数），而 v2.1 要看的（刀片 H/V、附魔层数、本回合已启动几次）
+        //   旧的一行都没有。硬拼成一块的结果是两边都看不懂。
+        //   所以两块并存、由开关选一块 —— 旧的那一块一行不删。
         // ══════════════════════════════════════════════════════════════
+
+        private void DrawTurnPanelV21()
+        {
+            TableRulesV21 r = turnLoop.rulesV21;
+            if (r == null) return;
+
+            const float w = 660f;
+            float x = (Screen.width - w) * 0.5f;
+            const float y = 14f;
+
+            // 面板比旧的高：v2.1 要多显示刀片 / 附魔 / 目标素材这三行，
+            // 下面还要塞四个按钮（启动 / 放置 / 结束回合 / 自动选目标）。
+            // 254 = 8 + 30 + 22 + 24 + 22×4 + 24 + 4 + 34 + 44（"不能启动的原因"那行在最下面）。
+            const float h = 254f;
+            GUI.Box(new Rect(x, y, w, h), GUIContent.none, panelBox);
+
+            float ty = y + 8f;
+
+            // ── ① 模式 + 回合 / 行动机会 / 分数（最关键的一行放最上面）──
+            GUI.Label(new Rect(x + 18f, ty, w - 36f, 30f),
+                      "第 " + r.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel + " 回合"
+                      + "　　行动机会 " + r.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn
+                      + "　　总分 " + r.score + " / " + r.targetScore,
+                      h1Panel);
+            ty += 30f;
+
+            // ── ② 模式 + 未识别规则警告 ──
+            GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f),
+                      "规则模式：" + (TableSettings.UseRulesV21 ? "v2.1（本分支默认）" : "旧流程")
+                      + "　｜　出牌不消耗行动机会，只有「启动破壁机」消耗 1 次 + 1 点刀片 H",
+                      dimPanel);
+            ty += 22f;
+
+            DrawRulesWarning(x + 18f, ty, w - 36f, r);
+            ty += 24f;
+
+            // ── ②b 占位数值提示 ──
+            //   卡表里 h/d/v 全 0 的卡会兜一套临时值（否则刀片 H=0、一进关卡就爆刀）。
+            //   必须写出来 —— 不然玩家会把这套临时值当成策划定的数值。
+            string ph = r.PlaceholderWarning();
+            if (!string.IsNullOrEmpty(ph))
+            {
+                GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f), ph, dimPanel);
+                ty += 22f;
+            }
+
+            // ── ③ 刀片（H / V / 四种附魔层数）──
+            GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f),
+                      "刀片：" + (r.blade != null ? r.blade.Describe() : "（无）")
+                      + (r.blade != null && r.blade.V <= 0 ? "　← 得分加成 0（该核心卡的 V 就是 0）" : ""),
+                      bodyPanel);
+            ty += 22f;
+
+            GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f),
+                      "附魔层数：" + (r.blade != null ? r.blade.layers.Describe() : "（无）")
+                      + "　　本回合已启动 " + r.startsThisTurn + " 次"
+                      + (r.startsThisTurn > 0 ? "（最后一次启动会触发献祭吞噬）" : ""),
+                      bodyPanel);
+            ty += 22f;
+
+            // ── ④ 目标素材 ──
+            GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f),
+                      "启动目标：" + r.TargetText,
+                      r.selected != null ? bodyPanel : dimPanel);
+            ty += 22f;
+
+            // ── ⑤ 手牌 / 桌面 ──
+            GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f),
+                      "手牌：素材 " + r.hand.Count + " 张｜法术 " + r.handSpells.Count + " 张"
+                      + "　桌面素材 " + r.LiveTableCount() + " 张"
+                      + (turnLoop.StagedCount > 0 ? "　投放区待放置 " + turnLoop.StagedText : ""),
+                      dimPanel);
+            ty += 24f;
+
+            // ── ⑥ 按钮 ──
+            float by = y + h - 46f;
+
+            bool canActivate = r.CanActivate && r.selected != null && !r.selected.removed;
+
+            bool oldEnabled = GUI.enabled;
+            GUI.enabled = canActivate;
+
+            if (GUI.Button(new Rect(x + 18f, by, 176f, 34f), "启动破壁机", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.ActivateJuicer();
+            }
+
+            GUI.enabled = oldEnabled;
+
+            if (GUI.Button(new Rect(x + 202f, by, 154f, 34f), "放置到桌面", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.Confirm();     // v2.1 下这一条 = 出牌（不消耗行动机会）
+            }
+
+            if (GUI.Button(new Rect(x + 364f, by, 132f, 34f), "结束本回合", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.EndRoundOrLevel();
+            }
+
+            if (GUI.Button(new Rect(x + 504f, by, 138f, 34f), "自动选目标", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.SelectNewestTarget();
+            }
+
+            // 不能启动的原因直接写出来 —— 按钮灰着却不解释，玩家只会以为是 bug
+            if (!canActivate)
+                GUI.Label(new Rect(x + 18f, by - 20f, w - 36f, 20f),
+                          "⚠ " + r.BlockReason, dimPanel);
+        }
+
+        /// <summary>
+        /// 未实现规则的醒目提示。
+        ///
+        /// 【这条提示的存在意义】"没实现"最坏的样子不是缺功能，而是**看起来实现了**。
+        ///   所以只要解析报告里有未识别的句子，这一行就必须是醒目的，
+        ///   而且要给一个能查到"是哪几句"的入口（F2）。
+        ///   报告没建出来时也不能装作干净 —— 那会写成"报告没建出来"。
+        /// </summary>
+        private void DrawRulesWarning(float x, float y, float w, TableRulesV21 r)
+        {
+            int n = r.UnrecognizedCount;
+
+            if (n < 0)
+            {
+                GUI.Label(new Rect(x, y, w, 22f), "⚠ 卡表解析报告没建出来 —— 无法确认哪些规则没实现", dimPanel);
+                return;
+            }
+
+            if (n == 0)
+            {
+                GUI.Label(new Rect(x, y, w, 22f),
+                          "✓ 卡表规则文本全部已识别（" + (r.report != null ? r.report.ParsedSentences + " 句" : "") + "）",
+                          dimPanel);
+                return;
+            }
+
+            // 用暖红色，和别的灰字拉开 —— 这是"别信这一条"的信号
+            Color prev = GUI.color;
+            GUI.color = new Color(1f, 0.62f, 0.42f);
+            GUI.Label(new Rect(x, y, w, 22f),
+                      "⚠ " + n + " 条规则未实现（这些规则不会生效），按 F2 查看", bodyPanel);
+            GUI.color = prev;
+        }
 
         private void DrawPhaseOverlay()
         {
@@ -695,6 +999,11 @@ namespace GameJam.Prototype
         /// <summary>回合结算。</summary>
         private void DrawTurnResult()
         {
+            // ── v2.1 分流 ──────────────────────────────────────────────
+            //   v2.1 没有"杯内粒子模拟"这一屏（分数由引擎即时结算），
+            //   这一屏改成"本回合打出来的账"：得分来源 + 结算日志尾部。
+            if (turnLoop.V21) { DrawTurnResultV21(); return; }
+
             TurnState t = turnLoop.turn;
 
             const float w = 580f, h = 262f;
@@ -728,13 +1037,48 @@ namespace GameJam.Prototype
 
         private void DrawLevelEnd()
         {
+            // ── v2.1 分流 ──────────────────────────────────────────────
+            //   v2.1 的关卡结束有四个原因（正文 §八），必须写清是哪一个 ——
+            //   "爆刀"和"4 回合用完"是两种完全不同的结果，混成一句
+            //   "手牌已用完，关卡结束"会让玩家以为是自己出牌出少了。
+            if (turnLoop.V21)
+            {
+                TableRulesV21 r = turnLoop.rulesV21;
+
+                const float vw = 520f, vh = 176f;
+                Rect vr = CenterBox(vw, vh);
+                GUI.Box(vr, GUIContent.none, panelBox);
+
+                GUI.Label(new Rect(vr.x + 22f, vr.y + 18f, vw - 44f, 34f),
+                          r.bursted ? "爆　刀 —— 关卡结束" : "关卡结束", h1Panel);
+
+                GUI.Label(new Rect(vr.x + 22f, vr.y + 58f, vw - 44f, 22f),
+                          "结束原因：" + (string.IsNullOrEmpty(r.endReason) ? "（未记录）" : r.endReason),
+                          bodyPanel);
+
+                GUI.Label(new Rect(vr.x + 22f, vr.y + 82f, vw - 44f, 22f),
+                          "最终分数：" + r.score + " / 目标分 " + r.targetScore
+                          + "　（爆刀时当前分数 ×2，正文 §五）",
+                          bodyPanel);
+
+                GUI.Label(new Rect(vr.x + 22f, vr.y + 106f, vw - 44f, 22f),
+                          "刀片：" + (r.blade != null ? r.blade.Describe() : "（无）"), dimPanel);
+
+                if (GUI.Button(new Rect(vr.x + 22f, vr.y + vh - 54f, vw - 44f, 40f), "进入结算", btn))
+                {
+                    GUI.FocusControl(null);
+                    turnLoop.ShowLevelResult();
+                }
+                return;
+            }
+
             const float w = 470f, h = 138f;
-            Rect r = CenterBox(w, h);
-            GUI.Box(r, GUIContent.none, panelBox);
+            Rect r2 = CenterBox(w, h);
+            GUI.Box(r2, GUIContent.none, panelBox);
 
-            GUI.Label(new Rect(r.x + 22f, r.y + 20f, w - 44f, 34f), "手牌已用完，关卡结束", h1Panel);
+            GUI.Label(new Rect(r2.x + 22f, r2.y + 20f, w - 44f, 34f), "手牌已用完，关卡结束", h1Panel);
 
-            if (GUI.Button(new Rect(r.x + 22f, r.y + 76f, w - 44f, 42f), "进入结算", btn))
+            if (GUI.Button(new Rect(r2.x + 22f, r2.y + 76f, w - 44f, 42f), "进入结算", btn))
             {
                 GUI.FocusControl(null);
                 turnLoop.ShowLevelResult();
@@ -743,6 +1087,10 @@ namespace GameJam.Prototype
 
         private void DrawLevelResult()
         {
+            // ── v2.1 分流 ──────────────────────────────────────────────
+            //   旧那一屏列的是"已投放模块 / 杯内食材"，v2.1 里这两个概念都不存在。
+            if (turnLoop.V21) { DrawLevelResultV21(); return; }
+
             TurnState t = turnLoop.turn;
 
             const float w = 580f, h = 316f;
@@ -826,6 +1174,259 @@ namespace GameJam.Prototype
 
             GUI.Label(new Rect(30f, y + 4f, w - 28f, 22f), PositionText(card), dimPanel);
             GUI.Label(new Rect(30f, y + 26f, w - 28f, 22f), "右键单击查看完整数据", dimPanel);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  v2.1：回合结算 / 关卡总结算 / 规则解析报告
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// v2.1 的回合结算屏。
+        ///
+        /// 【为什么不复用旧那一屏】旧屏列的是"杯内得分 / 本回合反应 / 杯内食材"，
+        /// 这三个概念在 v2.1 里都不存在（分数由引擎即时算，没有杯内模拟）。
+        /// 这里改成玩家真正要对账的东西：总分、本次启动的得分构成、以及引擎的原始日志。
+        /// 日志是**照贴**的 —— 玩家说"我明明这么打却没过"时，一条条对回去。
+        /// </summary>
+        private void DrawTurnResultV21()
+        {
+            TableRulesV21 r = turnLoop.rulesV21;
+            if (r == null) return;
+
+            const float w = 660f, h = 430f;
+            Rect box = CenterBox(w, h);
+            GUI.Box(box, GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(box.x + 22f, box.y + 14f, w - 44f, 32f),
+                      "第 " + r.turnIndex + " 回合" + (r.levelOver ? "（关卡已结束）" : "进行中"), h1Panel);
+
+            float y = box.y + 52f;
+
+            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 24f),
+                      "总分：" + r.score + " / " + r.targetScore
+                      + "　　刀片：" + (r.blade != null ? r.blade.Describe() : "（无）"), bodyPanel);
+            y += 24f;
+
+            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 24f),
+                      "附魔：" + (r.blade != null ? r.blade.layers.Describe() : "（无）")
+                      + "　　行动机会 " + r.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn,
+                      bodyPanel);
+            y += 24f;
+
+            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 24f),
+                      "本次启动：" + (string.IsNullOrEmpty(r.lastSummary) ? "（这一回合还没启动过）" : r.lastSummary),
+                      dimPanel);
+            y += 24f;
+
+            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 24f),
+                      "桌面素材：" + r.LiveTableCount() + " 张　　剩余手牌：" + r.HandText(), dimPanel);
+            y += 30f;
+
+            // ── 引擎日志尾部（结算顺序照贴，方便一条条对）──
+            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f), "── 上一次结算的引擎日志 ──", bodyPanel);
+            y += 24f;
+
+            List<string> tail = r.LastLogTail(12);
+            for (int i = 0; i < tail.Count; i++)
+            {
+                GUI.Label(new Rect(box.x + 26f, y, w - 48f, 20f), tail[i], dimPanel);
+                y += 19f;
+            }
+            if (tail.Count == 0)
+                GUI.Label(new Rect(box.x + 26f, y, w - 48f, 20f), "（还没有启动过 —— 点顶栏的「启动破壁机」）", dimPanel);
+
+            // ── 按钮 ──
+            bool over = r.levelOver || r.turnIndex >= GameJam.Rules.LevelRun.TurnsPerLevel;
+            string label = over ? "结束本关" : "下一回合";
+
+            if (GUI.Button(new Rect(box.x + 22f, box.y + h - 56f, 220f, 42f), label, btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.NextTurn();
+            }
+
+            if (GUI.Button(new Rect(box.x + w - 242f, box.y + h - 56f, 220f, 42f), "继续操作桌面", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.phase = TablePhase.Select;
+            }
+        }
+
+        /// <summary>v2.1 的关卡总结算。列出 v2.1 真正有的东西（刀片 / 附魔 / 桌面 / 日志）。</summary>
+        private void DrawLevelResultV21()
+        {
+            TableRulesV21 r = turnLoop.rulesV21;
+            if (r == null) return;
+
+            const float w = 660f, h = 420f;
+            Rect box = CenterBox(w, h);
+            GUI.Box(box, GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(box.x + 22f, box.y + 14f, w - 44f, 34f),
+                      turnLoop.level.Name + "　总分 " + r.score + " / 目标分 " + r.targetScore
+                      + "　" + (turnLoop.Passed ? "通过" : "未通过"), h1Panel);
+
+            float y = box.y + 54f;
+
+            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
+                      "结束原因：" + (string.IsNullOrEmpty(r.endReason) ? "（未记录）" : r.endReason), bodyPanel);
+            y += 24f;
+
+            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
+                      "刀片：" + (r.blade != null ? r.blade.Describe() : "（无）"), bodyPanel);
+            y += 24f;
+
+            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
+                      "最终附魔：" + (r.blade != null ? r.blade.layers.Describe() : "（无）"), bodyPanel);
+            y += 24f;
+
+            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
+                      "打过的回合：" + r.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel
+                      + "　桌面残留素材：" + r.LiveTableCount() + " 张", dimPanel);
+            y += 26f;
+
+            // 默认放行要说出来，不然"0 分也算通过"看着像 bug
+            if (turnLoop.level.passByDefault)
+            {
+                GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
+                          "（Level.passByDefault 还开着：没到目标分也算通过）", dimPanel);
+                y += 22f;
+            }
+
+            if (r.warnings.Count > 0)
+            {
+                GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
+                          "⚠ 本关有 " + r.warnings.Count + " 条引擎警告（卡表缺产物之类），F2 看报告", dimPanel);
+            }
+
+            string label = turnLoop.Passed
+                ? (turnLoop.HasNextLevel ? "进入下一关" : "已是最后一关")
+                : "重试本关";
+
+            if (GUI.Button(new Rect(box.x + 22f, box.y + h - 56f, 230f, 40f), label, btn))
+            {
+                GUI.FocusControl(null);
+                if (turnLoop.Passed) turnLoop.NextLevel();
+                else                 turnLoop.RestartLevel();
+            }
+
+            if (GUI.Button(new Rect(box.x + w - 230f, box.y + h - 56f, 208f, 40f), "返回关卡界面", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.OpenLevelSelect();
+            }
+        }
+
+        /// <summary>
+        /// 卡牌规则解析报告（F2）—— **未实现规则必须能被看见**。
+        ///
+        /// 【为什么这块要单独做】
+        ///   "⚠ 3 条规则未实现"这句话本身没法行动：策划要知道是哪张卡的哪句话、
+        ///   为什么没认出来、该怎么改。RuleReport 就是为这个存在的，
+        ///   不给入口等于没做 —— 未实现的规则会看起来像生效了。
+        ///
+        /// 【万一报告建不出来】不能装作干净：这里会明写"报告没建出来"，
+        ///   因为"没有未识别规则"和"不知道有没有未识别规则"是两回事。
+        /// </summary>
+        private void DrawRulesReportPanel()
+        {
+            TableRulesV21 r = turnLoop != null ? turnLoop.rulesV21 : null;
+
+            float w = Mathf.Min(940f, Screen.width - 40f);
+            float h = Mathf.Min(640f, Screen.height - 40f);
+            Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+
+            GUI.Box(box, GUIContent.none, panelBox);
+
+            GUI.Label(new Rect(box.x + 20f, box.y + 12f, w - 180f, 32f),
+                      "卡牌规则解析报告（v2.1）", h1Panel);
+
+            if (GUI.Button(new Rect(box.x + w - 130f, box.y + 12f, 112f, 30f), "关闭 (F2)", btn))
+            {
+                GUI.FocusControl(null);
+                rulesReportOpen = false;
+            }
+
+            if (r == null || r.report == null)
+            {
+                GUI.Label(new Rect(box.x + 20f, box.y + 56f, w - 40f, 24f),
+                          "⚠ 报告没建出来 —— 现在**无法确认**哪些规则没实现。"
+                          + "先看 Console 里 [V21] 那条警告。", bodyPanel);
+                return;
+            }
+
+            GUI.Label(new Rect(box.x + 20f, box.y + 54f, w - 40f, 24f),
+                      r.report.SummaryLine(), bodyPanel);
+
+            // 只读文字：用 ScrollView 包（这里不是 GUILayout.Window，没有窗口自动适配的问题）
+            Rect view = new Rect(box.x + 16f, box.y + 84f, w - 32f, h - 100f);
+            rulesReportScroll = GUI.BeginScrollView(view, rulesReportScroll, new Rect(0f, 0f, w - 56f, 4600f));
+
+            float y = 0f;
+            y = ReportSection(y, w - 60f,
+                              "未识别清单（这些句子不会生效 —— 必须给策划确认）",
+                              UnrecognizedLines(r));
+
+            y = ReportSection(y, w - 60f, "规则表接不上（标签标了、连锁产物没写：命中却不变形）",
+                              r.report.tableGaps);
+
+            y = ReportSection(y, w - 60f, "可疑产出（产出的卡名不在卡表里）",
+                              r.report.unknownProducts);
+
+            y = ReportSection(y, w - 60f, "占位数值（正文没给数，用了默认值）",
+                              r.report.placeholders);
+
+            y = ReportSection(y, w - 60f, "v3 已取消、卡表里还留着的 v2.1 写法（写了也不生效）",
+                              r.report.superseded);
+
+            y = ReportSection(y, w - 60f, "当前模型执行不了的条目", r.report.unsupported);
+
+            y = ReportSection(y, w - 60f, "本关引擎打过的警告（运行时）", r.warnings);
+
+            ReportSection(y, w - 60f, "正文自相矛盾 / 没写清（已按一个明确选择实现，待策划拍板）",
+                          r.report.conflicts);
+
+            GUI.EndScrollView();
+        }
+
+        private List<string> UnrecognizedLines(TableRulesV21 r)
+        {
+            List<string> lines = new List<string>();
+            for (int i = 0; i < r.report.unrecognized.Count; i++)
+            {
+                GameJam.Rules.UnrecognizedRule u = r.report.unrecognized[i];
+                if (u == null) continue;
+
+                lines.Add(u.cardName + "·" + u.field + "　原句：" + u.sentence
+                          + "　→ " + u.reason
+                          + (string.IsNullOrEmpty(u.suggestion) ? "" : "（建议：" + u.suggestion + "）"));
+            }
+            return lines;
+        }
+
+        /// <summary>报告里的一节。返回下一节的起始 y（自增式排版，免得每节都算一遍偏移）。</summary>
+        private float ReportSection(float y, float w, string title, List<string> lines)
+        {
+            int n = lines != null ? lines.Count : 0;
+
+            GUI.Label(new Rect(8f, y, w, 24f), "── " + title + "：" + n + " ──", h1Panel);
+            y += 26f;
+
+            if (n == 0)
+            {
+                GUI.Label(new Rect(20f, y, w - 20f, 20f), "（无）", dimPanel);
+                y += 22f;
+            }
+            else
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    GUI.Label(new Rect(20f, y, w - 20f, 40f), "· " + lines[i], dimPanel);
+                    y += 40f;
+                }
+            }
+
+            return y + 10f;
         }
 
         // ══════════════════════════════════════════════════════════════

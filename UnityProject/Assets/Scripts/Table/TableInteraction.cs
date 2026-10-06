@@ -98,8 +98,7 @@ namespace GameJam.Prototype
                 // 悬停和右键检视不受限制 —— 那两件事任何时候都该能用。
                 bool mayDrag = (turnLoop == null) || turnLoop.CanInteract;
 
-                if (mayDrag && Input.GetMouseButtonDown(0) && Hovered != null && !PhysicsOn)
-                    BeginDrag(Hovered, ray);
+                if (Input.GetMouseButtonDown(0)) HandleLeftClick(ray, mayDrag);
             }
             else if (Dragging == null)
             {
@@ -111,6 +110,10 @@ namespace GameJam.Prototype
                 if (Input.GetMouseButtonUp(0)) EndDrag();
                 else                           MoveDrag(ray);
             }
+
+            // v2.1：把"启动目标"的高亮压回去（必须排在悬停刷新之后，鼠标悬停才盖得住它）
+            if (turnLoop != null && turnLoop.rulesV21 != null && TableSettings.UseRulesV21)
+                turnLoop.rulesV21.ApplySelectionHighlight();
 
             HandleCameraAndInspect(ray);
             UpdateSlotMarkers();
@@ -232,10 +235,74 @@ namespace GameJam.Prototype
 
         private void SetHovered(PlayCard card)
         {
-            if (Hovered == card) return;
-            if (Hovered != null) Hovered.SetHover(false);
+            // ★ 目标素材的高亮由 TableRulesV21 每帧压回去（见它 ApplySelectionHighlight 的说明）。
+            //   这里的判断是"别把那份高亮撤掉"：鼠标从目标卡移开时 Hovered 变成 null，
+            //   如果照常 SetHover(false)，目标卡就不像被选中了。
+            bool keepTarget = (Hovered != null && Hovered != card && IsPreviewTarget(Hovered));
+
+            if (Hovered == card)
+            {
+                if (card != null) card.SetHover(true);
+                return;
+            }
+
+            if (Hovered != null && !keepTarget) Hovered.SetHover(false);
+
             Hovered = card;
             if (Hovered != null) Hovered.SetHover(true);
+        }
+
+        /// <summary>这张卡是不是规则侧的"启动目标"（不在 v2.1 模式下永远是 false）。</summary>
+        private bool IsPreviewTarget(PlayCard card)
+        {
+            if (card == null || turnLoop == null || turnLoop.rulesV21 == null) return false;
+            if (!TableSettings.UseRulesV21) return false;
+            return turnLoop.rulesV21.IsPreviewTarget(card);
+        }
+
+        /// <summary>
+        /// 左键按下：分两种情况。
+        ///
+        ///   点在**桌面素材**上 → 选它当"启动破壁机"的目标（正文 §三.2：启动要选一张桌面素材）
+        ///   点在**手牌法术**上 → 直接打出（正文 §2.1：法术打出无代价、不消耗行动机会）
+        ///   点在其他牌（手牌素材）→ 拿起拖动，走原来那条路
+        ///
+        /// 【为什么这两件事必须在这里做】
+        ///   桌面素材的"被点中"和法术的"被打出"都是**鼠标事件**，而鼠标状态只有这一处权威
+        ///   （见 HandleCameraAndInspect 顶部那段说明）。放去 HUD 或 TableTurnLoop 里，
+        ///   就得再读一次 Input.GetMouseButtonDown，迟早出现"点一下触发两件事"。
+        ///
+        /// 【为什么不做成"拖到某个区域再确认"】
+        ///   桌面素材已经在桌面上了（不是从手牌拖过去），再要求拖一次是多余的动作；
+        ///   法术没有桌面位置，拖它也没有落点。所以这两件事用"单击"，其余的照旧拖拽。
+        /// </summary>
+        private void HandleLeftClick(Ray ray, bool mayDrag)
+        {
+            if (PhysicsOn) return;              // 物理模式下点击不管用（和原来的拖动一致）
+
+            TableRulesV21 rules = turnLoop != null ? turnLoop.rulesV21 : null;
+            PlayCard hit = Hovered;
+
+            if (rules != null && TableSettings.UseRulesV21 && hit != null)
+            {
+                // ① 桌面素材 → 选中当目标（不受 CanInteract 限制：任何时候都该能看目标是谁）
+                if (rules.IsTableCard(hit))
+                {
+                    rules.OnTableCardClicked(hit);
+                    return;
+                }
+
+                // ② 手牌法术 → 直接打出。
+                //    ★ 但开局准备阶段不行：那时候还没进关卡（正文 §2.5 的刀片核心都还没定），
+                //      在选刀片界面上把法术打掉，等于开局前就先附了一次魔 —— 规则上说不通。
+                if (rules.IsHandSpellCard(hit) && turnLoop.phase == TablePhase.Select)
+                {
+                    rules.OnSpellCardClicked(hit);
+                    return;
+                }
+            }
+
+            if (mayDrag && hit != null) BeginDrag(hit, ray);
         }
 
         // ── 拖拽 ──────────────────────────────────────────────────────

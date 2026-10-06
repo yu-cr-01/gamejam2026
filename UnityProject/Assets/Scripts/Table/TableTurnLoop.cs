@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using GameJam.Data;
+using GameJam.Rules;
 using GameJam.Sim;
 
 namespace GameJam.Prototype
@@ -62,7 +63,19 @@ namespace GameJam.Prototype
         public TableBoard     board;
         public TableChoiceRig choiceRig;
 
-        /// <summary>开场界面（书 / 木牌 / 蜡烛）</summary>
+        /// <summary>
+        /// v2.1 规则侧总装（刀片 / 桌面素材 / 手牌法术 / 行动机会 / 回合 / 分数）。
+        ///
+        /// 【什么时候是 null】
+        ///   只有 TableSettings.UseRulesV21 为假、或者装配还没走到 BuildRulesV21 时才是 null。
+        ///   旧流程一行都不碰它 —— 所有 v2.1 的分流点都先看 <see cref="V21"/>。
+        /// </summary>
+        public TableRulesV21 rulesV21;
+
+        /// <summary>本局是否跑 v2.1 规则（转发 TableSettings，读起来短一点，也方便以后改成按关卡配）。</summary>
+        public bool V21 { get { return TableSettings.UseRulesV21 && rulesV21 != null; } }
+
+        /// <summary>开局界面（书 / 木牌 / 蜡烛）</summary>
         public TableTitleRig  titleRig;
 
         /// <summary>当前这一关（关卡定义 + 过程数据 + 进行状态）</summary>
@@ -210,6 +223,7 @@ namespace GameJam.Prototype
             turn.Reset();
 
             staged.Clear();
+            V21ClearTable();
             paused          = false;
             settingsOpen    = false;
             lastPlayed      = "";
@@ -352,7 +366,26 @@ namespace GameJam.Prototype
             if (setup != null)
             {
                 setup.deckName = deck != null ? deck.name : "";
-                setup.RebuildHand();
+
+                if (V21)
+                {
+                    // ★ v2.1 模式：手牌的权威在 rulesV21 里，不在 setup.hand。
+                    //   所以这里**不能**调 setup.RebuildHand()（它会去读旧 TurnState 的手牌，
+                    //   而旧手牌在 v2.1 里是空的 —— 会走 DealHand 的兜底分支凭空摆一张铁块）。
+                    //   开局摆牌由 ConfirmBladePick（定完刀片核心之后）负责，那时才该看见手牌。
+                    setup.ClearHand();
+                }
+                else
+                {
+                    setup.RebuildHand();
+                }
+            }
+
+            if (V21)
+            {
+                // 发初始手牌：4 素材 + 1 法术（正文 §2.6 / §八），并建出卡表解析报告
+                rulesV21.BeginLevel(deck, level != null ? level.TargetScore : 0);
+                staged.Clear();
             }
 
             BuildBladeCard();
@@ -390,6 +423,45 @@ namespace GameJam.Prototype
         {
             if (phase != TablePhase.BladePick) return;
 
+            // ── v2.1 分流 ──────────────────────────────────────────────
+            //   正文 §2.5：核心的 H → 刀片初始 H、V → 刀片初始 V，该卡移出手牌。
+            //   这里之前是 TablePhase.BladePick，确认之后才真正成立刀片。
+            if (V21)
+            {
+                MaterialCard mc = bladeCoreCard != null ? bladeCoreCard : rulesV21.CoreCandidate();
+                if (mc == null)
+                {
+                    notice = "没有可当刀片核心的素材（手牌里没有 H>0 的素材卡）";
+                    return;
+                }
+
+                rulesV21.ChooseCore(mc);
+                bladeCoreCard = null;
+
+                if (!rulesV21.HasCore)
+                {
+                    notice = "刀片核心「" + mc.name + "」的 H 是 0 —— H=0 一进关卡就爆刀，换一张";
+                    return;
+                }
+
+                rulesV21.StartFirstTurn();
+
+                // 刀片是这一局的**友方单位**，整局都坐在桌面中心（和旧流程同一条理由）
+                BuildBladeCard();
+
+                // 手牌：定完核心之后才摆出来（核心那张已经被移出手牌了）
+                rulesV21.RebuildHand();
+
+                notice = "刀片已定：" + rulesV21.blade.name +
+                         "（H " + rulesV21.blade.H + " · V " + rulesV21.blade.V + "）" +
+                         "　本关 " + GameJam.Rules.LevelRun.TurnsPerLevel + " 回合 × " +
+                         GameJam.Rules.LevelRun.ActionPointsPerTurn + " 次行动";
+
+                phase = TablePhase.Select;
+                SyncJuicer();
+                return;
+            }
+
             Choice c = FindChoice(GameConfig.BladePickId);
             if (c != null)
             {
@@ -420,12 +492,51 @@ namespace GameJam.Prototype
         {
             KillBladeCard();
 
+            // ── v2.1：刀片核心还没定，先摆一张"候选核心"当门面 ──
+            //   正文 §2.5 的刀片是玩家从手里挑的，不是配置里指定的；
+            //   选刀片阶段桌面上得有个东西可看，否则"刀片位"是空的。
+            //   这里取手牌第一张素材 —— 也就是玩家不点任何牌时默认会选中的那张，
+            //   和 ConfirmBladePick 的兜底口径保持一致（两边不一致就会出现
+            //   "桌上摆着 A、确认下去变成 B"）。
+            if (V21)
+            {
+                MaterialCard core = rulesV21.CoreCandidate();
+                if (core == null || core.card == null) return;
+
+                bladeCard = CardFactory.Create(Card.Of(core.card), setup.cardsRoot,
+                                               TableChoiceRig.BladeSpot, Vector3.zero);
+                return;
+            }
+
             Card c = turn.blade != null ? Card.Of(turn.blade) : null;
             if (c == null) return;
 
             bladeCard = CardFactory.Create(c, setup.cardsRoot,
                                            TableChoiceRig.BladeSpot, Vector3.zero);
         }
+
+        /// <summary>
+        /// v2.1：玩家点了手牌里的一张素材，把它记为刀片核心的**候选**。
+        /// 真正生效在 ConfirmBladePick —— 和旧流程一样，点只是选，确认才算数。
+        /// </summary>
+        public bool PickCoreCandidate(MaterialCard mc)
+        {
+            if (mc == null || mc.card == null) return false;
+
+            bladeCoreCard = mc;
+
+            // 刀片位换成这张卡，同时**整副手牌重建一次** —— 否则卡牌的 homePosition
+            // 还停在旧位置，确认之后 LayoutHand 会把剩下的牌重新排一遍，
+            // 那张被点过的牌会先跳回去再让位，看起来像点错了。
+            rulesV21.RebuildHand();
+            BuildBladeCard();
+
+            notice = "刀片核心候选：" + mc.name + "（H " + mc.H + " · V " + mc.V + "）—— 按确认进入关卡";
+            return true;
+        }
+
+        /// <summary>v2.1 的刀片核心候选（玩家点过的那张，没点过就是手牌第一张）。</summary>
+        public MaterialCard bladeCoreCard;
 
         private void KillBladeCard()
         {
@@ -450,6 +561,20 @@ namespace GameJam.Prototype
         {
             if (phase != TablePhase.BladePick) return false;
             if (handCard == null || setup == null || setup.hand == null) return false;
+
+            // ── v2.1：点一张手牌素材 = 选它当刀片核心（正文 §2.5）──
+            //   注意这里**换的是"候选"**，不是刀片本身：刀片要等确认才成立，
+            //   确认之前被选中的卡仍然留在手牌里（所以能来回换）。
+            if (V21)
+            {
+                MaterialCard mc = rulesV21.FindHandMaterial(handCard);
+                if (mc == null)
+                {
+                    notice = "法术不能作为刀片核心 —— 刀片核心必须是一张素材";
+                    return false;
+                }
+                return PickCoreCandidate(mc);
+            }
 
             // 模块不能当刀片 —— 规则上的硬约束，说清楚，别静默失败
             if (handCard.IsModule)
@@ -543,7 +668,11 @@ namespace GameJam.Prototype
             if (staged.Contains(card)) return;
 
             // 规格：每回合只有两次行动机会，投放一次算一次
-            if (ActionsLeft <= 0)
+            //
+            // ★ v2.1 没有这条限制：正文 §2.6"手牌无上限，出牌不消耗行动机会"。
+            //   在 v2.1 模式下拦这一下，等于把"出牌自由"这条规则又掐回去了 ——
+            //   玩家手里 3 张素材会被告知"行动用完了"，而那时行动机会明明是 5 次。
+            if (!V21 && ActionsLeft <= 0)
             {
                 notice = "这个回合的行动用完了（" + actionsPerTurn + " 次）";
                 return;
@@ -599,6 +728,10 @@ namespace GameJam.Prototype
         public void Confirm()
         {
             if (phase != TablePhase.Select) return;
+
+            // ── v2.1 分流 ──────────────────────────────────────────────
+            //   出牌不消耗行动机会（正文 §2.6）、只有"启动破壁机"才吃行动机会。
+            if (V21) { ConfirmV21(); return; }
 
             // 规格：无食材时不得开始回合 —— 至少得有一张食材牌打出去。
             // 两次行动全空打、而且杯里本来就没东西，这一回合就没意义。
@@ -676,12 +809,196 @@ namespace GameJam.Prototype
         }
 
         // ══════════════════════════════════════════════════════════════
+        //  v2.1：出牌 / 启动 / 回合 / 关卡
+        //
+        //  【分工】这一节只做"阶段机该做的事"：把 3D 上的动作翻成对 TableRulesV21 的调用，
+        //  再把结果翻回阶段和提示。一条规则都不在这里实现 ——
+        //  规则全在 TableRulesV21 → TurnEngine 那条路上。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// v2.1 的「确认投放」= **出牌**：投放区里的素材上桌、法术立即生效。
+        /// 两者都**不消耗行动机会**（正文 §2.6、§七-10/11）。
+        ///
+        /// 【为什么法术不在这里出】
+        ///   法术的入口是"点手牌里的那张卡"（TableInteraction → OnSpellCardClicked），
+        ///   因为它不经过桌面。这里只兜一句提示，免得玩家把法术拖进法术槽之后按确认却什么都没发生。
+        /// </summary>
+        public void ConfirmV21()
+        {
+            if (rulesV21 == null) return;
+
+            if (rulesV21.levelOver)
+            {
+                notice = "关卡已结束（" + rulesV21.endReason + "）";
+                return;
+            }
+
+            if (staged.Count == 0)
+            {
+                notice = "桌上没有待放置的牌 —— 把素材拖到桌面中间，或者直接点手牌里的法术";
+                return;
+            }
+
+            List<PlayCard> batch = new List<PlayCard>(staged);
+            staged.Clear();
+
+            int mats = 0, spells = 0;
+
+            for (int i = 0; i < batch.Count; i++)
+            {
+                PlayCard card = batch[i];
+                if (card == null) continue;
+
+                if (board != null) board.Clear(card);
+
+                // ── 法术：立即打出（附魔到刀片），不消耗行动机会 ──
+                //   放在这个分支里是为了"拖进法术槽再点确认"这条老习惯也能走通，
+                //   和"直接点手牌"是同一个入口，不是第二条实现。
+                if (rulesV21.OnSpellCardClicked(card)) { spells++; continue; }
+
+                // ── 素材：上桌 ──
+                MaterialCard mc = rulesV21.FindHandMaterial(card);
+                if (mc == null)
+                {
+                    card.ReturnHome();
+                    notice = "这张牌不在 v2.1 的手牌里（" + card.DisplayName + "）";
+                    continue;
+                }
+
+                // ★ 素材上桌**不走 ConsumeInto**（那张牌不是被机器吸走的）。
+                //   这里只改规则状态，3D 卡由下面 SyncTableVisuals 统一重建并摆到桌面槽位上。
+                //   一开始写成"上桌 + 飞进罐口"，结果是同一张牌在桌上和罐口各出现一次 ——
+                //   "被吸进去"这个动作用在启动破壁机那一次才成立。
+                MaterialState st = rulesV21.PlayMaterial(mc);
+                if (st != null) mats++;
+            }
+
+            // 表现层对齐：手牌重排、桌面素材建卡（PlayMaterial 只动规则状态）
+            rulesV21.RebuildHand();
+            rulesV21.SyncTableVisuals();
+            rulesV21.SyncJuicer();
+
+            lastPlayed = mats + " 张素材上桌" + (spells > 0 ? "，" + spells + " 张法术生效" : "");
+            notice = lastPlayed + "　（出牌不消耗行动机会，行动机会还剩 " + rulesV21.actionPoints +
+                     " 次 —— 点「启动破壁机」才消耗）";
+        }
+
+        /// <summary>
+        /// v2.1 的「启动破壁机」：消耗 1 行动机会 + 1 刀片H，对选中素材跑一次完整结算。
+        /// 结算、计分、爆刀、献祭吞噬全部在 TurnEngine 里（正文 §四）。
+        /// </summary>
+        public void ActivateJuicer()
+        {
+            if (rulesV21 == null) return;
+
+            if (!rulesV21.CanActivate)
+            {
+                notice = rulesV21.BlockReason;
+                return;
+            }
+            if (rulesV21.selected == null)
+            {
+                notice = "先在桌面上点一张素材当启动目标";
+                return;
+            }
+
+            GameJam.Rules.TurnResult r = rulesV21.TryActivate(rulesV21.selected);
+            if (r == null) return;
+
+            if (r.rejected)
+            {
+                notice = "启动被拒绝 —— 看结算日志";
+                return;
+            }
+
+            // 结算摘要：分数变化 + 产出（玩家最关心的两件事）
+            string line = r.ScoreLine();
+            if (r.produced.Count > 0) line += "　产出 " + r.ProducedText();
+
+            if (rulesV21.levelOver)
+            {
+                line += rulesV21.bursted ? "　★ 爆刀，关卡结束（分数 ×2）" : "　★ 达到目标分，关卡结束";
+            }
+
+            notice = line;
+
+            // 爆刀 / 达标 → 直接进关卡结束（不再等回合一格一格走）
+            if (rulesV21.levelOver) phase = TablePhase.LevelEnd;
+        }
+
+        /// <summary>v2.1：自动选最新上桌的素材当启动目标。</summary>
+        public void SelectNewestTarget()
+        {
+            if (rulesV21 == null) return;
+
+            rulesV21.SelectNewestTableMaterial();
+            notice = rulesV21.selected != null
+                ? "启动目标：" + rulesV21.selected.name + "（D " + rulesV21.selected.D + "/" + rulesV21.selected.fullD + "）"
+                : "桌面上没有素材了";
+        }
+
+        /// <summary>
+        /// v2.1：结束本回合（附魔衰减）或结束关卡。
+        /// 到一个回合的行动机会用完之后，这是唯一该按的键。
+        /// </summary>
+        public void EndRoundOrLevel()
+        {
+            if (rulesV21 == null) return;
+
+            if (rulesV21.levelOver) { phase = TablePhase.LevelEnd; return; }
+
+            rulesV21.EndRound();
+
+            if (rulesV21.levelOver)
+            {
+                notice = "4 回合已用尽 → 关卡结束，最终分数 " + rulesV21.score;
+                phase = TablePhase.LevelEnd;
+                return;
+            }
+
+            staged.Clear();
+            lastPlayed = "";
+            notice = "第 " + rulesV21.turnIndex + " 回合开始：行动机会 " + rulesV21.actionPoints + "/" +
+                     GameJam.Rules.LevelRun.ActionPointsPerTurn + "；附魔层数 −1：" +
+                     rulesV21.blade.layers.Describe();
+
+            rulesV21.RebuildHand();
+            rulesV21.SyncTableVisuals();
+            rulesV21.SyncJuicer();
+        }
+
+        // ══════════════════════════════════════════════════════════════
         //  回合推进
         // ══════════════════════════════════════════════════════════════
 
         /// <summary>结算界面按「下一回合」。手牌空了就直接进关卡结束。</summary>
         public void NextTurn()
         {
+            // ── v2.1 分流 ──────────────────────────────────────────────
+            //   关卡结束条件是"4 回合耗尽 / 爆刀 / 主动结束 / 达到目标分"（正文 §八），
+            //   **不是手牌空了** —— 手牌空了只要回合还没用完就能继续（D耗尽还在产物）。
+            if (V21)
+            {
+                if (rulesV21.levelOver || rulesV21.turnIndex >= GameJam.Rules.LevelRun.TurnsPerLevel)
+                {
+                    if (!rulesV21.levelOver && string.IsNullOrEmpty(rulesV21.endReason))
+                        rulesV21.endReason = "4 回合耗尽";
+                    phase = TablePhase.LevelEnd;
+                    return;
+                }
+
+                staged.Clear();
+                lastPlayed = "";
+                notice     = "";
+                phase = TablePhase.Select;
+
+                rulesV21.SelectNewestTableMaterial();
+                rulesV21.RebuildHand();
+                rulesV21.SyncTableVisuals();
+                return;
+            }
+
             if (turn.IsHandEmpty)
             {
                 phase = TablePhase.LevelEnd;
@@ -717,6 +1034,7 @@ namespace GameJam.Prototype
             notice       = "";
 
             if (setup != null) setup.ClearHand();
+            V21ClearTable();
             KillBladeCard();
 
             OpenLevelSelect();
@@ -737,6 +1055,7 @@ namespace GameJam.Prototype
 
             if (choiceRig != null) choiceRig.ClearDeckCards();
             KillBladeCard();
+            V21ClearTable();
 
             if (setup != null)
             {
@@ -773,6 +1092,8 @@ namespace GameJam.Prototype
 
             if (setup != null) setup.ClearHand();
             KillBladeCard();
+            V21ClearTable();
+            bladeCoreCard = null;
 
             StartDeckPick();
         }
@@ -806,7 +1127,18 @@ namespace GameJam.Prototype
         public void SyncJuicer()
         {
             if (juicer == null) return;
+
+            // v2.1 的分数在 rulesV21 里；旧 TurnState 的那个只跟不过来一半是不行的
+            // （两边各推一次液面，会出现"按一下按钮液面跳回去"的鬼影）
+            if (V21) { juicer.SetScore(rulesV21.score, Mathf.Max(1, rulesV21.targetScore)); return; }
+
             juicer.SetScore(turn.score, Mathf.Max(1, turn.targetScore));
+        }
+
+        /// <summary>v2.1：把上一关留在桌面上的素材 3D 卡清掉（退关卡 / 重开 / 回开场都要）。</summary>
+        private void V21ClearTable()
+        {
+            if (rulesV21 != null) rulesV21.ClearTable();
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -818,6 +1150,10 @@ namespace GameJam.Prototype
             // 暂停 / 设置面板开着的时候，模拟也停住 ——
             // 否则暂停回来会发现模拟凭空跑了半截
             if (paused || settingsOpen) return;
+
+            // v2.1 没有"模拟中"这个阶段（分数由引擎即时结算，不等粒子模拟），
+            // 所以这一段整块跳过 —— 但旧流程那一行都不删。
+            if (V21) return;
 
             if (phase != TablePhase.Simulating) return;
 

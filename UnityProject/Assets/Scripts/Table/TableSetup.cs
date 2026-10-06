@@ -113,6 +113,28 @@ namespace GameJam.Prototype
             turnLoop.setup  = this;
             turnLoop.juicer = juicer;
             turnLoop.board  = board;
+
+            BuildRulesV21(go);
+        }
+
+        /// <summary>
+        /// v2.1 的规则侧总装。
+        ///
+        /// 【为什么挂在同一个 GameObject 上】
+        ///   两者是"阶段机 / 规则状态"的一对，生命周期完全一致（一关一起开、一起关）。
+        ///   分两个节点的话，清桌面时要在两处分别 Destroy，漏一个就留下一桌幽灵卡。
+        ///
+        /// 【为什么不管开关都建出来】
+        ///   建一个空对象几乎没有成本，而"开关一开却发现组件是 null"会让所有分流点
+        ///   全部静默走旧流程 —— 那是最难查的一类问题（看起来开关没生效）。
+        ///   TableTurnLoop.V21 里的 `rulesV21 != null` 只是防御，不是正常路径。
+        /// </summary>
+        private void BuildRulesV21(GameObject host)
+        {
+            turnLoop.rulesV21 = host.AddComponent<TableRulesV21>();
+            turnLoop.rulesV21.loop      = turnLoop;
+            turnLoop.rulesV21.cardsRoot = cardsRoot;
+            turnLoop.rulesV21.juicer    = juicer;
         }
 
         // ── 选择环节（牌组 / 刀片）────────────────────────────────────
@@ -370,11 +392,24 @@ namespace GameJam.Prototype
         /// 谁改了规则另一份都不知道。而且那份实现漏掉了变速模块，
         /// 模块永远进不了玩家手里。
         /// 现在唯一的数据来源是 turnLoop.turn，这里只负责把它画出来。
+        ///
+        /// 【v2.1 为什么整段绕开】
+        ///   v2.1 的手牌（4 素材 + 1 法术）在 TableRulesV21 里，不在 TurnState 里 ——
+        ///   而且是"素材 + 法术"两种形状，这里每张都按 Ingredient 造卡会造错。
+        ///   所以这里**直接返回**，v2.1 的手牌由 TableRulesV21.RebuildHand() 全权负责。
+        ///
+        ///   ★ 这里不能写成"调 rulesV21.RebuildHand() 再返回"：
+        ///     那个方法内部会调 setup.ClearHand() + 逐张造卡，而 setup.RebuildHand()
+        ///     又会调回 DealHand —— 两边互相调用就是无限递归。
+        ///     （TableRulesV21.RebuildHand 不调 setup.RebuildHand，所以单向是安全的。）
         /// </summary>
         private void DealHand()
         {
             hand.Clear();
             if (turnLoop == null || cardsRoot == null) return;
+
+            if (turnLoop.V21) return;
+
             TurnState st = turnLoop.turn;
             System.Collections.Generic.List<Card> cards = st.hand;
 

@@ -48,6 +48,23 @@ namespace GameJam.Prototype
         /// <summary>所在卡槽索引。-1 表示不在槽位上（在手牌 / 被拿在手里）</summary>
         public int slotIndex = -1;
 
+        /// <summary>
+        /// v2.1：这张 3D 卡对应的**手牌素材**（规则侧的对象）。
+        ///
+        /// 【为什么要把引用直接挂在卡上，而不是靠名字去找】
+        ///   手牌 3D 卡是"照着手牌列表逐张造出来"的，造卡时顺手把引用绑上去是最稳的。
+        ///   靠显示名去找曾经踩过：卡面名字里带着 D（`水 D3`），而 D 是会变的 ——
+        ///   出牌、形态变化、跨回合都会改，名字一对不上就"这张牌不在手牌里"，
+        ///   表现是**点出牌没反应、牌还留在手里**（而且日志里看不出哪里错了）。
+        ///   引用不会因为改名而失配。
+        ///
+        /// 只由 TableRulesV21.RebuildHand 填。旧流程一律是 null，谁都不用管它。
+        /// </summary>
+        public MaterialCard bindingMaterial;
+
+        /// <summary>v2.1：这张 3D 卡对应的**手牌法术**（规则侧的对象）。</summary>
+        public SpellCard bindingSpell;
+
         /// <summary>手牌原位 —— 放不出去时回到这里</summary>
         public Vector3 homePosition;
         public Vector3 homeEuler;
