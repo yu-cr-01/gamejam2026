@@ -61,6 +61,29 @@
           "effects": [ { "attr": "H", "op": "Add", "value": 4 } ]
         }
       ]
+    },
+
+    { "_comment": "以下三副是 v2.1 牌组：卡 id 来自 cards_v21.json（不是上面的 ingredients 表）。旧流程不认这三副的效果，但留着不影响旧牌组。" },
+    {
+      "id": "deck_water_v21",
+      "name": "水 · 冷热流",
+      "initialBladeId": "water",
+      "ingredientIds": [ "water", "ice", "steam", "salt" ],
+      "modules": []
+    },
+    {
+      "id": "deck_iron_v21",
+      "name": "铁 · 熔融流",
+      "initialBladeId": "iron",
+      "ingredientIds": [ "iron", "molten_iron", "iron_solution", "iron_vapor" ],
+      "modules": []
+    },
+    {
+      "id": "deck_sulfur_v21",
+      "name": "硫 · 酸蚀流",
+      "initialBladeId": "sulfur",
+      "ingredientIds": [ "sulfur", "sulfur_gas", "sulfur_liquid", "sulfur_powder" ],
+      "modules": []
     }
   ],
 

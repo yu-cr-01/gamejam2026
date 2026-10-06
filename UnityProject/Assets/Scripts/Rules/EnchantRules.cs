@@ -68,6 +68,12 @@ namespace GameJam.Rules
         /// <summary>规则命中了，但卡表没给产物（新增卡牌忘了标连锁产物）。**不许静默**。</summary>
         public bool productMissing;
 
+        /// <summary>
+        /// 卡表明说这条反应"无变化"（例如「遇酸 + 酸 → 无变化（不溶于酸）」）：
+        /// 规则算命中，但结果就是不变 —— 既不是缺口，也不该变形。
+        /// </summary>
+        public bool declaredNoChange;
+
         public string note = "";
 
         public bool ChangedShape { get { return outcome == EnchantOutcome.FormChange || outcome == EnchantOutcome.Dissolve; } }
@@ -75,9 +81,12 @@ namespace GameJam.Rules
         public string Describe()
         {
             if (!triggered) return "没有命中规则（" + (string.IsNullOrEmpty(conditionText) ? "无变化" : conditionText) + "）";
-            return "优先级" + priority + "「" + ruleName + "」" +
-                   (string.IsNullOrEmpty(productName) ? "" : " → " + productName) +
-                   (productMissing ? "（⚠ 卡表没给产物）" : "");
+
+            string s = "优先级" + priority + "「" + ruleName + "」";
+            if (declaredNoChange) s += " → 该卡声明无变化";
+            else if (!string.IsNullOrEmpty(productName)) s += " → " + productName;
+            else if (productMissing) s += "（⚠ 卡表没给产物）";
+            return s;
         }
     }
 
@@ -173,15 +182,22 @@ namespace GameJam.Rules
             string th = "（实际阈值：热≥" + t1 + "/" + t2 + "/" + t3 + "，催化×" + blade.layers.Count(LayerKind.Catalyst) + "）";
 
             // 1. 热≥1 且 易燃 → 燃烧：D 立即归零，变为该卡指定的燃烧产物
-            if (layers >= t1 && c.HasTag("易燃"))
+            //
+            //  ★ 这里多了一条正文没写的限定「且 不是粉末」——**按策划意图实现，待策划确认**。
+            //    正文的矛盾：规则1（热≥1 且 易燃）的优先级高于规则2（热≥1 且 粉末且易燃），
+            //    而"粉末 + 易燃"必然同时满足这两条 → 规则2「爆炸」永远轮不到（死代码）。
+            //    策划的意图明显是"粉末 + 易燃 = 爆炸"，所以让规则1 只管非粉末、规则2 只对粉末生效。
+            //    **优先级顺序仍然保持正文原样（1 在 2 之前）**，只加了限定条件，
+            //    所以：白磷（固体+易燃）照旧燃烧；粉末+易燃 走爆炸。
+            //    如果策划确认要按字面实现（即接受爆炸不可达），把 `&& !IsForm(c, "粉末")` 去掉即可。
+            if (layers >= t1 && c.HasTag("易燃") && !IsForm(c, "粉末"))
             {
                 m.priority = 1;
-                m.ruleName = "燃烧（易燃）";
-                m.conditionText = "热≥" + t1 + " 且 目标有易燃" + th;
+                m.ruleName = "燃烧（易燃，非粉末）";
+                m.conditionText = "热≥" + t1 + " 且 目标有易燃且不是粉末" + th;
                 m.setTargetDZero = true;
-                if (FindProduct(rx, "易燃", LayerKind.Heat, m))
+                if (FindProduct(rx, "易燃", LayerKind.Heat, m) && !m.declaredNoChange)
                 {
-                    m.outcome = EnchantOutcome.FormChange;
                     m.note = "产物来自卡表 transitions 的「易燃 + 热」条目" +
                              "；正文的「D立即归零」指旧卡不再参与 D-1（形态变化本来就不 D-1，两者一致）";
                 }
@@ -190,6 +206,9 @@ namespace GameJam.Rules
             }
 
             // 2. 热≥1 且 粉末且易燃 → 爆炸：目标 H 归零，刀片热层数 +1，目标变为空白卡
+            //    产物是**写死的「空白卡」**（v3 §2.1 的特殊卡：无特性、数值全 0、可并入刀片），
+            //    不从卡表 transitions 取 —— 所以卡表里没有"空白卡"这张卡也不会缺产物；
+            //    引擎按名字特判成 Blank（空白卡计数 +1），不会报"卡表里找不到这张卡"。
             if (layers >= t1 && IsForm(c, "粉末") && c.HasTag("易燃"))
             {
                 m.priority = 2;
@@ -199,6 +218,7 @@ namespace GameJam.Rules
                 m.heatLayerGain = 1;
                 m.productName = "空白卡";
                 m.outcome = EnchantOutcome.FormChange;
+                m.note = "产物固定为「空白卡」（特殊卡，不走卡表查询）；旧卡 H 归零、刀片热 +1";
                 m.triggered = true;
                 return m;
             }
@@ -209,10 +229,9 @@ namespace GameJam.Rules
                 m.priority = 3;
                 m.ruleName = "液体 → 气态";
                 m.conditionText = "热≥" + t2 + " 且 目标为液体" + th;
-                if (FindProductAny(rx, LayerKind.Heat, m, "液体", "遇热"))
+                if (FindProductAny(rx, LayerKind.Heat, m, "液体", "遇热") && !m.declaredNoChange && !m.productMissing)
                 {
-                    m.outcome = EnchantOutcome.FormChange;
-                    m.note = m.productMissing ? "" : "产物来自卡表 transitions（优先「液体 + 热」，没有则退回「遇热 + 热」）";
+                    m.note = "产物来自卡表 transitions（优先「液体 + 热」，没有则退回「遇热 + 热」）";
                 }
                 m.triggered = true;
                 return m;
@@ -224,7 +243,7 @@ namespace GameJam.Rules
                 m.priority = 4;
                 m.ruleName = "热反应（遇热）";
                 m.conditionText = "热≥" + t2 + " 且 目标有遇热" + th;
-                if (FindProduct(rx, "遇热", LayerKind.Heat, m)) m.outcome = EnchantOutcome.FormChange;
+                FindProduct(rx, "遇热", LayerKind.Heat, m);
                 m.triggered = true;
                 return m;
             }
@@ -235,7 +254,7 @@ namespace GameJam.Rules
                 m.priority = 5;
                 m.ruleName = "金属 → 熔融";
                 m.conditionText = "热≥" + t3 + " 且 目标为金属" + th;
-                if (FindProductAny(rx, LayerKind.Heat, m, "可熔", "遇热", "液体")) m.outcome = EnchantOutcome.FormChange;
+                FindProductAny(rx, LayerKind.Heat, m, "可熔", "遇热", "液体");
                 m.triggered = true;
                 return m;
             }
@@ -246,7 +265,7 @@ namespace GameJam.Rules
                 m.priority = 6;
                 m.ruleName = "可熔 → 液态";
                 m.conditionText = "热≥" + t3 + " 且 目标有可熔" + th;
-                if (FindProductAny(rx, LayerKind.Heat, m, "可熔", "遇热")) m.outcome = EnchantOutcome.FormChange;
+                FindProductAny(rx, LayerKind.Heat, m, "可熔", "遇热");
                 m.triggered = true;
                 return m;
             }
@@ -270,7 +289,7 @@ namespace GameJam.Rules
                 m.priority = 1;
                 m.ruleName = "气体 → 液态";
                 m.conditionText = "冷≥" + t2 + " 且 目标为气体" + th;
-                if (FindProductAny(rx, LayerKind.Cold, m, "遇冷", "气体")) m.outcome = EnchantOutcome.FormChange;
+                FindProductAny(rx, LayerKind.Cold, m, "遇冷", "气体");
                 m.triggered = true;
                 return m;
             }
@@ -281,7 +300,7 @@ namespace GameJam.Rules
                 m.priority = 2;
                 m.ruleName = "液体 → 固态";
                 m.conditionText = "冷≥" + t3 + " 且 目标为液体" + th;
-                if (FindProductAny(rx, LayerKind.Cold, m, "遇冷", "液体")) m.outcome = EnchantOutcome.FormChange;
+                FindProductAny(rx, LayerKind.Cold, m, "遇冷", "液体");
                 m.triggered = true;
                 return m;
             }
@@ -292,7 +311,8 @@ namespace GameJam.Rules
                 m.priority = 3;
                 m.ruleName = "溶液 → 析出固态副产物";
                 m.conditionText = "冷≥" + t2 + " 且 目标为溶液" + th;
-                if (FindProductAny(rx, LayerKind.Cold, m, "遇冷", "可溶"))
+                if (FindProductAny(rx, LayerKind.Cold, m, "遇冷", "可溶") &&
+                    m.outcome == EnchantOutcome.FormChange)   // 声明"无变化"时保持 AttributeOnly
                 {
                     m.outcome = EnchantOutcome.ByProduct;
                     m.note = "析出：副产物进手牌，目标保留（正文没写目标是否保留，按「析出」字面取保留）";
@@ -307,7 +327,7 @@ namespace GameJam.Rules
                 m.priority = 4;
                 m.ruleName = "冷反应（遇冷）";
                 m.conditionText = "冷≥" + blade.layers.LowerThreshold(1) + " 且 目标有遇冷" + th;
-                if (FindProduct(rx, "遇冷", LayerKind.Cold, m)) m.outcome = EnchantOutcome.FormChange;
+                FindProduct(rx, "遇冷", LayerKind.Cold, m);
                 m.triggered = true;
                 return m;
             }
@@ -332,7 +352,7 @@ namespace GameJam.Rules
                 m.ruleName = "金属 → 溶液（H-2）";
                 m.conditionText = "酸≥" + t1 + " 且 目标为金属" + th;
                 m.targetHDamage = 2;
-                if (FindProductAny(rx, LayerKind.Acid, m, "遇酸", "可溶")) m.outcome = EnchantOutcome.FormChange;
+                FindProductAny(rx, LayerKind.Acid, m, "遇酸", "可溶");
                 m.triggered = true;
                 return m;
             }
@@ -343,7 +363,7 @@ namespace GameJam.Rules
                 m.priority = 2;
                 m.ruleName = "可溶 → 溶液";
                 m.conditionText = "酸≥" + t1 + " 且 目标有可溶" + th;
-                if (FindProductAny(rx, LayerKind.Acid, m, "可溶", "遇酸")) m.outcome = EnchantOutcome.FormChange;
+                FindProductAny(rx, LayerKind.Acid, m, "可溶", "遇酸");
                 m.triggered = true;
                 return m;
             }
@@ -379,7 +399,7 @@ namespace GameJam.Rules
                 m.priority = 5;
                 m.ruleName = "酸反应（遇酸）";
                 m.conditionText = "酸≥" + t1 + " 且 目标有遇酸" + th;
-                if (FindProduct(rx, "遇酸", LayerKind.Acid, m)) m.outcome = EnchantOutcome.FormChange;
+                FindProduct(rx, "遇酸", LayerKind.Acid, m);
                 m.triggered = true;
                 return m;
             }
@@ -390,26 +410,42 @@ namespace GameJam.Rules
         }
 
         // ── 产物查找（"该卡指定的X形态" = 卡表 transitions 里对应标签的那一条）──
+        //
+        //  三种情况要分清（这是"规则命中却不变形"最容易含糊的地方）：
+        //    ① 有产物条目      → 形态变化
+        //    ② 显式声明"无变化" → 该卡明说没有这个形态：规则仍算命中，但结果是"不变"，
+        //                         **不算数据缺口**（卡表用「遇酸 + 酸 → 无变化（不溶于酸）」表达的）
+        //    ③ 压根没有这一条   → 数据缺口：productMissing，报进规则解析报告
 
+        private enum ReactionFind { NotFound = 0, Product = 1, NoChange = 2 }
+
+        /// <summary>返回值：true = 这张卡对这条反应**有明确说法**（有产物 或 声明无变化）；false = 卡表没写。</summary>
         private static bool FindProduct(List<TransitionRule> rx, string tag, LayerKind kind, EnchantMatch m)
         {
             string name;
             List<string> extras;
-            bool ok = Lookup(rx, kind, out name, out extras, tag);
+            string reason;
+            ReactionFind f = Find(rx, kind, out name, out extras, out reason, tag);
 
-            if (ok)
+            if (f == ReactionFind.Product)
             {
                 m.productName = name;
                 m.extraProducts.Clear();
                 for (int i = 0; i < extras.Count; i++) m.extraProducts.Add(extras[i]);
+                m.outcome = EnchantOutcome.FormChange;
+                return true;
             }
-            else
+
+            if (f == ReactionFind.NoChange)
             {
-                m.productMissing = true;
-                m.outcome = EnchantOutcome.AttributeOnly;
-                m.note = "卡表 transitions 里没有「" + tag + " + " + LayerLedger.Name(kind) + "」的产物 —— 请补上连锁产物";
+                DeclareNoChange(m, tag, kind, reason);
+                return true;
             }
-            return ok;
+
+            m.productMissing = true;
+            m.outcome = EnchantOutcome.AttributeOnly;
+            m.note = "卡表 transitions 里没有「" + tag + " + " + LayerLedger.Name(kind) + "」的产物 —— 请补上连锁产物";
+            return false;
         }
 
         private static bool FindProductAny(List<TransitionRule> rx, LayerKind kind, EnchantMatch m, params string[] tags)
@@ -418,12 +454,22 @@ namespace GameJam.Rules
             {
                 string name;
                 List<string> extras;
-                if (Lookup(rx, kind, out name, out extras, tags[i]))
+                string reason;
+                ReactionFind f = Find(rx, kind, out name, out extras, out reason, tags[i]);
+
+                if (f == ReactionFind.Product)
                 {
                     m.productName = name;
                     m.extraProducts.Clear();
                     for (int e = 0; e < extras.Count; e++) m.extraProducts.Add(extras[e]);
+                    m.outcome = EnchantOutcome.FormChange;
                     if (i > 0) m.note = "产物取自「" + tags[i] + " + " + LayerLedger.Name(kind) + "」（首选标签「" + tags[0] + "」没有条目）";
+                    return true;
+                }
+
+                if (f == ReactionFind.NoChange)
+                {
+                    DeclareNoChange(m, tags[i], kind, reason);
                     return true;
                 }
             }
@@ -434,36 +480,58 @@ namespace GameJam.Rules
             return false;
         }
 
-        private static bool Lookup(List<TransitionRule> rx, LayerKind kind, out string name, out List<string> extras, string tag)
+        /// <summary>卡表把这条反应声明成"无变化"：规则命中，但结果就是不变。</summary>
+        private static void DeclareNoChange(EnchantMatch m, string tag, LayerKind kind, string reason)
+        {
+            m.declaredNoChange = true;
+            m.productMissing = false;
+            m.outcome = EnchantOutcome.AttributeOnly;
+            m.note = "卡表把「" + tag + " + " + LayerLedger.Name(kind) + "」声明为无变化" +
+                     (string.IsNullOrEmpty(reason) ? "" : "：" + reason) +
+                     "（按「仅改属性 / 无变化」处理：继续检查下一个附魔类型；规则自带的改属性照常生效）";
+        }
+
+        private static ReactionFind Find(List<TransitionRule> rx, LayerKind kind, out string name, out List<string> extras, out string noChangeReason, string tag)
         {
             name = "";
             extras = new List<string>();
-            if (rx == null) return false;
+            noChangeReason = "";
+            if (rx == null) return ReactionFind.NotFound;
 
             for (int i = 0; i < rx.Count; i++)
             {
                 TransitionRule t = rx[i];
-                if (t == null || !t.recognized || t.first == null) continue;
+                if (t == null || !t.recognized) continue;
                 if (t.triggerTag != tag) continue;
                 if (t.condition == null || t.condition.layers == null || t.condition.layers.Length == 0) continue;
                 if (t.condition.layers[0] != kind) continue;
 
+                if (t.declaredNoChange || t.first == null)
+                {
+                    noChangeReason = t.noChangeReason;
+                    return ReactionFind.NoChange;
+                }
+
                 name = t.first.cardName;
                 for (int e = 0; e < t.extra.Count; e++) extras.Add(t.extra[e].cardName);
-                return true;
+                return ReactionFind.Product;
             }
-            return false;
+            return ReactionFind.NotFound;
         }
 
         // ── 静态体检：卡表接进规则表了吗 ─────────────────────────────
 
-        /// <summary>卡表里有没有这条反应的产物条目。</summary>
+        /// <summary>
+        /// 卡表里有没有这条反应的条目 —— **产物条目和"声明无变化"都算有**
+        /// （后者是卡表明说"这张卡没有这个形态"，不该再报成缺口）。
+        /// </summary>
         public static bool HasProduct(List<TransitionRule> rx, LayerKind kind, params string[] tags)
         {
             string name;
             List<string> extras;
+            string reason;
             for (int i = 0; i < tags.Length; i++)
-                if (Lookup(rx, kind, out name, out extras, tags[i])) return true;
+                if (Find(rx, kind, out name, out extras, out reason, tags[i]) != ReactionFind.NotFound) return true;
             return false;
         }
 
@@ -496,9 +564,10 @@ namespace GameJam.Rules
             bool powder = IsForm(c, "粉末");
             bool solid = IsForm(c, "固体");
 
-            // 热
-            if (flam && !HasProduct(rx, LayerKind.Heat, "易燃"))
-                gaps.Add("热规则1（燃烧：易燃）会命中，但缺「易燃 + 热」的燃烧产物");
+            // 热（规则1 带了"非粉末"限定，见 CheckHeat 的注释：把燃烧让给非粉末的易燃卡，
+            //     粉末+易燃 走规则2 爆炸，所以这里也不该再要求粉末卡写燃烧产物）
+            if (flam && !powder && !HasProduct(rx, LayerKind.Heat, "易燃"))
+                gaps.Add("热规则1（燃烧：易燃且非粉末）会命中，但缺「易燃 + 热」的燃烧产物");
 
             if (liquid && !flam && !HasProduct(rx, LayerKind.Heat, "液体", "遇热"))
                 gaps.Add("热规则3（液体→气态）会命中，但缺「液体 + 热」或「遇热 + 热」的产物");
@@ -549,8 +618,11 @@ namespace GameJam.Rules
             list.Add("【启动是否消耗附魔层】§2.4「启动时不消耗附魔层数」+ §七-7 同义，但规则表 F「启动消耗：启动时无论是否发生效果，消耗1层附魔层数」。" +
                      "引擎按 F 实现：TurnRules.ConsumeLayerOnActivate（默认 true），消耗的是本次**第一个命中规则**的那类附魔、1 层；没命中则从检查顺序里第一个有层的类型扣。待策划拍板。");
 
-            list.Add("【爆炸规则不可达】热规则1（热≥1 且易燃）优先级高于热规则2（热≥1 且粉末且易燃）：粉末+易燃的卡永远被规则1先截获，" +
-                     "规则2「爆炸：目标H归零，刀片热+1，目标变为空白卡」按字面实现永远触发不了。引擎按正文优先级老实实现（爆炸=死代码），建议把爆炸提到优先级1或给规则1加「非粉末」限定。");
+            list.Add("【爆炸规则的优先级冲突 —— 已按意图修正，待确认】正文热规则1（热≥1 且易燃）优先级高于热规则2（热≥1 且粉末且易燃），" +
+                     "而「粉末 + 易燃」必然同时满足两条 → 按字面实现规则2「爆炸」永远轮不到（死代码）。" +
+                     "引擎**按策划意图**给规则1 加了「且不是粉末」限定（优先级顺序仍保持正文原样：1 在 2 之前），" +
+                     "于是：非粉末的易燃卡 → 燃烧；粉末+易燃 → 爆炸（H 归零、刀片热+1、变空白卡）。" +
+                     "如果策划要按字面实现，去掉 EnchantRules.CheckHeat 规则1 里的 `&& !IsForm(c, \"粉末\")` 即可。");
 
             list.Add("【『献祭』一词两义】§2.3 的性质标签「献祭」= 被刀片吞噬时触发效果；§四.5 的「献祭吞噬」= 每回合最后一次启动把目标并入刀片。" +
                      "引擎把两者接在一起：并入刀片是动作，卡表的 sacrifice 文本是那张卡被吞噬时触发的效果。");
@@ -582,8 +654,8 @@ namespace GameJam.Rules
         public static void PrintTable(TextWriter w)
         {
             w.WriteLine("热附魔（按优先级）");
-            w.WriteLine("  1 热≥1 且 易燃        → 燃烧：D 归零，变为该卡指定的燃烧产物");
-            w.WriteLine("  2 热≥1 且 粉末且易燃  → 爆炸：目标 H 归零，刀片热+1，变为空白卡");
+            w.WriteLine("  1 热≥1 且 易燃（非粉末） → 燃烧：D 归零，变为该卡指定的燃烧产物");
+            w.WriteLine("  2 热≥1 且 粉末且易燃   → 爆炸：目标 H 归零，刀片热+1，变为空白卡");
             w.WriteLine("  3 热≥2 且 液体        → 变为该卡指定的气态形态");
             w.WriteLine("  4 热≥2 且 遇热        → 触发该卡指定的热反应");
             w.WriteLine("  5 热≥3 且 金属        → 变为该卡指定的熔融形态");

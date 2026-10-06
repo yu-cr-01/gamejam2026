@@ -84,7 +84,7 @@ namespace GameJam.Tools
                 Scenario8_Burst(cards);
                 Scenario9_ScoreFormula(cards);
                 Scenario10_HeatColdOverwrite(cards);
-                Scenario11_ExplodeUnreachable(cards);
+                Scenario11_Explode(cards);
                 Report_NoSilentLoss(cards);
 
                 Console.WriteLine();
@@ -446,15 +446,36 @@ namespace GameJam.Tools
             EnchantMatch me = MatchCase(cards, be, cards.Material("铜溶液"), "铜溶液", LayerKind.Cold);
             Check("规则表：冷≥3 + 液体 抢先于溶液析出（优先级2）", 2, me.priority);
 
-            // 粉末 + 易燃 + 热1：按优先级1走燃烧（爆炸规则永远轮不到）—— 正文矛盾，见 Conflicts()
+            // 粉末 + 易燃 + 热1：走优先级2「爆炸」（规则1 带了"非粉末"限定，见 EnchantRules.CheckHeat 注释）
             //  卡表里当前没有"粉末+易燃"的卡，所以用一张探针合成卡来验证规则表本身
             BladeState bf = new BladeState("b", "刀片", 10, 0);
             bf.layers.Add(LayerKind.Heat, 1);
             Ingredient powderCard = cards.Synthetic("粉末易燃测试卡", "粉末", new string[] { "粉末", "易燃" });
             EnchantMatch mf = EnchantRules.Check(LayerKind.Heat, bf, new MaterialState(powderCard, 3), new List<TransitionRule>());
-            Check("规则表：粉末+易燃 被优先级1（燃烧）截获，爆炸不可达", 1, mf.priority);
-            Check("规则表：命中的是燃烧而不是爆炸", "燃烧（易燃）", mf.ruleName);
-            Check("规则表：卡表没给燃烧产物 → productMissing 被标出来", true, mf.productMissing);
+            Check("规则表：粉末+易燃 命中优先级2（爆炸）", 2, mf.priority);
+            Check("规则表：命中的是爆炸", "爆炸（粉末 + 易燃）", mf.ruleName);
+            Check("规则表：爆炸把目标 H 归零", true, mf.setTargetHZero);
+            Check("规则表：爆炸给刀片热 +1", 1, mf.heatLayerGain);
+            Check("规则表：爆炸产物是空白卡", "空白卡", mf.productName);
+            Check("规则表：爆炸是形态变化，不是产物缺失", false, mf.productMissing);
+
+            // 非粉末的易燃卡仍然走优先级1「燃烧」（新加的限定条件不能把燃烧一起挡掉）
+            BladeState bh = new BladeState("b", "刀片", 10, 0);
+            bh.layers.Add(LayerKind.Heat, 1);
+            EnchantMatch mh = MatchCase(cards, bh, cards.Material("白磷"), "白磷", LayerKind.Heat);
+            Check("规则表：白磷（固体+易燃）仍命中优先级1（燃烧）", 1, mh.priority);
+            Check("规则表：白磷的燃烧产物仍是火焰", "火焰", mh.productName);
+
+            // 卡表用「遇酸 + 酸 → 无变化（不溶于酸）」声明"规则命中，但这张卡没有这个形态"
+            // （黄金就是这种写法）：既不该变形，也不该算成"忘了写产物"
+            BladeState bi = new BladeState("b", "刀片", 10, 0);
+            bi.layers.Add(LayerKind.Acid, 1);
+            EnchantMatch mi = MatchCase(cards, bi, cards.Material("黄金"), "黄金", LayerKind.Acid);
+            Check("声明无变化：规则仍然算命中（优先级1 金属→溶液）", 1, mi.priority);
+            Check("声明无变化：标记为 declaredNoChange", true, mi.declaredNoChange);
+            Check("声明无变化：不算数据缺口", false, mi.productMissing);
+            CheckOutcome("声明无变化：结果按「仅改属性 / 无变化」走", EnchantOutcome.AttributeOnly, mi.outcome);
+            Check("声明无变化：规则自带的 H-2 照常生效", 2, mi.targetHDamage);
 
             // 玻璃对热附魔：一条都不命中
             BladeState bg = new BladeState("b", "刀片", 10, 0);
@@ -462,7 +483,7 @@ namespace GameJam.Tools
             EnchantMatch mg = MatchCase(cards, bg, cards.Material("玻璃"), "玻璃", LayerKind.Heat);
             Check("规则表：玻璃 + 热3 不命中任何热规则", false, mg.triggered);
 
-            ScenarioEnd("规则表 11 个命中用例", mark, "优先级 / 产物 / 结果类型 都按正文表");
+            ScenarioEnd("规则表命中用例", mark, "优先级 / 产物 / 结果类型 都按正文表（热规则1 带\"非粉末\"限定，见报告矛盾条）");
         }
 
         private static EnchantMatch MatchCase(JsonCards cards, BladeState blade, Ingredient card, string name, LayerKind kind)
@@ -594,7 +615,9 @@ namespace GameJam.Tools
             Check("顺序⑤：最后一次启动 + D 剩余 → 并入刀片，刀片 H 5-1(启动)+4 = 8", 8, s.blade.H);
             Check("顺序⑤：刀片 V 5+2=7", 7, s.blade.V);
             Check("顺序⑤：被吞噬的卡移出桌面", true, glass.removed);
-            Check("顺序⑤：玻璃带「献祭」标签，但它的献祭文本解析不了 → 有警告", true, r.warnings.Count > 0);
+            Check("顺序⑤：玻璃的献祭文本「刀片每次启动，获得1分」能解析 → 不报未识别警告", 0, r.warnings.Count);
+            Check("顺序⑤：这条「每次启动」登记成刀片被动（不当场结算）", 1, e.BladePassiveCount);
+            CheckLog("顺序⑤：日志说明登记为被动、从下一次启动生效", r, "登记为刀片被动");
             CheckLog("顺序⑤：日志说明这是最后一次启动", r, "最后一次启动");
             CheckLog("顺序⑤：日志说明已移出桌面", r, "移出桌面");
             CheckLog("顺序⑤：日志说明\"并入刀片\"", r, "并入刀片");
@@ -753,14 +776,17 @@ namespace GameJam.Tools
             TurnResult r1 = e.StartBlade(s, glass, true);
             Check("计分公式：目标V 2 + 刀片V 2 = 4", 4, r1.activationScore);
             Check("计分公式：吞噬后刀片 V = 2 + 2 = 4", 4, s.blade.V);
+            Check("计分公式：吞噬登记了玻璃的被动（每次启动 +1 分）", 1, e.BladePassiveCount);
+            Check("计分公式：被动的 +1 不当场结算（第一次启动仍是 4 分）", 0, r1.ruleScore);
 
-            MaterialState wp = Put(cards, s, "白磷", 3);      // V=3（夹具）
+            MaterialState wp = Put(cards, s, "白磷", 3);      // V=3（卡表）
             TurnResult r2 = e.StartBlade(s, wp, false);
             Check("计分公式：刀片 V 涨了以后，下一次启动 = 3 + 4 = 7", 7, r2.activationScore);
-            Check("计分公式：总分累加 4 + 7 = 11", 11, s.score);
+            Check("计分公式：刀片被动「每次启动，获得1分」这次生效 +1", 1, r2.ruleScore);
+            Check("计分公式：总分累加 4 + 7 + 1(被动) = 12", 12, s.score);
 
-            ScenarioEnd("场景9 得分 = 目标V + 刀片V", mark,
-                "第一次 2+2=4；吞噬后刀片 V=4；第二次 3+4=7；总分 " + s.score);
+            ScenarioEnd("场景9 得分 = 目标V + 刀片V（+ 吞噬来的刀片被动）", mark,
+                "第一次 2+2=4；吞噬后刀片 V=4 且登记被动 +1；第二次 3+4=7 + 被动 1 = 8；总分 " + s.score);
         }
 
         /// <summary>场景 10：冷热冲突 —— 后附魔覆盖先附魔，清空对方全部层数。</summary>
@@ -801,30 +827,55 @@ namespace GameJam.Tools
                 "热2 → 冰霜 → 冷1（热清空）；冷3 → 火焰 → 热1（冷清空）；酸不受影响");
         }
 
-        /// <summary>场景 11：正文矛盾 —— "粉末+易燃"永远被"燃烧"截获，"爆炸"规则不可达。</summary>
-        private static void Scenario11_ExplodeUnreachable(JsonCards cards)
+        /// <summary>
+        /// 场景 11：爆炸规则（按策划意图修好之后）。
+        ///   粉末+易燃 + 热1 → 优先级2「爆炸」：目标 H 归零、刀片热+1、变成空白卡；
+        ///   非粉末的易燃卡（白磷）→ 仍然走优先级1「燃烧」。
+        /// </summary>
+        private static void Scenario11_Explode(JsonCards cards)
         {
             int mark = ScenarioStart();
             LevelRun s = NewLevel(cards, "铁刀片", 5, 5);
             s.blade.layers.Add(LayerKind.Heat, 1);
 
-            // 卡表里当前没有"粉末+易燃"的卡，用一张探针合成卡把规则表的这条矛盾跑出来
+            // 卡表里当前没有"粉末+易燃"的卡，用一张探针合成卡把规则表的这条跑出来。
+            // 这条断言只看爆炸的「刀片热+1」，所以把规则表 F 的"启动消耗 1 层附魔"关掉，
+            // 免得 +1 又被扣掉 1（那条矛盾在场景1/场景4 单独验过了）。
+            TurnRules rules = ProbeRules();
+            rules.ConsumeLayerOnActivate = false;
+
             Ingredient powderCard = cards.Synthetic("粉末易燃测试卡", "粉末", new string[] { "粉末", "易燃" });
             MaterialState powder = new MaterialState(powderCard, 3, 2, 1);
             s.table.Add(powder);
 
-            TurnEngine e = new TurnEngine(ProbeRules(), cards);
+            TurnEngine e = new TurnEngine(rules, cards);
             TurnResult r = e.StartBlade(s, powder, false);
 
-            Check("爆炸不可达：命中优先级1（燃烧），不是优先级2（爆炸）", true, r.LogContains("优先级1「燃烧"));
-            Check("爆炸不可达：整局日志里没有出现「爆炸」", false, r.LogContains("爆炸"));
-            Check("爆炸不可达：卡表没给燃烧产物 → 有警告", true, r.warnings.Count > 0);
-            Check("爆炸不可达：燃烧把 D 归零 → D耗尽照常触发（正文两条路径的冲突现场）", true, powder.removed);
-            Check("爆炸不可达：这张卡没有任何 D 耗尽产物 → 兜底空白卡", 1, r.ProducedCount("空白卡"));
-            Check("爆炸不可达：空白卡计数 +1", 1, s.blankCount);
+            Check("爆炸：命中优先级2（爆炸）", true, r.LogContains("优先级2「爆炸"));
+            Check("爆炸：日志里没有走燃烧", false, r.LogContains("「燃烧"));
+            Check("爆炸：目标 H 归零", 0, powder.H);
+            Check("爆炸：刀片热 +1（1 → 2）", 2, s.blade.layers.Count(LayerKind.Heat));
+            Check("爆炸：目标变成空白卡进手牌", 1, r.ProducedCount("空白卡"));
+            CheckKind("爆炸：空白卡是特殊卡（Blank）", ProduceKind.Blank, r.KindOfProduced("空白卡"));
+            Check("爆炸：空白卡计数 +1", 1, s.blankCount);
+            Check("爆炸：形态变化 → 旧卡移出桌面", true, powder.removed);
+            Check("爆炸：空白卡不走卡表查询，所以不该报\"卡表里找不到\"", false, r.LogContains("卡表里找不到"));
+            CheckLog("爆炸：日志写明产物固定为空白卡", r, "产物固定为「空白卡」");
 
-            ScenarioEnd("场景11 爆炸规则不可达（正文矛盾）", mark,
-                "粉末+易燃 走优先级1燃烧；卡表没产物 → 警告 + D归零后 D耗尽 → " + r.ProducedText());
+            // 非粉末的易燃卡：仍然走燃烧（新加的"非粉末"限定不能把燃烧一起挡掉）
+            LevelRun s2 = NewLevel(cards, "铁刀片", 5, 5);
+            s2.blade.layers.Add(LayerKind.Heat, 1);
+            MaterialState wp = Put(cards, s2, "白磷", 3);
+            TurnEngine e2 = new TurnEngine(ProbeRules(), cards);
+            TurnResult r2 = e2.StartBlade(s2, wp, false);
+
+            Check("非粉末易燃卡：仍然命中优先级1（燃烧）", true, r2.LogContains("优先级1「燃烧"));
+            Check("非粉末易燃卡：产物还是火焰（不是空白卡）", 1, r2.ProducedCount("火焰"));
+            Check("非粉末易燃卡：没有产出空白卡", 0, r2.ProducedCount("空白卡"));
+            Check("非粉末易燃卡：白磷 D 立即归零", 0, wp.D);
+
+            ScenarioEnd("场景11 爆炸（粉末+易燃）与燃烧（非粉末易燃）", mark,
+                "粉末+易燃 → " + r.ProducedText() + "（H 归零、刀片热 1→" + s.blade.layers.Count(LayerKind.Heat) + "）；白磷 → " + r2.ProducedText());
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -840,24 +891,29 @@ namespace GameJam.Tools
             Check("解析报告：句子账目全部对得上（clauses + 未识别 == 句子数）", 0, rep.UnbalancedFields);
             Check("解析报告：没有字段静默丢失（有文本却切不出句子）", 0, rep.silentFields.Count);
 
-            // ★ 金丝雀：策划改了 cards_v21.json 之后这个数字会变 —— 那就该有人来看这份清单。
-            Check("解析报告：未识别句子数（金丝雀，改卡表后会变）", 5, rep.unrecognized.Count);
+            // ★ 金丝雀（数据侧改 cards_v21.json 就要盯这四个数，目标全是 0）：
+            //    未识别 0 / 规则表接不上 0 / v3 已失效写法 0 / 可疑产出 0
+            //   断言红了 = 卡表里出现了引擎读不懂或接不上的写法，去把报告后半段那份清单发给策划。
+            Check("解析报告：未识别句子数（金丝雀）", 0, rep.unrecognized.Count);
+            Check("解析报告：规则表接不上的卡（金丝雀）", 0, rep.tableGaps.Count);
+            Check("解析报告：v3 已失效写法（金丝雀）", 0, rep.superseded.Count);
+            Check("解析报告：可疑产出（卡表里没有这张卡）（金丝雀）", 0, rep.unknownProducts.Count);
 
-            CheckUnrecognized(rep, "熔融金", "献祭", "额外增加10V");
-            CheckUnrecognized(rep, "法术卷轴", "献祭", "复制2张");
-            CheckUnrecognized(rep, "熔融玻璃", "献祭", "翻倍");
-            CheckUnrecognized(rep, "玻璃", "献祭", "获得1分");
-            CheckUnrecognized(rep, "固态汞", "献祭", "损伤");
+            // 数据侧这两轮的实际修法，逐条钉住（哪条被改回旧写法了，这里会红）
+            Check("卡表契约：熔融金的『额外增加10V』已改掉（v3 里 V 只能靠吞噬素材加）", true, !HasUnrecognized(rep, "熔融金", "V"));
+            Check("卡表契约：法术卷轴的『指定手牌中的1张法术卡』已改掉（引擎无法自动结算选牌）", true, !HasUnrecognized(rep, "法术卷轴", "复制"));
+            Check("卡表契约：水的『不消耗刀片H』已从卡表删掉（v3 没有豁免）", true, !HasSuperseded(rep, "水·启动"));
+            Check("卡表契约：玻璃的『每次消耗H时』已改写成『刀片每次启动，获得1分』（有触发点）", true, HasEachStartupSacrifice(rep, "玻璃"));
+
+            // 新写法：卡表用「→ 无变化（原因）」声明"规则命中但这张卡没有这个形态"
+            Check("新写法：黄金的『遇酸 + 酸 → 无变化（不溶于酸）』被认成声明，不是未识别", true,
+                  HasDeclaredNoChange(rep, "黄金"));
+            Check("新写法：声明了无变化的卡不再算『规则表接不上』（黄金已从缺口清单消失）", true, !HasGap(rep, "黄金："));
 
             Check("解析报告：没有『执行不了』的条目（v3 里素材有 H 了，v2.1 的『其他素材H』也能落地）",
                  0, rep.unsupported.Count);
             Check("解析报告：占位数值至少 3 处（一定分数 / 没给每层分值）", true, rep.placeholders.Count >= 3);
-            Check("解析报告：未知产出里有『灰烬』（法术卷轴转换的目标不在卡表里）", true, HasUnknown(rep, "灰烬"));
-            Check("解析报告：规则表接不上清单非空（标了标签忘了连锁产物）", true, rep.tableGaps.Count >= 1);
-            Check("解析报告：冰缺「遇热 + 热」产物被列出来", true, HasGap(rep, "冰：热规则4"));
-            Check("解析报告：黄金缺「遇酸 + 酸」产物被列出来", true, HasGap(rep, "黄金：酸规则1"));
-            Check("解析报告：v3 已失效写法清单非空（水的『不消耗刀片H』等）", true, rep.superseded.Count >= 1);
-            Check("解析报告：矛盾清单至少 8 条（启动消耗层/爆炸不可达/献祭两义/…）", true, rep.conflicts.Count >= 8);
+            Check("解析报告：矛盾清单至少 8 条（启动消耗层/爆炸/献祭两义/…；含已按意图修正的爆炸）", true, rep.conflicts.Count >= 8);
 
             ScenarioEnd("报告·不静默失效", mark,
                 "句子 " + rep.TotalSentences + " 条：已解析 " + rep.ParsedSentences + " · 未识别 " + rep.unrecognized.Count +
@@ -888,17 +944,60 @@ namespace GameJam.Tools
             failures.Add("未识别清单：应该收进「" + card + " · " + field + "」里含『" + keyword + "』的那句，但清单里没有 —— 说明它被静默丢掉了");
         }
 
+        private static bool HasUnrecognized(RuleReport rep, string card, string keyword)
+        {
+            for (int i = 0; i < rep.unrecognized.Count; i++)
+            {
+                UnrecognizedRule u = rep.unrecognized[i];
+                if (u.cardName == card && u.sentence.Contains(keyword)) return true;
+            }
+            return false;
+        }
+
+        private static bool HasSuperseded(RuleReport rep, string prefix)
+        {
+            for (int i = 0; i < rep.superseded.Count; i++)
+                if (rep.superseded[i].StartsWith(prefix, StringComparison.Ordinal)) return true;
+            return false;
+        }
+
+        private static bool HasGap(RuleReport rep, string prefix)
+        {
+            for (int i = 0; i < rep.tableGaps.Count; i++)
+                if (rep.tableGaps[i].StartsWith(prefix, StringComparison.Ordinal)) return true;
+            return false;
+        }
+
+        /// <summary>这张卡的形态转换表里有没有"声明无变化"的条目（卡表新写法）。</summary>
+        private static bool HasDeclaredNoChange(RuleReport rep, string cardName)
+        {
+            for (int i = 0; i < rep.fields.Count; i++)
+            {
+                RuleParseResult f = rep.fields[i];
+                if (f.cardName != cardName || f.field != RuleField.Transition) continue;
+                for (int t = 0; t < f.transitions.Count; t++)
+                    if (f.transitions[t].declaredNoChange) return true;
+            }
+            return false;
+        }
+
+        /// <summary>这张卡的献祭文本里有没有"每次启动"这类被动条目（有触发点，才能被登记成刀片被动）。</summary>
+        private static bool HasEachStartupSacrifice(RuleReport rep, string cardName)
+        {
+            for (int i = 0; i < rep.fields.Count; i++)
+            {
+                RuleParseResult f = rep.fields[i];
+                if (f.cardName != cardName || f.field != RuleField.Sacrifice) continue;
+                for (int c = 0; c < f.clauses.Count; c++)
+                    if (f.clauses[c].trigger == RuleTrigger.EachStartup) return true;
+            }
+            return false;
+        }
+
         private static bool HasUnknown(RuleReport rep, string name)
         {
             for (int i = 0; i < rep.unknownProducts.Count; i++)
                 if (rep.unknownProducts[i].Contains(name)) return true;
-            return false;
-        }
-
-        private static bool HasGap(RuleReport rep, string name)
-        {
-            for (int i = 0; i < rep.tableGaps.Count; i++)
-                if (rep.tableGaps[i].Contains(name)) return true;
             return false;
         }
 

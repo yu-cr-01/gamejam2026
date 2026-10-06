@@ -28,7 +28,7 @@ namespace GameJam.Prototype
         // 单独一套是因为 h1/body/dim 是给"没有背景"的场景配的：
         // dim 本身就是浅灰，铺到浅色面板上直接糊掉看不见。
         // 面板统一走"深色底 + 浅色字"，和游戏整体调子也一致。
-        private GUIStyle panelBox, panelBoxInner, h1Panel, bodyPanel, dimPanel, btnClose;
+        private GUIStyle panelBox, panelBoxInner, panelGroup, h1Panel, bodyPanel, dimPanel, btnClose;
 
         // ── 开场界面的大标题 ──
         private GUIStyle titleBig, titleSub, titleHint;
@@ -39,6 +39,19 @@ namespace GameJam.Prototype
         // ── v2.1 的规则解析报告面板（F2）──
         private bool     rulesReportOpen;
         private Vector2  rulesReportScroll;
+
+        // 报告内容的排版高度 / 滚动区可见高度。
+        // 滚动到底要用它们算偏移 —— 见 ScrollRulesReportToEnd 里为什么不能
+        // "塞一个超大值让 Unity 自己夹"。
+        private float    reportContentH;
+        private float    reportViewH;
+
+        // v2.1 回合结算屏里那块"引擎日志"的滚动位置（日志条数不定，得能滚）
+        private Vector2  turnResultLogScroll;
+
+        // BeginCenterPanel 算出来的面板宽度：面板里那些"定宽按钮"要按它夹一下，
+        // 否则窗口很窄时按钮比面板还宽，又会被顶出去
+        private float    centerPanelW;
 
         // ── 检视窗口 ──
         private const int   InspectWindowId = 0x54A1;
@@ -83,6 +96,35 @@ namespace GameJam.Prototype
         private void HandleRulesKeys()
         {
             if (Input.GetKeyDown(KeyCode.F2)) rulesReportOpen = !rulesReportOpen;
+        }
+
+        /// <summary>
+        /// 打开 / 关闭规则解析报告 —— **自动试玩探针用**（平时玩家按 F2）。
+        ///
+        /// 【为什么要有这个口子】报告平时是关着的，而"统计行会不会被裁、
+        /// 最后一行能不能完整滚出来"这两个毛病**只有把面板打开、拍下来才看得见**。
+        /// 探针不该去伪造一个 F2 按键（输入事件在编辑器里塞不进去），
+        /// 所以这里开一个和 F2 完全等价的方法，走的是同一个字段。
+        /// </summary>
+        public void SetRulesReportOpen(bool open)
+        {
+            rulesReportOpen = open;
+        }
+
+        /// <summary>
+        /// 把报告滚到最底 —— 自动试玩探针用。
+        ///
+        /// 【为什么需要它】报告是一屏滚动的，一张截图只能拍到头部，
+        /// 而"最下面一行只显示一半"这个毛病**只在底部才看得见**。
+        /// 玩家自己拖滚动条到的就是这个位置，这里只是替他拖到底。
+        ///
+        /// 【为什么不用 float.MaxValue 让 Unity 自己夹】内容比可见区矮的时候
+        /// 根本不会出现滚动条，那个超大值就没人夹，整块内容会被推出可视区。
+        /// 用上一帧量到的两个高度自己算，任何情况下都是"正好到底"。
+        /// </summary>
+        public void ScrollRulesReportToEnd()
+        {
+            rulesReportScroll.y = Mathf.Max(0f, reportContentH - reportViewH);
         }
 
         /// <summary>
@@ -186,6 +228,16 @@ namespace GameJam.Prototype
                 panelBoxInner = new GUIStyle(panelBox)
                 {
                     padding = new RectOffset(9, 9, 7, 7)
+                };
+
+                // 给"把面板当 GUILayout 容器用"的那一份：组的底是**内容排完之后**
+                // 才按组矩形画的，所以内容多高、面板就多高 —— v2.1 那几块面板
+                // 就是靠这个不再裁字的（详见 DrawTurnPanelV21 的说明）。
+                // margin 清零是因为组会把样式的 margin 也算进摆放位置，
+                // 留 4 像素的 margin 居中就会偏几像素；清零后组矩形 = 算好的矩形。
+                panelGroup = new GUIStyle(panelBox)
+                {
+                    margin = new RectOffset(0, 0, 0, 0)
                 };
 
                 h1Panel   = new GUIStyle(h1)   { fontSize = 21 };
@@ -613,61 +665,106 @@ namespace GameJam.Prototype
         ///
         /// 手牌张数和"点哪张"都写出来 —— 不写的话玩家不知道要干什么，
         /// 只会一直按确认，然后拿到一张默认的第一张牌。
+        ///
+        /// 【★ 布局这一版为什么换掉】原来是写死 660×168 + 每行 24 像素：
+        ///   第三行"点桌上手牌里的一张素材即改选…"在窄窗口下折成两行，
+        ///   第二行被 24 像素的矩形裁掉；面板宽 660 在小窗口下还会横出屏幕。
+        ///   现在宽按屏幕收缩、高按内容长（BeginCenterPanel 的说明）。
         /// </summary>
         private void DrawBladePickV21()
         {
             TableRulesV21 r = turnLoop.rulesV21;
             if (r == null) return;
 
-            const float w = 660f;
-            const float h = 168f;
-            float x = (Screen.width - w) * 0.5f;
-            const float y = 14f;
-            const float textW = w - 250f;
-
-            GUI.Box(new Rect(x, y, w, h), GUIContent.none, panelBox);
-
-            GUI.Label(new Rect(x + 18f, y + 8f, w - 36f, 30f), "选择你的刀片核心", h1Panel);
-
-            float ty = y + 44f;
-
             MaterialCard cand = turnLoop.bladeCoreCard != null
                 ? turnLoop.bladeCoreCard
                 : r.CoreCandidate();
 
-            GUI.Label(new Rect(x + 18f, ty, textW, 24f),
-                      "当前候选：" + (cand != null
-                                     ? cand.name + "（H " + cand.H + " · V " + cand.V + "）"
-                                     : "（没有可当核心的素材）"),
-                      bodyPanel);
-            ty += 26f;
+            BeginCenterPanel(660f);
 
-            GUI.Label(new Rect(x + 18f, ty, textW, 24f),
-                      "初始手牌：素材 " + r.hand.Count + " 张 + 法术 " + r.handSpells.Count + " 张"
-                      + "（正文 §2.6）", bodyPanel);
-            ty += 26f;
+            GUILayout.Label("选择你的刀片核心", h1Panel);
 
-            GUI.Label(new Rect(x + 18f, ty, textW, 24f),
-                      "点桌上手牌里的一张素材即改选。核心卡的 H/V 就是刀片的初始 H/V，该卡移出手牌。",
-                      dimPanel);
-            ty += 24f;
+            GUILayout.Label("当前候选：" + (cand != null
+                                       ? cand.name + "（H " + cand.H + " · V " + cand.V + "）"
+                                       : "（没有可当核心的素材）"),
+                            bodyPanel);
 
-            if (!string.IsNullOrEmpty(turnLoop.notice))
-                GUI.Label(new Rect(x + 18f, ty, textW, 24f), turnLoop.notice, dimPanel);
+            GUILayout.Label("初始手牌：素材 " + r.hand.Count + " 张 + 法术 " + r.handSpells.Count + " 张"
+                            + "（正文 §2.6）", bodyPanel);
+
+            GUILayout.Label("点桌上手牌里的一张素材即改选。核心卡的 H/V 就是刀片的初始 H/V，该卡移出手牌。",
+                            dimPanel);
+
+            if (!string.IsNullOrEmpty(turnLoop.notice)) GUILayout.Label(turnLoop.notice, dimPanel);
+
+            GUILayout.Space(6f);
 
             bool canConfirm = cand != null;
 
             bool oldEnabled = GUI.enabled;
             GUI.enabled = canConfirm;
 
-            if (GUI.Button(new Rect(x + w - 210f, y + 112f, 192f, 40f), "确认刀片，进入关卡", btn))
+            // 确认键靠右（和旧版一样在右下角），但不再写死横坐标：
+            // 水平 FlexibleSpace 把它顶到右沿，面板多宽都贴边。
+            GUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("确认刀片，进入关卡", btn,
+                                 GUILayout.Width(PanelButtonW(240f)), GUILayout.Height(40f)))
             {
                 GUI.FocusControl(null);
                 turnLoop.ConfirmBladePick();
             }
+            GUILayout.EndHorizontal();
 
             GUI.enabled = oldEnabled;
+
+            EndCenterPanel();
         }
+
+        /// <summary>
+        /// 屏幕正中开一块**按内容长高**的面板（内容摆完调 EndCenterPanel）。
+        ///
+        /// 【为什么不用 CenterBox + 写死高度】这几块 v2.1 面板的文字都会折行
+        ///   （窗口越窄折得越多），写死高度必然裁字；而"先把每行文字量一遍高度
+        ///   再画底"要把文字和样式维护两遍、还容易和 GUILayout 的实际排版差几像素。
+        ///   GUILayout.BeginVertical(panelGroup) 的底是**内容排完之后**才按组矩形画的，
+        ///   内容多高面板就多高 —— 两边都不用猜。
+        ///
+        /// 【上下留白怎么来的】外面套一层"占满屏幕的 Area + 上下两个 FlexibleSpace"，
+        ///   内容矮的时候面板自然居中；内容比屏幕还高时两个留白双双收成 0，
+        ///   面板从屏幕顶端开始排（不会像"居中"那样把上下两头都切掉）。
+        /// </summary>
+        private void BeginCenterPanel(float designW)
+        {
+            // 宽度跟着屏幕收缩：设计宽度是给大窗口的，小窗口下按屏幕减 32 ——
+            // 少了这个 Min，面板右边会伸出屏幕，按钮看得见点不到。
+            centerPanelW = Mathf.Max(280f, Mathf.Min(designW, Screen.width - 32f));
+
+            GUILayout.BeginArea(new Rect(0f, 0f, Screen.width, Screen.height));
+            GUILayout.FlexibleSpace();
+            GUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+            GUILayout.BeginVertical(panelGroup, GUILayout.Width(centerPanelW));
+        }
+
+        private void EndCenterPanel()
+        {
+            GUILayout.EndVertical();
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+            GUILayout.FlexibleSpace();
+            GUILayout.EndArea();
+        }
+
+        /// <summary>
+        /// 面板里那种"定宽按钮"的实际宽度：设计宽度在小窗口下要跟着面板一起缩，
+        /// 否则按钮比面板还宽，又被顶出去（缩到 72 就不再缩了，再窄就不是按钮了）。
+        /// </summary>
+        private float PanelButtonW(float designW)
+        {
+            return Mathf.Max(72f, Mathf.Min(designW, centerPanelW - 26f));
+        }
+
         private void DrawViewButtons()
         {
             const float w = 110f, h = 32f, pad = 8f;
@@ -822,83 +919,81 @@ namespace GameJam.Prototype
             TableRulesV21 r = turnLoop.rulesV21;
             if (r == null) return;
 
-            const float w = 660f;
+            // 宽度跟着屏幕收缩：660 是设计宽度（和旧信息栏同宽），
+            // 窗口更窄时按屏幕减 24。少了这个 Min，面板会横着伸出屏幕 ——
+            // 右边那几个按钮既看不见也点不到，文字也会在屏幕外被裁掉。
+            float w = Mathf.Max(260f, Mathf.Min(660f, Screen.width - 24f));
             float x = (Screen.width - w) * 0.5f;
             const float y = 14f;
 
-            // 面板比旧的高：v2.1 要多显示刀片 / 附魔 / 目标素材这三行，
-            // 下面还要塞四个按钮（启动 / 放置 / 结束回合 / 自动选目标）。
-            // 254 = 8 + 30 + 22 + 24 + 22×4 + 24 + 4 + 34 + 44（"不能启动的原因"那行在最下面）。
-            const float h = 254f;
-            GUI.Box(new Rect(x, y, w, h), GUIContent.none, panelBox);
-
-            float ty = y + 8f;
+            // ★ 面板高度不再写死（上一版是 const h = 254f + 每行写死 22 像素）。
+            //   "规则模式：v2.1（本分支默认）｜出牌不消耗行动机会，只有「启动破壁机」
+            //   消耗 1 次 + 1 点刀片 H" 这一行在 1280 宽的窗口下就会折成两行，
+            //   写死的 22 像素把第二行直接裁掉 —— 玩家说的"文字显示一半"就是它。
+            //   现在整块交给 GUILayout.BeginVertical(panelGroup)：组的底是
+            //   **内容排完之后**才按组矩形画的，内容多高面板就多高，
+            //   既不裁字、也不会在底部留一块空（先量高度再画底要维护两遍文字，不要）。
+            GUILayout.BeginArea(new Rect(x, y, w, Mathf.Max(60f, Screen.height - y - 14f)));
+            GUILayout.BeginVertical(panelGroup);
 
             // ── ① 模式 + 回合 / 行动机会 / 分数（最关键的一行放最上面）──
-            GUI.Label(new Rect(x + 18f, ty, w - 36f, 30f),
-                      "第 " + r.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel + " 回合"
-                      + "　　行动机会 " + r.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn
-                      + "　　总分 " + r.score + " / " + r.targetScore,
-                      h1Panel);
-            ty += 30f;
+            GUILayout.Label("第 " + r.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel + " 回合"
+                            + "　　行动机会 " + r.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn
+                            + "　　总分 " + r.score + " / " + r.targetScore, h1Panel);
 
             // ── ② 模式 + 未识别规则警告 ──
-            GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f),
-                      "规则模式：" + (TableSettings.UseRulesV21 ? "v2.1（本分支默认）" : "旧流程")
-                      + "　｜　出牌不消耗行动机会，只有「启动破壁机」消耗 1 次 + 1 点刀片 H",
-                      dimPanel);
-            ty += 22f;
+            GUILayout.Label("规则模式：" + (TableSettings.UseRulesV21 ? "v2.1（本分支默认）" : "旧流程")
+                            + "　｜　出牌不消耗行动机会，只有「启动破壁机」消耗 1 次 + 1 点刀片 H",
+                            dimPanel);
 
-            DrawRulesWarning(x + 18f, ty, w - 36f, r);
-            ty += 24f;
+            DrawRulesWarning(r);
 
             // ── ②b 占位数值提示 ──
             //   卡表里 h/d/v 全 0 的卡会兜一套临时值（否则刀片 H=0、一进关卡就爆刀）。
             //   必须写出来 —— 不然玩家会把这套临时值当成策划定的数值。
             string ph = r.PlaceholderWarning();
-            if (!string.IsNullOrEmpty(ph))
-            {
-                GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f), ph, dimPanel);
-                ty += 22f;
-            }
+            if (!string.IsNullOrEmpty(ph)) GUILayout.Label(ph, dimPanel);
 
             // ── ③ 刀片（H / V / 四种附魔层数）──
-            GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f),
-                      "刀片：" + (r.blade != null ? r.blade.Describe() : "（无）")
-                      + (r.blade != null && r.blade.V <= 0 ? "　← 得分加成 0（该核心卡的 V 就是 0）" : ""),
-                      bodyPanel);
-            ty += 22f;
+            GUILayout.Label("刀片：" + (r.blade != null ? r.blade.Describe() : "（无）")
+                            + (r.blade != null && r.blade.V <= 0 ? "　← 得分加成 0（该核心卡的 V 就是 0）" : ""),
+                            bodyPanel);
 
-            GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f),
-                      "附魔层数：" + (r.blade != null ? r.blade.layers.Describe() : "（无）")
-                      + "　　本回合已启动 " + r.startsThisTurn + " 次"
-                      + (r.startsThisTurn > 0 ? "（最后一次启动会触发献祭吞噬）" : ""),
-                      bodyPanel);
-            ty += 22f;
+            GUILayout.Label("附魔层数：" + (r.blade != null ? r.blade.layers.Describe() : "（无）")
+                            + "　　本回合已启动 " + r.startsThisTurn + " 次"
+                            + (r.startsThisTurn > 0 ? "（最后一次启动会触发献祭吞噬）" : ""),
+                            bodyPanel);
 
             // ── ④ 目标素材 ──
-            GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f),
-                      "启动目标：" + r.TargetText,
-                      r.selected != null ? bodyPanel : dimPanel);
-            ty += 22f;
+            GUILayout.Label("启动目标：" + r.TargetText, r.selected != null ? bodyPanel : dimPanel);
 
             // ── ⑤ 手牌 / 桌面 ──
-            GUI.Label(new Rect(x + 18f, ty, w - 36f, 22f),
-                      "手牌：素材 " + r.hand.Count + " 张｜法术 " + r.handSpells.Count + " 张"
-                      + "　桌面素材 " + r.LiveTableCount() + " 张"
-                      + (turnLoop.StagedCount > 0 ? "　投放区待放置 " + turnLoop.StagedText : ""),
-                      dimPanel);
-            ty += 24f;
-
-            // ── ⑥ 按钮 ──
-            float by = y + h - 46f;
+            GUILayout.Label("手牌：素材 " + r.hand.Count + " 张｜法术 " + r.handSpells.Count + " 张"
+                            + "　桌面素材 " + r.LiveTableCount() + " 张"
+                            + (turnLoop.StagedCount > 0 ? "　投放区待放置 " + turnLoop.StagedText : ""),
+                            dimPanel);
 
             bool canActivate = r.CanActivate && r.selected != null && !r.selected.removed;
+
+            // 不能启动的原因直接写出来 —— 按钮灰着却不解释，玩家只会以为是 bug
+            if (!canActivate)
+            {
+                Color prev = GUI.color;
+                GUI.color = new Color(1f, 0.62f, 0.42f);
+                GUILayout.Label("⚠ " + r.BlockReason, dimPanel);
+                GUI.color = prev;
+            }
+
+            // ── ⑥ 按钮 ──
+            // 四个按钮平分一行：旧版是 x+18 / x+202 / x+364 / x+504 四个**写死的横坐标**，
+            // 面板一窄第四个就压到第三个上面去（挤成一坨没法点）。
+            GUILayout.Space(4f);
+            GUILayout.BeginHorizontal();
 
             bool oldEnabled = GUI.enabled;
             GUI.enabled = canActivate;
 
-            if (GUI.Button(new Rect(x + 18f, by, 176f, 34f), "启动破壁机", btn))
+            if (GUILayout.Button("启动破壁机", btn, GUILayout.ExpandWidth(true), GUILayout.Height(34f)))
             {
                 GUI.FocusControl(null);
                 turnLoop.ActivateJuicer();
@@ -906,61 +1001,64 @@ namespace GameJam.Prototype
 
             GUI.enabled = oldEnabled;
 
-            if (GUI.Button(new Rect(x + 202f, by, 154f, 34f), "放置到桌面", btn))
+            if (GUILayout.Button("放置到桌面", btn, GUILayout.ExpandWidth(true), GUILayout.Height(34f)))
             {
                 GUI.FocusControl(null);
                 turnLoop.Confirm();     // v2.1 下这一条 = 出牌（不消耗行动机会）
             }
 
-            if (GUI.Button(new Rect(x + 364f, by, 132f, 34f), "结束本回合", btn))
+            if (GUILayout.Button("结束本回合", btn, GUILayout.ExpandWidth(true), GUILayout.Height(34f)))
             {
                 GUI.FocusControl(null);
                 turnLoop.EndRoundOrLevel();
             }
 
-            if (GUI.Button(new Rect(x + 504f, by, 138f, 34f), "自动选目标", btn))
+            if (GUILayout.Button("自动选目标", btn, GUILayout.ExpandWidth(true), GUILayout.Height(34f)))
             {
                 GUI.FocusControl(null);
                 turnLoop.SelectNewestTarget();
             }
 
-            // 不能启动的原因直接写出来 —— 按钮灰着却不解释，玩家只会以为是 bug
-            if (!canActivate)
-                GUI.Label(new Rect(x + 18f, by - 20f, w - 36f, 20f),
-                          "⚠ " + r.BlockReason, dimPanel);
+            GUILayout.EndHorizontal();
+
+            GUILayout.EndVertical();
+            GUILayout.EndArea();
         }
 
         /// <summary>
-        /// 未实现规则的醒目提示。
+        /// 未实现规则的醒目提示（v2.1 状态栏里的那一行）。
         ///
         /// 【这条提示的存在意义】"没实现"最坏的样子不是缺功能，而是**看起来实现了**。
         ///   所以只要解析报告里有未识别的句子，这一行就必须是醒目的，
         ///   而且要给一个能查到"是哪几句"的入口（F2）。
         ///   报告没建出来时也不能装作干净 —— 那会写成"报告没建出来"。
+        ///
+        /// 【★ 为什么从 GUI.Label(Rect) 改成 GUILayout.Label】
+        ///   上一版画在一个写死 22 像素高的矩形里：这句话一折行，第二行就被裁。
+        ///   交给 GUILayout 之后它自己按文字长度要高度，多长都完整显示。
         /// </summary>
-        private void DrawRulesWarning(float x, float y, float w, TableRulesV21 r)
+        private void DrawRulesWarning(TableRulesV21 r)
         {
             int n = r.UnrecognizedCount;
 
             if (n < 0)
             {
-                GUI.Label(new Rect(x, y, w, 22f), "⚠ 卡表解析报告没建出来 —— 无法确认哪些规则没实现", dimPanel);
+                GUILayout.Label("⚠ 卡表解析报告没建出来 —— 无法确认哪些规则没实现", dimPanel);
                 return;
             }
 
             if (n == 0)
             {
-                GUI.Label(new Rect(x, y, w, 22f),
-                          "✓ 卡表规则文本全部已识别（" + (r.report != null ? r.report.ParsedSentences + " 句" : "") + "）",
-                          dimPanel);
+                GUILayout.Label("✓ 卡表规则文本全部已识别（"
+                                + (r.report != null ? r.report.ParsedSentences + " 句" : "") + "）",
+                                dimPanel);
                 return;
             }
 
             // 用暖红色，和别的灰字拉开 —— 这是"别信这一条"的信号
             Color prev = GUI.color;
             GUI.color = new Color(1f, 0.62f, 0.42f);
-            GUI.Label(new Rect(x, y, w, 22f),
-                      "⚠ " + n + " 条规则未实现（这些规则不会生效），按 F2 查看", bodyPanel);
+            GUILayout.Label("⚠ " + n + " 条规则未实现（这些规则不会生效），按 F2 查看", bodyPanel);
             GUI.color = prev;
         }
 
@@ -1044,31 +1142,32 @@ namespace GameJam.Prototype
             if (turnLoop.V21)
             {
                 TableRulesV21 r = turnLoop.rulesV21;
+                if (r == null) return;
 
-                const float vw = 520f, vh = 176f;
-                Rect vr = CenterBox(vw, vh);
-                GUI.Box(vr, GUIContent.none, panelBox);
+                // 【★ 布局】不再写死 520×176：结束原因是引擎写的中文句子
+                //   （"刀片 H 归零，爆刀"、"4 回合用完了"…长度不定），
+                //   写死高度时一折行就被裁。现在高按内容长、宽按屏幕收缩。
+                BeginCenterPanel(520f);
 
-                GUI.Label(new Rect(vr.x + 22f, vr.y + 18f, vw - 44f, 34f),
-                          r.bursted ? "爆　刀 —— 关卡结束" : "关卡结束", h1Panel);
+                GUILayout.Label(r.bursted ? "爆　刀 —— 关卡结束" : "关卡结束", h1Panel);
 
-                GUI.Label(new Rect(vr.x + 22f, vr.y + 58f, vw - 44f, 22f),
-                          "结束原因：" + (string.IsNullOrEmpty(r.endReason) ? "（未记录）" : r.endReason),
-                          bodyPanel);
+                GUILayout.Label("结束原因：" + (string.IsNullOrEmpty(r.endReason) ? "（未记录）" : r.endReason),
+                                bodyPanel);
 
-                GUI.Label(new Rect(vr.x + 22f, vr.y + 82f, vw - 44f, 22f),
-                          "最终分数：" + r.score + " / 目标分 " + r.targetScore
-                          + "　（爆刀时当前分数 ×2，正文 §五）",
-                          bodyPanel);
+                GUILayout.Label("最终分数：" + r.score + " / 目标分 " + r.targetScore
+                                + "　（爆刀时当前分数 ×2，正文 §五）", bodyPanel);
 
-                GUI.Label(new Rect(vr.x + 22f, vr.y + 106f, vw - 44f, 22f),
-                          "刀片：" + (r.blade != null ? r.blade.Describe() : "（无）"), dimPanel);
+                GUILayout.Label("刀片：" + (r.blade != null ? r.blade.Describe() : "（无）"), dimPanel);
 
-                if (GUI.Button(new Rect(vr.x + 22f, vr.y + vh - 54f, vw - 44f, 40f), "进入结算", btn))
+                GUILayout.Space(8f);
+
+                if (GUILayout.Button("进入结算", btn, GUILayout.ExpandWidth(true), GUILayout.Height(40f)))
                 {
                     GUI.FocusControl(null);
                     turnLoop.ShowLevelResult();
                 }
+
+                EndCenterPanel();
                 return;
             }
 
@@ -1187,134 +1286,143 @@ namespace GameJam.Prototype
         /// 这三个概念在 v2.1 里都不存在（分数由引擎即时算，没有杯内模拟）。
         /// 这里改成玩家真正要对账的东西：总分、本次启动的得分构成、以及引擎的原始日志。
         /// 日志是**照贴**的 —— 玩家说"我明明这么打却没过"时，一条条对回去。
+        ///
+        /// 【★ 布局这一版为什么换掉】原来是写死 660×430 + 日志每行 19 像素：
+        ///   引擎日志是中文长句，折一行就和下面的按钮叠在一起（按钮画在
+        ///   box.y + h - 56，日志按行数往下推，两边都不让谁）。
+        ///   现在日志单独给一块滚动区，面板多高它就多高 ——
+        ///   日志再长也只是滚动区变窄，按钮永远在面板里。
         /// </summary>
         private void DrawTurnResultV21()
         {
             TableRulesV21 r = turnLoop.rulesV21;
             if (r == null) return;
 
-            const float w = 660f, h = 430f;
-            Rect box = CenterBox(w, h);
+            // 尺寸跟着屏幕走：660×560 是设计尺寸，小窗口下按屏幕收缩
+            // （写死的话小窗口里面板比屏幕还大，底部按钮直接跑到屏幕外）
+            float w = Mathf.Max(320f, Mathf.Min(660f, Screen.width - 32f));
+            float h = Mathf.Max(220f, Mathf.Min(560f, Screen.height - 32f));
+            Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+
             GUI.Box(box, GUIContent.none, panelBox);
+            GUILayout.BeginArea(new Rect(box.x + 14f, box.y + 12f, w - 28f, h - 24f));
 
-            GUI.Label(new Rect(box.x + 22f, box.y + 14f, w - 44f, 32f),
-                      "第 " + r.turnIndex + " 回合" + (r.levelOver ? "（关卡已结束）" : "进行中"), h1Panel);
+            GUILayout.Label("第 " + r.turnIndex + " 回合" + (r.levelOver ? "（关卡已结束）" : "进行中"), h1Panel);
 
-            float y = box.y + 52f;
+            GUILayout.Label("总分：" + r.score + " / " + r.targetScore
+                            + "　　刀片：" + (r.blade != null ? r.blade.Describe() : "（无）"), bodyPanel);
 
-            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 24f),
-                      "总分：" + r.score + " / " + r.targetScore
-                      + "　　刀片：" + (r.blade != null ? r.blade.Describe() : "（无）"), bodyPanel);
-            y += 24f;
+            GUILayout.Label("附魔：" + (r.blade != null ? r.blade.layers.Describe() : "（无）")
+                            + "　　行动机会 " + r.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn,
+                            bodyPanel);
 
-            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 24f),
-                      "附魔：" + (r.blade != null ? r.blade.layers.Describe() : "（无）")
-                      + "　　行动机会 " + r.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn,
-                      bodyPanel);
-            y += 24f;
+            GUILayout.Label("本次启动：" + (string.IsNullOrEmpty(r.lastSummary) ? "（这一回合还没启动过）" : r.lastSummary),
+                            dimPanel);
 
-            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 24f),
-                      "本次启动：" + (string.IsNullOrEmpty(r.lastSummary) ? "（这一回合还没启动过）" : r.lastSummary),
-                      dimPanel);
-            y += 24f;
-
-            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 24f),
-                      "桌面素材：" + r.LiveTableCount() + " 张　　剩余手牌：" + r.HandText(), dimPanel);
-            y += 30f;
+            GUILayout.Label("桌面素材：" + r.LiveTableCount() + " 张　剩余手牌：" + r.HandText(), dimPanel);
 
             // ── 引擎日志尾部（结算顺序照贴，方便一条条对）──
-            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f), "── 上一次结算的引擎日志 ──", bodyPanel);
-            y += 24f;
+            // 每行不写死高度：日志是中文长句，折行之后整行都要在（原来写死 20 像素，
+            // 折出来的第二行被裁 —— 对账时最需要看的那半句正好没了）。
+            GUILayout.Space(2f);
+            GUILayout.Label("── 上一次结算的引擎日志 ──", bodyPanel);
+
+            turnResultLogScroll = GUILayout.BeginScrollView(turnResultLogScroll, false, false,
+                                                            GUILayout.ExpandHeight(true));
 
             List<string> tail = r.LastLogTail(12);
-            for (int i = 0; i < tail.Count; i++)
-            {
-                GUI.Label(new Rect(box.x + 26f, y, w - 48f, 20f), tail[i], dimPanel);
-                y += 19f;
-            }
             if (tail.Count == 0)
-                GUI.Label(new Rect(box.x + 26f, y, w - 48f, 20f), "（还没有启动过 —— 点顶栏的「启动破壁机」）", dimPanel);
+            {
+                GUILayout.Label("（还没有启动过 —— 点顶栏的「启动破壁机」）", dimPanel);
+            }
+            else
+            {
+                for (int i = 0; i < tail.Count; i++) GUILayout.Label(tail[i], dimPanel);
+            }
+
+            GUILayout.Space(14f);   // 末行别贴着下沿（贴着看着也像被切了）
+
+            GUILayout.EndScrollView();
 
             // ── 按钮 ──
-            bool over = r.levelOver || r.turnIndex >= GameJam.Rules.LevelRun.TurnsPerLevel;
-            string label = over ? "结束本关" : "下一回合";
+            GUILayout.Space(4f);
+            GUILayout.BeginHorizontal();
 
-            if (GUI.Button(new Rect(box.x + 22f, box.y + h - 56f, 220f, 42f), label, btn))
+            bool over = r.levelOver || r.turnIndex >= GameJam.Rules.LevelRun.TurnsPerLevel;
+
+            if (GUILayout.Button(over ? "结束本关" : "下一回合", btn,
+                                 GUILayout.ExpandWidth(true), GUILayout.Height(42f)))
             {
                 GUI.FocusControl(null);
                 turnLoop.NextTurn();
             }
 
-            if (GUI.Button(new Rect(box.x + w - 242f, box.y + h - 56f, 220f, 42f), "继续操作桌面", btn))
+            if (GUILayout.Button("继续操作桌面", btn, GUILayout.ExpandWidth(true), GUILayout.Height(42f)))
             {
                 GUI.FocusControl(null);
                 turnLoop.phase = TablePhase.Select;
             }
+
+            GUILayout.EndHorizontal();
+            GUILayout.EndArea();
         }
 
-        /// <summary>v2.1 的关卡总结算。列出 v2.1 真正有的东西（刀片 / 附魔 / 桌面 / 日志）。</summary>
+        /// <summary>
+        /// v2.1 的关卡总结算。列出 v2.1 真正有的东西（刀片 / 附魔 / 桌面 / 日志）。
+        ///
+        /// 【★ 布局】原来是写死 660×420 + 每行 22 像素：标题那一行
+        ///   （关卡名 + 总分数 + 通过/未通过）在窄窗口下折行就被 34 像素的矩形裁掉，
+        ///   面板宽 660 在小窗口下还横出屏幕。现在宽按屏幕收缩、高按内容长。
+        /// </summary>
         private void DrawLevelResultV21()
         {
             TableRulesV21 r = turnLoop.rulesV21;
             if (r == null) return;
 
-            const float w = 660f, h = 420f;
-            Rect box = CenterBox(w, h);
-            GUI.Box(box, GUIContent.none, panelBox);
+            BeginCenterPanel(660f);
 
-            GUI.Label(new Rect(box.x + 22f, box.y + 14f, w - 44f, 34f),
-                      turnLoop.level.Name + "　总分 " + r.score + " / 目标分 " + r.targetScore
-                      + "　" + (turnLoop.Passed ? "通过" : "未通过"), h1Panel);
+            GUILayout.Label(turnLoop.level.Name + "　总分 " + r.score + " / 目标分 " + r.targetScore
+                            + "　" + (turnLoop.Passed ? "通过" : "未通过"), h1Panel);
 
-            float y = box.y + 54f;
-
-            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
-                      "结束原因：" + (string.IsNullOrEmpty(r.endReason) ? "（未记录）" : r.endReason), bodyPanel);
-            y += 24f;
-
-            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
-                      "刀片：" + (r.blade != null ? r.blade.Describe() : "（无）"), bodyPanel);
-            y += 24f;
-
-            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
-                      "最终附魔：" + (r.blade != null ? r.blade.layers.Describe() : "（无）"), bodyPanel);
-            y += 24f;
-
-            GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
-                      "打过的回合：" + r.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel
-                      + "　桌面残留素材：" + r.LiveTableCount() + " 张", dimPanel);
-            y += 26f;
+            GUILayout.Label("结束原因：" + (string.IsNullOrEmpty(r.endReason) ? "（未记录）" : r.endReason), bodyPanel);
+            GUILayout.Label("刀片：" + (r.blade != null ? r.blade.Describe() : "（无）"), bodyPanel);
+            GUILayout.Label("最终附魔：" + (r.blade != null ? r.blade.layers.Describe() : "（无）"), bodyPanel);
+            GUILayout.Label("打过的回合：" + r.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel
+                            + "　桌面残留素材：" + r.LiveTableCount() + " 张", dimPanel);
 
             // 默认放行要说出来，不然"0 分也算通过"看着像 bug
             if (turnLoop.level.passByDefault)
-            {
-                GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
-                          "（Level.passByDefault 还开着：没到目标分也算通过）", dimPanel);
-                y += 22f;
-            }
+                GUILayout.Label("（Level.passByDefault 还开着：没到目标分也算通过）", dimPanel);
 
             if (r.warnings.Count > 0)
-            {
-                GUI.Label(new Rect(box.x + 22f, y, w - 44f, 22f),
-                          "⚠ 本关有 " + r.warnings.Count + " 条引擎警告（卡表缺产物之类），F2 看报告", dimPanel);
-            }
+                GUILayout.Label("⚠ 本关有 " + r.warnings.Count + " 条引擎警告（卡表缺产物之类），F2 看报告", dimPanel);
+
+            GUILayout.Space(8f);
 
             string label = turnLoop.Passed
                 ? (turnLoop.HasNextLevel ? "进入下一关" : "已是最后一关")
                 : "重试本关";
 
-            if (GUI.Button(new Rect(box.x + 22f, box.y + h - 56f, 230f, 40f), label, btn))
+            // 两个按钮平分一行：旧版是 x+22 与 x+w-230 两个写死的横坐标，
+            // 面板一窄就在中间叠在一起
+            GUILayout.BeginHorizontal();
+
+            if (GUILayout.Button(label, btn, GUILayout.ExpandWidth(true), GUILayout.Height(40f)))
             {
                 GUI.FocusControl(null);
                 if (turnLoop.Passed) turnLoop.NextLevel();
                 else                 turnLoop.RestartLevel();
             }
 
-            if (GUI.Button(new Rect(box.x + w - 230f, box.y + h - 56f, 208f, 40f), "返回关卡界面", btn))
+            if (GUILayout.Button("返回关卡界面", btn, GUILayout.ExpandWidth(true), GUILayout.Height(40f)))
             {
                 GUI.FocusControl(null);
                 turnLoop.OpenLevelSelect();
             }
+
+            GUILayout.EndHorizontal();
+
+            EndCenterPanel();
         }
 
         /// <summary>
@@ -1327,106 +1435,234 @@ namespace GameJam.Prototype
         ///
         /// 【万一报告建不出来】不能装作干净：这里会明写"报告没建出来"，
         ///   因为"没有未识别规则"和"不知道有没有未识别规则"是两回事。
+        ///
+        /// 【★ 排版为什么整个换成 GUILayout】
+        ///   上一版是"写死矩形 + 每行写死像素高"：统计行写死 24 像素高、
+        ///   滚动内容写死 4600 像素高。窗口一窄，100 多个字的统计行折成两行，
+        ///   第二行直接被那个 24 像素的矩形裁掉（截图里右边少一截就是这个）；
+        ///   内容实际比 4600 还高，"滚到底"也只能滚到 4600 处 ——
+        ///   最后一行永远差半行出不来。两处是同一个病根：
+        ///   **用手写的数字去猜排版结果**。现在高度全部由 GUILayout 自己算
+        ///   （它量的就是真正的换行结果），没有数字要猜了。
         /// </summary>
         private void DrawRulesReportPanel()
         {
             TableRulesV21 r = turnLoop != null ? turnLoop.rulesV21 : null;
 
-            float w = Mathf.Min(940f, Screen.width - 40f);
-            float h = Mathf.Min(640f, Screen.height - 40f);
+            // ── 面板尺寸跟着屏幕走 ──
+            // 940×640 是设计尺寸（大窗口下就是这么大，正文一行放得下）；
+            // 小窗口下按 Screen 减 32 收缩。两个 Min 缺一不可 ——
+            // 少了它们，面板会比屏幕还大：右边那一截连同"关闭"按钮都在屏幕外，
+            // 看得见半行字、却点不到按钮。下限只在窗口小到没法看时才生效。
+            float w = Mathf.Max(240f, Mathf.Min(940f, Screen.width - 32f));
+            float h = Mathf.Max(160f, Mathf.Min(640f, Screen.height - 32f));
             Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
 
             GUI.Box(box, GUIContent.none, panelBox);
 
-            GUI.Label(new Rect(box.x + 20f, box.y + 12f, w - 180f, 32f),
-                      "卡牌规则解析报告（v2.1）", h1Panel);
+            // 14 / 12 对的是 panelBox 的 padding(12) 与边框(8)：内容从"框里面"起，
+            // 不压在圆角边框上。★ 高度这里只减面板自己的内边距，
+            // 标题栏 / 统计行占掉多少**不用自己减** —— 滚动区是 ExpandHeight，
+            // 它自己会吃掉剩下的空间（旧版 h-100 那个 100 就是手算出来、还算错的）。
+            GUILayout.BeginArea(new Rect(box.x + 14f, box.y + 12f, w - 28f, h - 24f));
 
-            if (GUI.Button(new Rect(box.x + w - 130f, box.y + 12f, 112f, 30f), "关闭 (F2)", btn))
+            // ── 标题栏 ──
+            // 标题 ExpandWidth、按钮定宽：窗口再窄也是标题折行，按钮不会被挤出去
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("卡牌规则解析报告（v2.1）", h1Panel, GUILayout.ExpandWidth(true));
+            if (GUILayout.Button("关闭 (F2)", btn, GUILayout.Width(104f), GUILayout.Height(28f)))
             {
                 GUI.FocusControl(null);
                 rulesReportOpen = false;
             }
+            GUILayout.EndHorizontal();
 
             if (r == null || r.report == null)
             {
-                GUI.Label(new Rect(box.x + 20f, box.y + 56f, w - 40f, 24f),
-                          "⚠ 报告没建出来 —— 现在**无法确认**哪些规则没实现。"
-                          + "先看 Console 里 [V21] 那条警告。", bodyPanel);
+                GUILayout.Label("⚠ 报告没建出来 —— 现在**无法确认**哪些规则没实现。"
+                                + "先看 Console 里 [V21] 那条警告。", bodyPanel);
+                GUILayout.EndArea();
                 return;
             }
 
-            GUI.Label(new Rect(box.x + 20f, box.y + 54f, w - 40f, 24f),
-                      r.report.SummaryLine(), bodyPanel);
+            // ── 统计行 ──
+            // 拆成两行画（按 SummaryLine 里的"｜"拆），两行都**不设 GUILayout.Width**,
+            // 所以窗口再窄也只是继续折行，不会像原来那样被矩形裁掉右半边。
+            // 第一行固定是"素材 / 法术 / 句子 / 已解析 / 未识别"——
+            // "未识别 5"这个最该被看见的数绝不会被挤到看不见的地方去。
+            string[] summary = SplitSummary(r.report.SummaryLine());
+            for (int i = 0; i < summary.Length; i++) GUILayout.Label(summary[i], bodyPanel);
+            GUILayout.Space(2f);
 
-            // 只读文字：用 ScrollView 包（这里不是 GUILayout.Window，没有窗口自动适配的问题）
-            Rect view = new Rect(box.x + 16f, box.y + 84f, w - 32f, h - 100f);
-            rulesReportScroll = GUI.BeginScrollView(view, rulesReportScroll, new Rect(0f, 0f, w - 56f, 4600f));
+            // ── 滚动区 ──
+            // ★ 不传 viewRect：内容高度由 GUILayout 量，所以"能不能滚到最后一行"
+            //   不再取决于某个写死的常数（上一版那个 4600 就是这么来的坑）。
+            //   ExpandHeight(true) 让滚动区吃掉剩下的全部高度，
+            //   面板多高它就多高 —— 标题栏 / 统计行多高都不影响它。
+            //
+            // ★ 滚动区的顶边要在 BeginScrollView **之前**量（报告"滚到底"要用它算
+            //   可见高度）。不能写成"BeginScrollView 之后立刻 GetLastRect()"——
+            //   BeginScrollView 内部就是一个 group，"刚开组就取 last"是非法的：
+            //   实测每帧刷一条 "You cannot call GetLast immediately after beginning
+            //   a group" 控制台错误，而且取回来的是上一帧的脏矩形，
+            //   会把后面的排版整体带偏。GetRect(0,0) 是合法的零尺寸占位，
+            //   返回的就是下一个控件要被摆到的位置。
+            float scrollTop = GUILayoutUtility.GetRect(0f, 0f).y;
 
-            float y = 0f;
-            y = ReportSection(y, w - 60f,
-                              "未识别清单（这些句子不会生效 —— 必须给策划确认）",
-                              UnrecognizedLines(r));
+            rulesReportScroll = GUILayout.BeginScrollView(rulesReportScroll, false, false,
+                                                          GUILayout.ExpandHeight(true));
 
-            y = ReportSection(y, w - 60f, "规则表接不上（标签标了、连锁产物没写：命中却不变形）",
-                              r.report.tableGaps);
+            ReportSection("未识别清单（这些句子不会生效 —— 必须给策划确认）", UnrecognizedLines(r));
+            ReportSection("规则表接不上（标签标了、连锁产物没写：命中却不变形）", FlatLines(r.report.tableGaps));
+            ReportSection("可疑产出（产出的卡名不在卡表里）", FlatLines(r.report.unknownProducts));
+            ReportSection("占位数值（正文没给数，用了默认值）", FlatLines(r.report.placeholders));
+            ReportSection("v3 已取消、卡表里还留着的 v2.1 写法（写了也不生效）", FlatLines(r.report.superseded));
+            ReportSection("当前模型执行不了的条目", FlatLines(r.report.unsupported));
+            ReportSection("本关引擎打过的警告（运行时）", FlatLines(r.warnings));
+            ReportSection("正文自相矛盾 / 没写清（已按一个明确选择实现，待策划拍板）",
+                          FlatLines(r.report.conflicts));
 
-            y = ReportSection(y, w - 60f, "可疑产出（产出的卡名不在卡表里）",
-                              r.report.unknownProducts);
+            // 末尾留白：最后一行贴着滚动区下沿时，看着和被切了一半没区别
+            GUILayout.Space(16f);
 
-            y = ReportSection(y, w - 60f, "占位数值（正文没给数，用了默认值）",
-                              r.report.placeholders);
+            // 最后一块内容的底 = 报告的实际内容高度（滚动区内部坐标，0 就是顶部）
+            reportContentH = GUILayoutUtility.GetLastRect().yMax;
 
-            y = ReportSection(y, w - 60f, "v3 已取消、卡表里还留着的 v2.1 写法（写了也不生效）",
-                              r.report.superseded);
+            GUILayout.EndScrollView();
 
-            y = ReportSection(y, w - 60f, "当前模型执行不了的条目", r.report.unsupported);
+            // 可见高度 = Area 高度 − 滚动区上面用掉的部分。
+            // （滚动区是 Area 里最后一个控件，且 ExpandHeight(true)，剩下的都归它。）
+            reportViewH = Mathf.Max(0f, (h - 24f) - scrollTop);
 
-            y = ReportSection(y, w - 60f, "本关引擎打过的警告（运行时）", r.warnings);
-
-            ReportSection(y, w - 60f, "正文自相矛盾 / 没写清（已按一个明确选择实现，待策划拍板）",
-                          r.report.conflicts);
-
-            GUI.EndScrollView();
+            GUILayout.EndArea();
         }
 
-        private List<string> UnrecognizedLines(TableRulesV21 r)
+        /// <summary>
+        /// 把 SummaryLine() 按"｜"拆成最多两段（一行太长，拆开显示）。
+        ///
+        /// 【为什么不干脆让它自己折】折在哪随窗口宽度乱跳，最该被看见的
+        ///   "未识别 5"经常被折到第二行去。按分隔符拆死：第一段永远是
+        ///   "素材 / 法术 / 句子 / 已解析 / 未识别"，第二段是其余四个计数。
+        ///   两段各自还会 wordWrap，所以窗口再窄也只是多折一行，不会丢字。
+        ///
+        /// SummaryLine() 在 Rules 层（另有人在改，不动它），这里只负责排版。
+        /// </summary>
+        private static string[] SplitSummary(string s)
         {
-            List<string> lines = new List<string>();
+            string[] parts = s.Split(new string[] { " ｜ " }, System.StringSplitOptions.None);
+            if (parts.Length <= 2) return parts;
+
+            string head = parts[0] + " ｜ " + parts[1];
+            string tail = "";
+            for (int i = 2; i < parts.Length; i++)
+            {
+                if (tail.Length > 0) tail += " ｜ ";
+                tail += parts[i];
+            }
+            return new string[] { head, tail };
+        }
+
+        /// <summary>
+        /// 报告里的一行：缩进层级 + 文字 + 是否用亮色。
+        ///
+        /// 【为什么不把"原句 / 原因 / 建议"拼成一句话】拼起来是一条几百字的长串：
+        ///   窗口一窄折成四五段，看不出哪段是原因哪段是建议，策划改表时没法照着改。
+        ///   拆成一行一条、各自缩进，换行之后的续行也从缩进位开始，对得齐。
+        ///   （用空格填缩进不行：中文字体下空格宽度不稳，一折行就散了。）
+        /// </summary>
+        private struct ReportLine
+        {
+            public string text;
+            public int    indent;   // 0 = 条目首行，1 = "原句/原因/建议"这类展开行
+            public bool   strong;   // 条目首行用亮色，和展开行拉开层次
+
+            public ReportLine(string text, int indent, bool strong)
+            {
+                this.text = text;
+                this.indent = indent;
+                this.strong = strong;
+            }
+        }
+
+        /// <summary>
+        /// "未识别清单"的每一行。
+        ///
+        /// 【为什么这三行必须分开】这一节是整份报告里唯一"必须照着改"的部分：
+        ///   策划要拿原句去卡表里搜、照着原因判断、按建议改写。
+        ///   原来是拼成"卡·字段　原句：xx　→ 原因（建议：yy）"一整句，
+        ///   窗口一小就折成一团 —— 现在原句 / 原因 / 已认出 / 建议各占一行。
+        /// </summary>
+        private List<ReportLine> UnrecognizedLines(TableRulesV21 r)
+        {
+            List<ReportLine> lines = new List<ReportLine>();
+
             for (int i = 0; i < r.report.unrecognized.Count; i++)
             {
                 GameJam.Rules.UnrecognizedRule u = r.report.unrecognized[i];
                 if (u == null) continue;
 
-                lines.Add(u.cardName + "·" + u.field + "　原句：" + u.sentence
-                          + "　→ " + u.reason
-                          + (string.IsNullOrEmpty(u.suggestion) ? "" : "（建议：" + u.suggestion + "）"));
+                // 带上 cardId：策划是拿着 id 去 cards_v21.json 里定位的
+                string head = u.cardName + " · " + u.field;
+                if (!string.IsNullOrEmpty(u.cardId)) head += "　（" + u.cardId + "）";
+
+                lines.Add(new ReportLine(head, 0, true));
+                lines.Add(new ReportLine("原句：" + u.sentence, 1, false));
+                lines.Add(new ReportLine("原因：" + u.reason, 1, false));
+                if (!string.IsNullOrEmpty(u.partial))    lines.Add(new ReportLine("已认出：" + u.partial, 1, false));
+                if (!string.IsNullOrEmpty(u.suggestion)) lines.Add(new ReportLine("建议：" + u.suggestion, 1, false));
             }
             return lines;
         }
 
-        /// <summary>报告里的一节。返回下一节的起始 y（自增式排版，免得每节都算一遍偏移）。</summary>
-        private float ReportSection(float y, float w, string title, List<string> lines)
+        /// <summary>
+        /// 把本来就是"一句一条"的清单（接不上 / 占位值 / 可疑产出…）包成报告行。
+        /// 这些条目没有"原句/原因/建议"的结构，逐条显示就够。
+        /// </summary>
+        private static List<ReportLine> FlatLines(List<string> src)
+        {
+            List<ReportLine> lines = new List<ReportLine>();
+            if (src == null) return lines;
+
+            for (int i = 0; i < src.Count; i++) lines.Add(new ReportLine(src[i], 0, false));
+            return lines;
+        }
+
+        /// <summary>
+        /// 报告里的一节：标题 + 若干行。
+        ///
+        /// **没有 y 参数** —— 位置由 GUILayout 往下推。这样某一行折成两行时，
+        /// 后面的内容会自动让位，不会被裁掉（上一版每行 +40 像素的写法，
+        /// 一旦折行就整节错位）。
+        /// </summary>
+        private void ReportSection(string title, List<ReportLine> lines)
         {
             int n = lines != null ? lines.Count : 0;
 
-            GUI.Label(new Rect(8f, y, w, 24f), "── " + title + "：" + n + " ──", h1Panel);
-            y += 26f;
+            GUILayout.Space(6f);
+            GUILayout.Label("── " + title + "：" + n + " ──", h1Panel);
 
             if (n == 0)
             {
-                GUI.Label(new Rect(20f, y, w - 20f, 20f), "（无）", dimPanel);
-                y += 22f;
-            }
-            else
-            {
-                for (int i = 0; i < n; i++)
-                {
-                    GUI.Label(new Rect(20f, y, w - 20f, 40f), "· " + lines[i], dimPanel);
-                    y += 40f;
-                }
+                GUILayout.Label("　　（无）", dimPanel);
+                return;
             }
 
-            return y + 10f;
+            for (int i = 0; i < n; i++)
+            {
+                ReportLine line = lines[i];
+
+                // 条目之间空一点：一屏里几十条，不留缝就糊成一片
+                if (line.indent == 0 && i > 0) GUILayout.Space(8f);
+
+                GUILayout.BeginHorizontal();
+                GUILayout.Space(14f + line.indent * 22f);   // 缩进；续行也对得齐
+
+                // ★ ExpandWidth(true) 是必须的：不给它，"折行后的长文本"会按
+                //   自己的理想宽度撑出去，横向被裁 —— 这正是横向裁切的来源。
+                GUILayout.Label(line.text, line.strong ? bodyPanel : dimPanel,
+                                GUILayout.ExpandWidth(true));
+                GUILayout.EndHorizontal();
+            }
         }
 
         // ══════════════════════════════════════════════════════════════

@@ -20,6 +20,12 @@ namespace GameJam.EditorTools
     ///   DSH_PLAYCAPTURE=1  进 Play 后自动截图并退出（不给就停在 Play 里给人玩）
     ///   DSH_CAPTURE_DIR    截图输出目录，默认系统临时目录
     ///   DSH_TURNPROBE=1    跑回合循环探针（v2.1 / 旧流程各一条，按 TableSettings.UseRulesV21 选）
+    ///   DSH_DECK_INDEX=n   探针选第 n 副牌组（默认 0 = 配置里第一副，老行为不变）
+    ///   DSH_SPELL_COUNT=n  v2.1 探针开局打 n 张法术（默认 1；打 2 张才凑得到热≥2，
+    ///                      而形态变化规则大多要求热≥2，验变形时要设它）
+    ///   DSH_EXTRA_HEAT=n   启动前给刀片补 n 层热（探针调味料，默认 0；见 ProbeActivateV21）
+    ///                      v2.1 那条里还包含"打开 F2 规则报告 → 拍头部 → 滚到底 → 拍底部"，
+    ///                      用来验报告面板有没有裁字（截图日志里带窗口尺寸）
     ///
     /// 【★ 命令行怎么用：-executeMethod 必须指向一个**方法**】
     ///   Unity 的 -executeMethod 只认 `类.方法`，不能指向一个带 [InitializeOnLoad] 的静态类本身。
@@ -448,6 +454,57 @@ namespace GameJam.EditorTools
                 case 66:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("v21_turn2.png")) return;
+                    Stage = 73;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  F2 规则解析报告（⑦③~⑦⑦）
+                //
+                //  【为什么单独几步】报告平时是关着的，而它最要命的两个毛病
+                //  ——"统计行右边被裁"和"最下面一行只显示一半"—— 一个在顶部、
+                //  一个在**滚动条拉到底**时才看得见。一张图拍不到两处，
+                //  所以这里是"打开 → 拍头部 → 滚到底 → 拍底部 → 关掉"。
+                //  打开 / 滚动走的都是 HUD 的公开入口（SetRulesReportOpen /
+                //  ScrollRulesReportToEnd），和玩家按 F2、拖滚动条是同一条路。
+                // ══════════════════════════════════════════════════════
+
+                // ⑦③ 打开报告（等价于替玩家按一下 F2）
+                case 73:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    SetRulesReport(true);
+                    Stage = 74;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑦④ 拍报告头部（统计行在不在这张里）
+                case 74:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("v21_rules_report_top.png")) return;
+                    Stage = 75;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑦⑤ 滚到最底
+                case 75:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    ScrollRulesReportToEnd();
+                    Stage = 76;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑦⑥ 拍报告底部（最后一行完不完整看这张）
+                case 76:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("v21_rules_report_bottom.png")) return;
+                    Stage = 77;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑦⑦ 关掉报告，后面的 stage 拍到的还是正常的桌面
+                case 77:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    SetRulesReport(false);
                     Stage = 67;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -497,7 +554,11 @@ namespace GameJam.EditorTools
             // 这正是 Camera.Render() 那条路拍不到的部分。
             ScreenCapture.CaptureScreenshot(path);
             shotPaths.Add(path);
-            Debug.Log("[AutoPlay] 截图 " + path);
+
+            // 把窗口尺寸一并记进日志：HUD 的排版是按 Screen 算的，
+            // 验收"小窗口下会不会裁字"时必须知道这张图是在多大的窗口里拍的
+            // （不然两张图对不上号，说不清哪张是"大窗口"）。
+            Debug.Log("[AutoPlay] 截图 " + path + "（" + Screen.width + "×" + Screen.height + "）");
             return true;
         }
 
@@ -618,11 +679,29 @@ namespace GameJam.EditorTools
                 return;
             }
 
-            rig.SelectDeck(0);
+            int idx = DeckIndex();
+            rig.SelectDeck(idx);
             loop.ConfirmDeckPick();
 
-            Debug.Log("[AutoPlay] 牌组已确认 → 阶段 " + loop.phase
+            Debug.Log("[AutoPlay] 牌组已确认（第 " + idx + " 副）→ 阶段 " + loop.phase
                       + "，手牌 " + loop.turn.HandCount + " 张，刀片 " + loop.turn.BladeName());
+        }
+
+        /// <summary>
+        /// 探针选第几副牌组，默认 0（= 配置里的第一副，**老行为一个字没变**）。
+        ///
+        /// 【为什么要这个环境变量】v2.1 的三副牌组（deck_water_v21 等）排在旧牌组后面，
+        /// 想用探针验"v2.1 卡表真的会形态变化"就必须能选到它们。
+        /// 没有这个开关就只能改代码、跑完再改回来 —— 和 TableSettings 的
+        /// `DSH_RULES_V21` 是同一个理由（见那里的说明），而且很容易忘了改回来，
+        /// 那样分支默认行为就被悄悄改掉了。
+        /// </summary>
+        private static int DeckIndex()
+        {
+            string raw = System.Environment.GetEnvironmentVariable("DSH_DECK_INDEX");
+            int idx;
+            if (!string.IsNullOrEmpty(raw) && int.TryParse(raw, out idx) && idx >= 0) return idx;
+            return 0;
         }
 
         private static void SwapBlade()
@@ -710,6 +789,35 @@ namespace GameJam.EditorTools
         // ══════════════════════════════════════════════════════════════
 
         private static TableTurnLoop Loop() { return Object.FindObjectOfType<TableTurnLoop>(); }
+
+        /// <summary>
+        /// 打开 / 关闭 F2 规则解析报告 —— 走 HUD 自己的入口（玩家按 F2 走的是同一个字段）。
+        ///
+        /// 【为什么不模拟按键】按键是 Input 层的输入，编辑器探针塞不进去；
+        /// 而报告是 HUD 的私有状态，外面只能用这个口子开。
+        /// </summary>
+        private static void SetRulesReport(bool open)
+        {
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            if (hud == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] 找不到 TableHud，规则报告这次拍不到。");
+                return;
+            }
+
+            hud.SetRulesReportOpen(open);
+            Debug.Log("[AutoPlay/V21] 规则解析报告 " + (open ? "已打开" : "已关闭"));
+        }
+
+        /// <summary>把报告滚到最底 —— "最后一行只显示一半"这个毛病只在底部才看得见。</summary>
+        private static void ScrollRulesReportToEnd()
+        {
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            if (hud == null) return;
+
+            hud.ScrollRulesReportToEnd();
+            Debug.Log("[AutoPlay/V21] 规则解析报告已滚到底");
+        }
 
         private static void ProbeCorePickV21()
         {
@@ -802,6 +910,11 @@ namespace GameJam.EditorTools
         /// <summary>
         /// 打出手牌里的法术（附魔到刀片）—— 验证"法术不消耗行动机会"和"附魔层数会加上去"。
         /// 走的是玩家那条 OnSpellCardClicked，不另开捷径。
+        ///
+        /// 【为什么张数可配（DSH_SPELL_COUNT）】v2.1 的形态变化规则大多要求**热≥2**：
+        ///   只打 1 张火焰 = 热×1，水/冰这些卡的「液体→气态」「热反应」一条都命中不了，
+        ///   日志里看不到变形。要验"形态变化真的发生"就得能凑到热≥2。
+        ///   默认 1 张 = 老行为不变。
         /// </summary>
         private static void ProbeCastSpellV21()
         {
@@ -810,39 +923,97 @@ namespace GameJam.EditorTools
             if (setup == null || loop == null || loop.rulesV21 == null) return;
 
             TableRulesV21 r = loop.rulesV21;
+            int wanted = EnvInt("DSH_SPELL_COUNT", 1);
 
-            PlayCard spellCard = null;
-            for (int i = 0; i < setup.hand.Count; i++)
+            Debug.Log("[AutoPlay/V21] 手牌里的法术：" + r.handSpells.Count + " 张｜本步要打 " + wanted + " 张");
+
+            PlayCard lastSpellCard = null;
+            string lastSpellName = "";
+            if (r.handSpells.Count > 0 && r.handSpells[0] != null) lastSpellName = r.handSpells[0].name;
+            bool replayed = false;
+
+            for (int n = 0; n < wanted; n++)
             {
-                PlayCard c = setup.hand[i];
-                if (c != null && c.bindingSpell != null) { spellCard = c; break; }
+                PlayCard spellCard = null;
+                for (int i = 0; i < setup.hand.Count; i++)
+                {
+                    PlayCard c = setup.hand[i];
+                    if (c != null && c.bindingSpell != null) { spellCard = c; break; }
+                }
+
+                // 手牌里的法术打完了、但还要继续凑层数：
+                // **复用刚才那张 3D 法术卡**再点一次，走的还是 OnSpellCardClicked
+                // （它内部按 TableSpellCard.state 认牌，和这张卡还在不在手牌无关）。
+                // 不另造卡、也不自己实现附魔逻辑 —— 那样测的就不是玩家那条路了。
+                if (spellCard == null)
+                {
+                    if (lastSpellCard == null)
+                    {
+                        Debug.LogWarning("[AutoPlay/V21] 没有可打的法术了（已打 " + n + "/" + wanted +
+                                         " 张），法术探针提前收工。");
+                        return;
+                    }
+                    spellCard = lastSpellCard;
+                    replayed = true;
+
+                    Debug.Log("[AutoPlay/V21] 手牌里的法术已经打完了，改为重放同一张「" + lastSpellName +
+                              "」继续凑附魔层数（仍走 OnSpellCardClicked）。");
+                }
+
+                lastSpellCard = spellCard;
+
+                int apBefore = r.actionPoints;
+                string layersBefore = r.blade.layers.Describe();
+
+                bool handled = r.OnSpellCardClicked(spellCard);
+
+                Debug.Log("[AutoPlay/V21] 法术（第 " + (n + 1) + "/" + wanted + " 张" +
+                          (replayed ? "·重放" : "") + "）：" + spellCard.DisplayName
+                          + "｜被处理 " + handled
+                          + "｜行动机会 " + apBefore + " → " + r.actionPoints + "（应不变）"
+                          + "｜附魔 " + layersBefore + " → " + r.blade.layers.Describe()
+                          + "｜手牌 " + r.HandText());
             }
 
-            if (spellCard == null)
-            {
-                Debug.LogWarning("[AutoPlay/V21] 手牌里没有法术卡（3D 手牌 " + setup.hand.Count + " 张），法术探针跳过。");
-                return;
-            }
-
-            int apBefore = r.actionPoints;
-            string layersBefore = r.blade.layers.Describe();
-
-            bool handled = r.OnSpellCardClicked(spellCard);
-
-            Debug.Log("[AutoPlay/V21] 法术：" + spellCard.DisplayName
-                      + "｜被处理 " + handled
-                      + "｜行动机会 " + apBefore + " → " + r.actionPoints + "（应不变）"
-                      + "｜附魔 " + layersBefore + " → " + r.blade.layers.Describe()
-                      + "｜手牌 " + r.HandText());
+            r.RebuildHand();
         }
 
-        /// <summary>v2.1 的启动：直接走 ActivateJuicer（HUD 上那个按钮的同一个入口）。</summary>
+        /// <summary>读一个整数环境变量，没设或读不出就用默认值（探针开关统一走这里）。</summary>
+        private static int EnvInt(string name, int fallback)
+        {
+            string raw = System.Environment.GetEnvironmentVariable(name);
+            int v;
+            if (!string.IsNullOrEmpty(raw) && int.TryParse(raw, out v) && v >= 0) return v;
+            return fallback;
+        }
+
+        /// <summary>
+        /// v2.1 的启动：直接走 ActivateJuicer（HUD 上那个按钮的同一个入口）。
+        ///
+        /// 【DSH_EXTRA_HEAT 是干什么的】v2.1 的形态变化规则大多要求**热≥2**
+        ///   （液体→气态、遇热反应都是热≥2），而开局手里只有 1 张法术 = 热×1，
+        ///   纯自动流程永远看不到变形。"打第二张法术"走不通 ——
+        ///   法术卡打完就从手牌移除了，PlaySpell 会拒绝同一张卡（实测日志：
+        ///   「附魔 热×1 → 热×1｜被处理 True」，层数没涨）。
+        ///   所以给探针一个**调味料开关**：启动前直接补几层热，把引擎带到
+        ///   "规则该触发"的状态，再用真入口 ActivateJuicer 跑一次完整结算。
+        ///   它只影响探针，不参与任何游戏规则；默认 0 = 完全不变。
+        /// </summary>
         private static void ProbeActivateV21()
         {
             TableTurnLoop loop = Loop();
             if (loop == null || loop.rulesV21 == null) return;
 
             TableRulesV21 r = loop.rulesV21;
+
+            // DSH_EXTRA_HEAT=n：启动前给刀片补 n 层热（探针调味料，见方法说明）。
+            int extraHeat = EnvInt("DSH_EXTRA_HEAT", 0);
+            if (extraHeat > 0)
+            {
+                r.blade.layers.Add(GameJam.Rules.LayerKind.Heat, extraHeat);
+                Debug.Log("[AutoPlay/V21] 探针调味：给刀片补 " + extraHeat + " 层热 → " +
+                          r.blade.layers.Describe());
+            }
 
             Debug.Log("[AutoPlay/V21] 启动前：回合 " + r.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel
                       + "｜行动机会 " + r.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn

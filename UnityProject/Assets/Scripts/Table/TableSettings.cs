@@ -61,6 +61,25 @@ namespace GameJam.Prototype
         /// </summary>
         public static bool UsePlaceholderCardValues = true;
 
+        /// <summary>
+        /// v2.1 模式的**关卡目标分**（HUD 上「总分 x / y」里的 y 就是它）。
+        ///
+        /// 【为什么必须有这个值，而不是继续用 levels[].targetScore】
+        ///   game_config.json 的 `levels[].targetScore`（1000 / 1500 / 2000）是**旧流程**的数值：
+        ///   旧流程一回合内靠杯内粒子模拟一次结算就能拿几百分，1000 是照那个口径定的。
+        ///   而 v2.1 的每次启动得分只有「目标素材 V + 刀片 V」（正文 §四.3），
+        ///   V 档位是 1~8，一关 4 回合 × 5 次行动 = 最多 20 次启动 → 满分也就一两百分，
+        ///   **永远达不到 1000**：玩家只会看到"4 回合耗尽"，像是规则没生效。
+        ///   所以 v2.1 走自己这一个目标分，旧流程继续用 levels[].targetScore，两边互不影响。
+        ///
+        /// 【60 是怎么来的 —— 这是占位数，待策划定】
+        ///   正文 §2.6 只说"达到目标分即胜利"，**没有给任何目标分数值**。
+        ///   60 ≈ 一关里正常打完十几次启动的得分（按平均每次 4~6 分估），
+        ///   目的是让第一版**能收关**、能验证"达标结束"这条路径。
+        ///   正式数值请策划连同 §2.2 的 H/D/V 一起定，然后改这里一处即可。
+        /// </summary>
+        public static int V21TargetScore = 60;
+
         /// <summary>右键 / 中键转头灵敏度（度 / 鼠标单位）。</summary>
         public static float LookSensitivity = 3.2f;
 
@@ -74,6 +93,7 @@ namespace GameJam.Prototype
         {
             UseRulesV21               = true;
             UsePlaceholderCardValues  = true;
+            V21TargetScore            = 60;
             LookSensitivity           = 3.2f;
             ShowHints                 = true;
             ShowDebugInfo             = false;

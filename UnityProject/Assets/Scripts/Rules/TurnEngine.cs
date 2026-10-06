@@ -543,7 +543,10 @@ namespace GameJam.Rules
                         break;
 
                     default:
-                        Log(r, "　　仅改属性、未发生形态变化 → 继续检查下一个附魔类型");
+                        if (m.declaredNoChange)
+                            Log(r, "　　该卡把这条反应声明为「无变化」→ 继续检查下一个附魔类型");
+                        else
+                            Log(r, "　　仅改属性、未发生形态变化 → 继续检查下一个附魔类型");
                         break;
                 }
 
@@ -712,7 +715,30 @@ namespace GameJam.Rules
                 if (pr.clauses.Count > 0)
                 {
                     Log(r, "　　「" + target.name + "」带「献祭」标签 → 触发它的献祭效果");
-                    ExecuteClauses(r, state, target, pr, "献祭吞噬");
+
+                    for (int i = 0; i < pr.clauses.Count; i++)
+                    {
+                        RuleClause c = pr.clauses[i];
+
+                        // "刀片每次启动，…"（玻璃改成这种写法了）：吞噬发生在本次启动的
+                        // 计分之后，所以这条不能当场结算 —— 登记成刀片被动，从**下一次**启动开始生效。
+                        if (c.trigger == RuleTrigger.EachStartup)
+                        {
+                            bladePassives.Add(c);
+                            Log(r, "　　登记为刀片被动（从下一次启动开始，每次启动都生效）：" + c.sentence);
+                            continue;
+                        }
+
+                        string why;
+                        if (!ConditionHolds(c.condition, state, target, out why))
+                        {
+                            Log(r, "　　「" + c.sentence + "」条件不成立" + why + " → 跳过");
+                            continue;
+                        }
+
+                        Log(r, "　　「" + c.sentence + "」");
+                        for (int k = 0; k < c.actions.Count; k++) ExecuteAction(r, state, target, c.actions[k]);
+                    }
                 }
                 else if (!string.IsNullOrEmpty(target.card.sacrifice))
                 {

@@ -208,6 +208,22 @@ namespace GameJam.Prototype
             }
 
             level = levels[0];   // 兼容只认单关的旧调用
+
+            // ⑥ 把 cards_v21.json 的素材并进食材图鉴 —— **必须放在最后**。
+            //
+            // 【为什么需要这一步】v2.1 的牌组（deck_water_v21 等）引用的 id 是 cards_v21.json 的
+            //   卡（water / ice / steam / salt / iron / molten_iron …），而 game_config.json 的
+            //   `ingredients` 表里只有旧流程那 13 种食材。两套配置各管各的：
+            //   GameConfig 管"这一局怎么玩"，CardSpecs 管"卡牌是什么"。
+            //   不合并的话，牌组里这些 id 全部查不到（IngredientCatalog.Create 返回 null），
+            //   手牌会凭空少几张 —— 表现就是"出牌没反应、桌上没东西"，是"规则不执行"最像的原因之一。
+            //
+            // 【为什么放在最后】CardSpecs.EnsureRegistered 做的是**合并**：同 id 保留旧图鉴里
+            //   已有的数值、只补 v2.1 的描述字段（形态 / 标签 / 形态转换 / 启动 / 献祭）。
+            //   倒过来先注册就会把旧数值冲掉。放最后既保证牌组里那些 id 存在，
+            //   也保证旧食材的数值还是旧配置那一套 —— 旧流程的数值一个都没改。
+            //   它是幂等的（见 CardSpecs.EnsureRegistered），重复调没有副作用。
+            CardSpecs.EnsureRegistered();
         }
 
         private static Deck BuildDeck(DeckDto dto)
@@ -221,7 +237,7 @@ namespace GameJam.Prototype
             {
                 for (int i = 0; i < dto.ingredientIds.Length; i++)
                 {
-                    Ingredient ing = IngredientCatalog.Create(dto.ingredientIds[i]);
+                    Ingredient ing = ResolveIngredient(dto.ingredientIds[i]);
                     if (ing != null) deck.ingredients.Add(ing);
                 }
             }
@@ -236,6 +252,72 @@ namespace GameJam.Prototype
             }
 
             return deck;
+        }
+
+        /// <summary>
+        /// 按 id 取一张牌给牌组用。**顺序很关键：先 v2.1 卡表，再旧食材图鉴。**
+        ///
+        /// 【为什么先查 v2.1 卡表】牌组有两套来源：
+        ///   · 旧牌组（deck_sulfur_niter / deck_mercury_etch / deck_inert_wall）引用的 id
+        ///     定义在本文件的 `ingredients` 表里（alien_alloy / brine / clay …），卡表里没有 → 走图鉴。
+        ///   · v2.1 牌组（deck_water_v21 / deck_iron_v21 / deck_sulfur_v21）引用的 id
+        ///     定义在 cards_v21.json 里（water / ice / steam / salt / iron …）。
+        ///
+        ///   ★ 这是实机跑出来的坑：`water` / `sulfur` / `alien_alloy` 这几个 id **两张表里都有**，
+        ///   而 CardSpecs.EnsureRegistered() 的合并策略是"同 id 保留旧图鉴的数值"，
+        ///   所以图鉴里那份「水」带着**旧配置**的 H=1（盐性列），cards_v21.json 里写的是 H=2。
+        ///   原来先查图鉴 → v2.1 牌组拿到 H=1 的水 → 刀片 H = 核心卡 H = 1
+        ///   → 玩家启动一次就爆刀、关卡当场结束，规则再对也来不及跑。
+        ///   （自动试玩日志里的现象：`刀片核心 = 水 → 刀片 H=1`，然后分数 8 就 LevelEnd。）
+        ///   所以 v2.1 卡表里有的 id，一律以**卡表那一份**为准。
+        ///
+        /// 【旧流程为什么没被影响】旧牌组那 13 个 id 在 v2.1 卡表里一个都没有
+        ///   → CardSpecs.Material 返回 null → 照旧走 IngredientCatalog.Create。
+        ///   `defaultBladeId = iron_block`（铁块）同理，仍然从图鉴取，数值一个字节都没变。
+        ///
+        /// 【回退是 CardSpecs.Material(id)】GameConfig 和 CardSpecs 都在 Scripts/Prototype/，
+        ///   是同一层的两个配置入口（一个管玩法数值、一个管卡牌描述），互相引用不违反分层。
+        /// </summary>
+        private static Ingredient ResolveIngredient(string id)
+        {
+            // ① v2.1 卡表优先
+            Ingredient spec = CardSpecs.Material(id);
+            if (spec != null)
+            {
+                // 以卡表那一份重建：h/d/v 直接取卡表字段，**不借旧图鉴的 attrs**。
+                // （旧图鉴用 attrs 存"盐性/汞性/硫性"，它和 v2.1 的 H/D/V 名字相同、含义不同，
+                //   混用就会出现"卡面写着 H 4、结算按 1 算"。）
+                Ingredient v21 = new Ingredient(spec.id, spec.name, new AttrSet());
+
+                v21.series      = spec.series;
+                v21.form        = spec.form;
+                v21.tags        = spec.tags;
+                v21.transitions = spec.transitions;
+                v21.exhaust     = spec.exhaust;
+                v21.startup     = spec.startup;
+                v21.sacrifice   = spec.sacrifice;
+                v21.note        = spec.note;
+                v21.h           = spec.h;
+                v21.d           = spec.d;
+                v21.v           = spec.v;
+                v21.vGrade      = spec.vGrade;
+
+                // 卡面属性区读的是 attrs（沿用旧玩法那套），同步一份 ——
+                // 否则桌上这张卡的属性区显示的是旧配置的 1/9/1，和结算用的 H/D/V 对不上。
+                v21.attrs.Set(AttrId.Salt,    v21.h);
+                v21.attrs.Set(AttrId.Mercury, v21.d);
+                v21.attrs.Set(AttrId.Sulfur,  v21.v);
+
+                return v21;
+            }
+
+            // ② 旧食材图鉴（旧牌组 + 兜底刀片走这条）
+            Ingredient old = IngredientCatalog.Create(id);
+            if (old != null) return old;
+
+            Debug.LogWarning("[GameConfig] 牌组引用的素材 id \"" + id +
+                             "\" 在 cards_v21.json 和 game_config.ingredients 里都找不到，已跳过。");
+            return null;
         }
 
         private static SpeedModule BuildModule(ModuleDto dto)

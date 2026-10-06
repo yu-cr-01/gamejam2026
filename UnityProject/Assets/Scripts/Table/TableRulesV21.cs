@@ -170,7 +170,10 @@ namespace GameJam.Prototype
         public readonly List<MaterialCard> hand = new List<MaterialCard>();
         public readonly List<SpellCard> handSpells = new List<SpellCard>();
 
-        /// <summary>当前关卡的目标分（来自 LevelData.targetScore，为 0 时用 FallbackTargetScore）。</summary>
+        /// <summary>
+        /// 当前关卡的目标分。v2.1 用 <see cref="TableSettings.V21TargetScore"/>（见 BeginLevel 的说明），
+        /// 配置为 0 时退回 <see cref="FallbackTargetScore"/>。
+        /// </summary>
         public int targetScore;
 
         /// <summary>当前回合（从 1 开始）与行动机会。</summary>
@@ -286,7 +289,21 @@ namespace GameJam.Prototype
             actionPoints   = LevelRun.ActionPointsPerTurn;
             startsThisTurn = 0;
 
-            targetScore = levelTargetScore > 0 ? levelTargetScore : FallbackTargetScore;
+            // ★ 目标分：v2.1 用 TableSettings.V21TargetScore，**不用** levelTargetScore。
+            //   传进来的那个值来自 game_config.json 的 levels[].targetScore（1000/1500/2000），
+            //   那是旧流程的口径（旧流程一次杯内模拟能拿几百分）。
+            //   v2.1 每次启动只有「目标 V + 刀片 V」= 几分，一关最多 20 次启动，
+            //   拿 1000 当目标 = 永远达不到 → 玩家只看到"4 回合耗尽"，像是规则没生效。
+            //   所以这里只做一件事：v2.1 走自己的目标分（默认 60，理由见 TableSettings）。
+            //   levelTargetScore 留着不删、也不再参与 v2.1 结算：旧流程的数值一个字都没动。
+            targetScore = TableSettings.V21TargetScore > 0
+                ? TableSettings.V21TargetScore
+                : FallbackTargetScore;
+            if (levelTargetScore > 0 && levelTargetScore != targetScore)
+            {
+                Debug.Log("[V21] 目标分取 v2.1 专用值 " + targetScore +
+                          "（配置里旧流程的 targetScore=" + levelTargetScore + " 不参与 v2.1 结算）");
+            }
 
             // 规则旋钮每关一份。TargetScore 必须填进去 —— 引擎的 Finish() 靠它判"达到目标分"。
             rules = new TurnRules();

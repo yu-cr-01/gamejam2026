@@ -287,6 +287,16 @@ namespace GameJam.Rules
         /// <summary>括号说明里写了"（D立即归零）"。</summary>
         public bool dToZero;
 
+        /// <summary>
+        /// 卡表显式声明"这条反应没有产物"（例如「遇酸 + 酸 → 无变化（带惰性标签，不溶于酸）」）。
+        /// 它**不是**"忘了写产物"（那是数据缺口），而是"规则会命中，但这张卡没有这个形态"：
+        /// 引擎遇到它要按"仅改属性 / 无变化"处理，并且**不算数据缺口**。
+        /// </summary>
+        public bool declaredNoChange;
+
+        /// <summary>声明无变化时括号里给的原因。</summary>
+        public string noChangeReason = "";
+
         /// <summary>括号里的其它说明（原样留着给日志）。</summary>
         public string annotation = "";
 
@@ -303,6 +313,10 @@ namespace GameJam.Rules
 
         public string Describe()
         {
+            if (declaredNoChange)
+                return condition.Describe() + " → 无变化" +
+                       (string.IsNullOrEmpty(noChangeReason) ? "（卡表声明）" : "（" + noChangeReason + "）");
+
             string s = condition.Describe() + " → " + (first != null ? first.cardName : "?");
             if (extra.Count > 0)
             {
@@ -1514,6 +1528,23 @@ namespace GameJam.Rules
                     namePart = result.Substring(0, lp).Trim();
                 }
 
+                // ★ 显式声明"无变化"：卡表用「遇酸 + 酸 → 无变化（带惰性标签，不溶于酸）」表示
+                //   "规则会命中，但这张卡没有这个形态"。这是数据侧补缺口时用的新写法，
+                //   要当成**已声明的结果**收下：既不算未识别，也不算"忘了写连锁产物"。
+                if (IsNoChangeResult(namePart))
+                {
+                    tr.recognized = true;
+                    tr.declaredNoChange = true;
+                    tr.noChangeReason = tr.annotation;
+                    res.transitions.Add(tr);
+
+                    RuleClause nc = new RuleClause { condition = tr.condition, sentence = source, note = "形态转换：该卡声明无变化" };
+                    nc.actions.Add(Act(RuleOp.None, result, "该卡声明这条反应没有产物" +
+                        (string.IsNullOrEmpty(tr.noChangeReason) ? "" : "：" + tr.noChangeReason)));
+                    res.clauses.Add(nc);
+                    continue;
+                }
+
                 // 结果可能多张："火焰、碳"、"水 + 空白卡"
                 string[] products = namePart.Split(new char[] { '、', '，', ',', '+' }, StringSplitOptions.RemoveEmptyEntries);
 
@@ -1552,6 +1583,20 @@ namespace GameJam.Rules
             }
 
             return res;
+        }
+
+        /// <summary>
+        /// 结果那半句是不是"无变化"这类**显式声明没有产物**的写法。
+        /// 认这几种：`无` / `不变` / `无变化…`（可带括号原因、句号）。
+        /// </summary>
+        public static bool IsNoChangeResult(string namePart)
+        {
+            string s = (namePart != null ? namePart : "").Trim();
+            s = s.TrimEnd('。', '.', '！', '!', '，', ',').Trim();
+
+            if (s.Length == 0) return false;
+            if (s == "无" || s == "不变") return true;
+            return s.StartsWith("无变化", StringComparison.Ordinal);
         }
 
         /// <summary>解析 D 耗尽表（"空白卡" / "火焰 + 余温" / "变为一张随机法术卡"）。</summary>
