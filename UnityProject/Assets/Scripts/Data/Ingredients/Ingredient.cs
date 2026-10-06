@@ -73,6 +73,32 @@ namespace GameJam.Data
         /// <summary>策划备注 / 需求说明（原文）。</summary>
         public string note = "";
 
+        // ── v2.1 的数值（和上面的 attrs 并存，两套模型互不干扰）──────────
+        //
+        // 【为什么另开三个字段，不塞进 AttrSet】
+        //   attrs 是**旧模型**的属性（盐性/汞性/硫性），旧玩法的杯内模拟、刀片、
+        //   效果系统全都在用它。v2.1 的 H/D/V 是**新模型**的三属性：
+        //     H = 硬度（刀片被打的就是它）　V = 计分用的倾向　D = 耐久（归零 = D耗尽）
+        //   两者数值口径不同（例如旧的水是 硫性1，新模型要 V=2）。
+        //   硬塞进同一个 AttrSet 会让旧玩法跟着变，所以新开字段，
+        //   由 CardSpecs 从 cards_v21.json 填，旧配置一个字节都不用动。
+        //
+        // 数值来源：正文 §2.2 只给了 V 的档位映射（极低1 低2 中3 高5 极高8），
+        // 具体数值"等待第二周设计关卡一并处理" —— 现在卡表里是**占位值**（见 JSON 的 _valuesComment）。
+        // ──────────────────────────────────────────────────────────────
+
+        /// <summary>硬度（v2.1）。刀片被打、被酸爆扣的都是它。</summary>
+        public int h;
+
+        /// <summary>耐久初始值（v2.1）。归零 = D 耗尽。场上实例的 D 由 MaterialState 持有。</summary>
+        public int d;
+
+        /// <summary>计分倾向（v2.1）。每次启动得分 = 目标素材 V + 刀片 V。</summary>
+        public int v;
+
+        /// <summary>V 的档位文字（极低/低/中/高/极高），卡表里和 v 一起给，方便策划核对。</summary>
+        public string vGrade = "";
+
         public Ingredient()
         {
             id = "";
@@ -130,6 +156,7 @@ namespace GameJam.Data
             c.startup  = startup;
             c.sacrifice = sacrifice;
             c.note     = note;
+            c.h = h; c.d = d; c.v = v; c.vGrade = vGrade;
 
             if (transitions != null)
             {

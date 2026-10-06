@@ -170,6 +170,20 @@ namespace GameJam.Data
         public string startup;
         public string sacrifice;
         public string note;
+
+        // ── v2.1 数值（正文 §2.2：V 档位映射 极低1/低2/中3/高5/极高8）────
+        // 具体数值待策划补；卡表里现在是占位值，见 JSON 的 _valuesComment。
+        /// <summary>硬度</summary>
+        public int h;
+
+        /// <summary>耐久初始值（归零 = D 耗尽）</summary>
+        public int d;
+
+        /// <summary>计分倾向</summary>
+        public int v;
+
+        /// <summary>V 的档位文字（极低/低/中/高/极高），和 v 一起给，方便核对</summary>
+        public string vGrade;
     }
 
     /// <summary>一个法术（spells 数组元素）。</summary>

@@ -225,6 +225,20 @@ namespace GameJam.Prototype
             ing.sacrifice = d.sacrifice != null ? d.sacrifice : "";
             ing.note = d.note != null ? d.note : "";
 
+            // v2.1 数值：卡表里给了就用（哪怕全是 0，也是"策划明确写了 0"），
+            // 没给这一节才退回旧图鉴带过来的 attrs 换算（H=盐性、V=硫性）
+            ing.h = d.h;
+            ing.d = d.d;
+            ing.v = d.v;
+            ing.vGrade = d.vGrade != null ? d.vGrade : "";
+
+            if (ing.h == 0 && ing.v == 0 && old != null && old.attrs != null)
+            {
+                ing.h = old.attrs.Get(AttrId.Salt);
+                ing.v = old.attrs.Get(AttrId.Sulfur);
+                ing.vGrade = "（旧值）";
+            }
+
             if (d.transitions != null)
             {
                 ing.transitions = new FormChange[d.transitions.Length];
