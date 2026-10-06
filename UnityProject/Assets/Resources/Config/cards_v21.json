@@ -1,0 +1,495 @@
+{
+  "_comment": "《破壁机计划》卡牌需求设计 v2.1 素材与法术总表。策划改这里，代码不动。",
+  "materials": [
+    {
+      "id": "alien_alloy",
+      "name": "外星合金",
+      "series": "通用与特殊",
+      "form": "固体",
+      "tags": ["固体", "惰性", "献祭"],
+      "transitions": [ { "trigger": "", "result": "无。不响应热、冷、酸。" } ],
+      "exhaust": ["空白卡"],
+      "startup": "额外消耗其他素材H。",
+      "sacrifice": "无额外效果。",
+      "note": "H较高，适合作为刀片核心。不抢流派特色，稳定、硬、不参与反应。"
+    },
+    {
+      "id": "white_phosphorus",
+      "name": "白磷",
+      "series": "通用与特殊",
+      "form": "固体",
+      "tags": ["固体", "易燃", "遇热", "有毒", "献祭"],
+      "transitions": [ { "trigger": "易燃 + 热", "result": "火焰（D立即归零）" } ],
+      "exhaust": ["火焰"],
+      "startup": "",
+      "sacrifice": "刀片附带一层不衰退的热。",
+      "note": "极度易燃，遇热立即燃烧并产生火焰法术。"
+    },
+    {
+      "id": "water",
+      "name": "水",
+      "series": "水",
+      "form": "液体",
+      "tags": ["液体", "遇热", "遇冷", "献祭"],
+      "transitions": [
+        { "trigger": "遇热 + 热", "result": "水蒸气" },
+        { "trigger": "遇冷 + 冷", "result": "冰" }
+      ],
+      "exhaust": ["空白卡"],
+      "startup": "不消耗刀片H。消耗刀片所有热层数，额外产生一张水蒸气；消耗刀片所有冷层数，额外产生一张冰；消耗刀片所有酸层数，额外产生一张空白卡。",
+      "sacrifice": "刀片附带一层不衰退的冷。",
+      "note": ""
+    },
+    {
+      "id": "ice",
+      "name": "冰",
+      "series": "水",
+      "form": "固体",
+      "tags": ["固体", "可熔", "遇热", "献祭"],
+      "transitions": [ { "trigger": "可熔 + 热", "result": "水" } ],
+      "exhaust": ["水", "空白卡"],
+      "startup": "若刀片冷层数≥3，则本次启动额外产生一张冰霜法术进手牌。",
+      "sacrifice": "刀片附带一层不衰退的冷。",
+      "note": ""
+    },
+    {
+      "id": "steam",
+      "name": "水蒸气",
+      "series": "水",
+      "form": "气体",
+      "tags": ["气体", "遇冷", "献祭"],
+      "transitions": [ { "trigger": "遇冷 + 冷", "result": "水" } ],
+      "exhaust": ["空白卡"],
+      "startup": "若刀片有热附魔，则不消耗热层数，且本次启动得分翻倍；若刀片有冷附魔，则不消耗冷层数，且本次启动得分翻倍。",
+      "sacrifice": "刀片附带一层不衰退的冷。",
+      "note": ""
+    },
+    {
+      "id": "wood",
+      "name": "木头",
+      "series": "木头",
+      "form": "固体",
+      "tags": ["固体", "易燃", "遇热"],
+      "transitions": [ { "trigger": "易燃 + 热", "result": "火焰、碳" } ],
+      "exhaust": ["空白卡"],
+      "startup": "",
+      "sacrifice": "遇到水时，H+1。",
+      "note": ""
+    },
+    {
+      "id": "carbon",
+      "name": "碳",
+      "series": "木头",
+      "form": "固体",
+      "tags": ["固体", "易燃", "遇热", "献祭"],
+      "transitions": [ { "trigger": "易燃 + 热", "result": "余温" } ],
+      "exhaust": ["火焰", "余温"],
+      "startup": "若刀片热层数≥3，则本次启动产生一张火焰法术进手牌。",
+      "sacrifice": "一次性获得6层热。",
+      "note": ""
+    },
+    {
+      "id": "leather",
+      "name": "皮革",
+      "series": "皮革",
+      "form": "固体",
+      "tags": ["固体", "易燃", "遇热", "遇酸"],
+      "transitions": [
+        { "trigger": "易燃 + 热", "result": "空白卡" },
+        { "trigger": "遇酸 + 酸", "result": "空白卡" }
+      ],
+      "exhaust": ["法术卷轴"],
+      "startup": "若刀片有热/酸附魔，则本次启动得分为0，但产生一张法术卷轴进手牌。",
+      "sacrifice": "",
+      "note": ""
+    },
+    {
+      "id": "spell_scroll",
+      "name": "法术卷轴",
+      "series": "皮革",
+      "form": "固体",
+      "tags": ["固体", "易燃", "遇热", "遇酸"],
+      "transitions": [
+        { "trigger": "易燃 + 热", "result": "灰烬" },
+        { "trigger": "遇酸 + 酸", "result": "灰烬" }
+      ],
+      "exhaust": ["变为一张随机法术卡"],
+      "startup": "",
+      "sacrifice": "指定手牌中的1张法术卡，复制2张。",
+      "note": ""
+    },
+    {
+      "id": "copper",
+      "name": "铜",
+      "series": "铜",
+      "form": "固体",
+      "tags": ["固体", "金属", "可熔", "遇热", "遇酸", "献祭"],
+      "transitions": [
+        { "trigger": "可熔 + 热", "result": "熔融铜" },
+        { "trigger": "遇酸 + 酸", "result": "铜溶液" }
+      ],
+      "exhaust": ["空白卡"],
+      "startup": "若刀片酸层数≥3，则本次启动额外消耗1点刀片H，但得分翻倍。",
+      "sacrifice": "刀片每次启动，其他素材D-2。",
+      "note": ""
+    },
+    {
+      "id": "molten_copper",
+      "name": "熔融铜",
+      "series": "铜",
+      "form": "液体",
+      "tags": ["液体", "金属", "遇冷", "遇酸", "献祭"],
+      "transitions": [
+        { "trigger": "遇冷 + 冷", "result": "铜" },
+        { "trigger": "遇酸 + 酸", "result": "铜溶液" }
+      ],
+      "exhaust": ["空白卡"],
+      "startup": "若刀片酸层数≥3，则本次启动额外产生一张酸蚀法术进手牌。",
+      "sacrifice": "刀片附带一层不衰退的热。",
+      "note": ""
+    },
+    {
+      "id": "copper_solution",
+      "name": "铜溶液",
+      "series": "铜",
+      "form": "液体",
+      "tags": ["液体", "金属", "遇冷", "献祭"],
+      "transitions": [
+        { "trigger": "遇冷 + 冷", "result": "铜" },
+        { "trigger": "液体 + 热", "result": "铜蒸气" }
+      ],
+      "exhaust": ["酸蚀", "空白卡"],
+      "startup": "不消耗刀片H；若刀片有酸，则本次启动得分翻倍。",
+      "sacrifice": "刀片附带一层不衰退的酸。",
+      "note": ""
+    },
+    {
+      "id": "copper_vapor",
+      "name": "铜蒸气",
+      "series": "铜",
+      "form": "气体",
+      "tags": ["气体", "金属", "有毒", "遇冷", "献祭"],
+      "transitions": [ { "trigger": "遇冷 + 冷", "result": "铜溶液" } ],
+      "exhaust": ["空白卡", "酸爆"],
+      "startup": "",
+      "sacrifice": "产生1张酸爆。",
+      "note": ""
+    },
+    {
+      "id": "iron",
+      "name": "铁",
+      "series": "铁",
+      "form": "固体",
+      "tags": ["固体", "金属", "可熔", "遇热", "遇酸", "献祭"],
+      "transitions": [
+        { "trigger": "可熔 + 热", "result": "熔融铁" },
+        { "trigger": "遇酸 + 酸", "result": "铁溶液" }
+      ],
+      "exhaust": ["空白卡"],
+      "startup": "若刀片热层数≥3，则本次启动额外消耗1点刀片H，但得分翻倍。",
+      "sacrifice": "刀片每次启动，其他素材D-3。",
+      "note": ""
+    },
+    {
+      "id": "molten_iron",
+      "name": "熔融铁",
+      "series": "铁",
+      "form": "液体",
+      "tags": ["液体", "金属", "遇冷", "遇酸", "献祭"],
+      "transitions": [
+        { "trigger": "遇冷 + 冷", "result": "铁" },
+        { "trigger": "遇酸 + 酸", "result": "铁溶液" }
+      ],
+      "exhaust": ["空白卡"],
+      "startup": "若刀片热层数≥3，则本次启动额外产生一张火焰法术进手牌；若刀片有冷层数，消耗所有冷层数，以及和冷层数相当的H，每消耗一层，获得5分；不消耗刀片H，且刀片H+1。",
+      "sacrifice": "刀片附带一层不衰退的热。",
+      "note": ""
+    },
+    {
+      "id": "iron_solution",
+      "name": "铁溶液",
+      "series": "铁",
+      "form": "液体",
+      "tags": ["液体", "金属", "遇冷", "献祭"],
+      "transitions": [
+        { "trigger": "遇冷 + 冷", "result": "铁" },
+        { "trigger": "液体 + 热", "result": "铁蒸气、酸蚀" }
+      ],
+      "exhaust": ["酸蚀", "空白卡"],
+      "startup": "不消耗刀片H。",
+      "sacrifice": "刀片附带一层不衰退的冷。",
+      "note": ""
+    },
+    {
+      "id": "iron_vapor",
+      "name": "铁蒸气",
+      "series": "铁",
+      "form": "气体",
+      "tags": ["气体", "金属", "有毒", "遇冷", "献祭"],
+      "transitions": [ { "trigger": "遇冷 + 冷", "result": "铁溶液" } ],
+      "exhaust": ["空白卡"],
+      "startup": "",
+      "sacrifice": "刀片附带一层不衰退的热。",
+      "note": "高V。"
+    },
+    {
+      "id": "gold",
+      "name": "黄金",
+      "series": "黄金",
+      "form": "固体",
+      "tags": ["固体", "金属", "可熔", "惰性", "献祭"],
+      "transitions": [ { "trigger": "可熔 + 热", "result": "熔融金" } ],
+      "exhaust": ["催化术", "空白卡"],
+      "startup": "",
+      "sacrifice": "一次性获得30分，获得3张催化术。",
+      "note": ""
+    },
+    {
+      "id": "molten_gold",
+      "name": "熔融金",
+      "series": "黄金",
+      "form": "液体",
+      "tags": ["液体", "金属", "遇冷", "献祭"],
+      "transitions": [ { "trigger": "遇冷 + 冷", "result": "黄金" } ],
+      "exhaust": ["催化术", "空白卡"],
+      "startup": "刀片不消耗H。",
+      "sacrifice": "刀片减少5H，额外增加10V。",
+      "note": ""
+    },
+    {
+      "id": "salt",
+      "name": "盐",
+      "series": "盐",
+      "form": "固体",
+      "tags": ["固体", "可溶", "遇酸", "献祭"],
+      "transitions": [ { "trigger": "可溶 + 酸", "result": "盐溶液" } ],
+      "exhaust": ["结晶", "空白卡"],
+      "startup": "若有冷/热/酸，层数翻倍。",
+      "sacrifice": "获得1层不衰退的催化。",
+      "note": ""
+    },
+    {
+      "id": "salt_solution",
+      "name": "盐溶液",
+      "series": "盐",
+      "form": "液体",
+      "tags": ["液体", "遇冷", "遇热", "献祭"],
+      "transitions": [
+        { "trigger": "遇冷 + 冷", "result": "盐" },
+        { "trigger": "遇热 + 热", "result": "水蒸气" }
+      ],
+      "exhaust": ["结晶", "空白卡"],
+      "startup": "不消耗H，同时每有1层冷/热/酸，获得1分。",
+      "sacrifice": "获得1层不衰退的催化。",
+      "note": ""
+    },
+    {
+      "id": "mercury",
+      "name": "汞",
+      "series": "汞",
+      "form": "液体",
+      "tags": ["液体", "金属", "有毒", "遇热", "遇冷", "献祭"],
+      "transitions": [
+        { "trigger": "液体 + 热", "result": "汞蒸气" },
+        { "trigger": "遇冷 + 冷", "result": "固态汞" }
+      ],
+      "exhaust": ["空白卡"],
+      "startup": "不消耗刀片H，同时刀片额外获得1H。",
+      "sacrifice": "刀片附带1层不衰退的冷。",
+      "note": ""
+    },
+    {
+      "id": "mercury_vapor",
+      "name": "汞蒸气",
+      "series": "汞",
+      "form": "气体",
+      "tags": ["气体", "金属", "有毒", "遇冷", "献祭"],
+      "transitions": [ { "trigger": "遇冷 + 冷", "result": "汞" } ],
+      "exhaust": ["空白卡"],
+      "startup": "若刀片有热附魔，则本次启动消耗刀片所有热层数，每消耗一层获得一定分数。",
+      "sacrifice": "刀片附带一层不衰退的冷。",
+      "note": ""
+    },
+    {
+      "id": "solid_mercury",
+      "name": "固态汞",
+      "series": "汞",
+      "form": "固体",
+      "tags": ["固体", "金属", "可熔", "遇热", "献祭"],
+      "transitions": [ { "trigger": "可熔 + 热", "result": "汞" } ],
+      "exhaust": ["空白卡"],
+      "startup": "",
+      "sacrifice": "刀片每次受到大于等于2点H的损伤时，减少1点。",
+      "note": ""
+    },
+    {
+      "id": "sulfur",
+      "name": "硫磺",
+      "series": "硫",
+      "form": "固体",
+      "tags": ["固体", "易燃", "可熔", "遇热", "献祭"],
+      "transitions": [ { "trigger": "易燃 + 热", "result": "硫磺气" } ],
+      "exhaust": ["火焰", "硫磺气"],
+      "startup": "若刀片热层数≥2，则本次启动产生一张酸蚀法术进手牌。",
+      "sacrifice": "刀片附带一层不衰退的热。",
+      "note": ""
+    },
+    {
+      "id": "sulfur_gas",
+      "name": "硫磺气",
+      "series": "硫",
+      "form": "气体",
+      "tags": ["气体", "遇冷", "有毒", "献祭"],
+      "transitions": [ { "trigger": "遇冷 + 冷", "result": "硫磺液" } ],
+      "exhaust": ["酸蚀"],
+      "startup": "若刀片有冷附魔，则本次启动产生一张酸蚀法术进手牌。",
+      "sacrifice": "刀片附带一层不衰退的酸。",
+      "note": ""
+    },
+    {
+      "id": "sulfur_liquid",
+      "name": "硫磺液",
+      "series": "硫",
+      "form": "液体",
+      "tags": ["液体", "可溶", "遇冷", "有毒", "献祭"],
+      "transitions": [
+        { "trigger": "遇冷 + 冷", "result": "硫磺粉" },
+        { "trigger": "液体 + 热", "result": "硫磺气" }
+      ],
+      "exhaust": ["酸蚀", "硫磺粉"],
+      "startup": "使刀片额外消耗2H。",
+      "sacrifice": "刀片附带一层不衰退的酸。",
+      "note": ""
+    },
+    {
+      "id": "sulfur_powder",
+      "name": "硫磺粉",
+      "series": "硫",
+      "form": "粉末",
+      "tags": ["粉末", "惰性", "献祭"],
+      "transitions": [ { "trigger": "", "result": "无。" } ],
+      "exhaust": ["空白卡"],
+      "startup": "",
+      "sacrifice": "刀片H增加10；附带1层不衰退的酸。",
+      "note": ""
+    },
+    {
+      "id": "sand",
+      "name": "沙",
+      "series": "沙",
+      "form": "固体",
+      "tags": ["固体", "可熔", "遇热"],
+      "transitions": [ { "trigger": "可熔 + 热", "result": "熔融玻璃" } ],
+      "exhaust": ["空白卡"],
+      "startup": "",
+      "sacrifice": "",
+      "note": ""
+    },
+    {
+      "id": "molten_glass",
+      "name": "熔融玻璃",
+      "series": "沙",
+      "form": "液体",
+      "tags": ["液体", "遇冷", "献祭"],
+      "transitions": [ { "trigger": "遇冷 + 冷", "result": "玻璃" } ],
+      "exhaust": ["空白卡"],
+      "startup": "不消耗H，每有1层冷层数，获得一定分数。",
+      "sacrifice": "每次获得冷层数时，翻倍。",
+      "note": ""
+    },
+    {
+      "id": "glass",
+      "name": "玻璃",
+      "series": "沙",
+      "form": "固体",
+      "tags": ["固体", "惰性", "献祭"],
+      "transitions": [ { "trigger": "", "result": "无。" } ],
+      "exhaust": ["空白卡"],
+      "startup": "",
+      "sacrifice": "每次消耗H时，获得1分。",
+      "note": ""
+    }
+  ],
+  "spells": [
+    {
+      "id": "flame",
+      "name": "火焰",
+      "series": "法术",
+      "enchant": "热",
+      "category": "",
+      "requirement": "附魔到刀片，可叠加。",
+      "sources": ["独立", "白磷、木头、碳、硫磺D耗尽"],
+      "note": "第一节另有描述：附魔到刀片，可叠加。热附魔核心，促进素材形态变化。每回合结束衰减。"
+    },
+    {
+      "id": "ember",
+      "name": "余温",
+      "series": "法术",
+      "enchant": "热",
+      "category": "",
+      "requirement": "所有“火焰”法术，附加“热”的层数+1。",
+      "sources": ["碳D耗尽"],
+      "note": ""
+    },
+    {
+      "id": "frost",
+      "name": "冰霜",
+      "series": "法术",
+      "enchant": "冷",
+      "category": "",
+      "requirement": "附魔冷到刀片，可叠加。使刀片H+1。",
+      "sources": ["独立"],
+      "note": ""
+    },
+    {
+      "id": "acid_etch",
+      "name": "酸蚀",
+      "series": "法术",
+      "enchant": "酸",
+      "category": "",
+      "requirement": "附魔到刀片，可叠加。",
+      "sources": ["硫磺气、硫磺液、铁溶液D耗尽"],
+      "note": ""
+    },
+    {
+      "id": "acid_burst",
+      "name": "酸爆",
+      "series": "法术",
+      "enchant": "",
+      "category": "",
+      "requirement": "使当前所有酸层数翻倍，减少刀片等同于当前酸层数的H，同时获得等同于当前酸层数的分数。如果通过此卡达成爆刀，爆刀产生的分数翻倍变为3倍。",
+      "sources": ["铜蒸气D耗尽", "献祭"],
+      "note": ""
+    },
+    {
+      "id": "catalysis",
+      "name": "催化术",
+      "series": "法术",
+      "enchant": "催化",
+      "category": "",
+      "requirement": "附魔到刀片，可叠加。降低热/冷/酸附魔触发阈值。每回合结束衰减。",
+      "sources": ["独立"],
+      "note": ""
+    },
+    {
+      "id": "crystallize",
+      "name": "结晶",
+      "series": "法术",
+      "enchant": "",
+      "category": "直接得分",
+      "requirement": "根据当前刀片冷层数直接加分。",
+      "sources": ["盐D耗尽"],
+      "note": ""
+    },
+    {
+      "id": "harden",
+      "name": "硬化",
+      "series": "法术",
+      "enchant": "",
+      "category": "",
+      "requirement": "刀片H＋10",
+      "sources": [],
+      "note": ""
+    }
+  ]
+}

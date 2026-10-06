@@ -46,6 +46,23 @@ namespace GameJam.Data
         /// <summary>效果组合。描述由它自动生成，不手写，免得文案和数值脱节。</summary>
         public EffectGroup effects;
 
+        // ── 卡牌需求设计 v2.1 的描述性字段（见 Ingredient 里那段说明）──────
+
+        /// <summary>规格里的系列 / 分组，例如 "法术"、"通用与特殊"。</summary>
+        public string series = "";
+
+        /// <summary>附魔类型：热 / 冷 / 酸 / 催化；不用附魔的法术留空。</summary>
+        public string enchant = "";
+
+        /// <summary>分类，例如 "直接得分"；没有就空串。</summary>
+        public string category = "";
+
+        /// <summary>需求（效果原文），例如 "附魔到刀片，可叠加"。</summary>
+        public string requirement = "";
+
+        /// <summary>来源（哪些卡 D 耗尽 / 献祭产出的），原文列表。</summary>
+        public string[] sources = new string[0];
+
         public Spell()
         {
             id = "";
@@ -101,7 +118,28 @@ namespace GameJam.Data
             Spell s = new Spell(id, name);
             s.target = target;
             s.effects = effects != null ? effects.Clone() : new EffectGroup();
+            s.series = series;
+            s.enchant = enchant;
+            s.category = category;
+            s.requirement = requirement;
+            s.sources = sources != null ? (string[])sources.Clone() : new string[0];
             return s;
+        }
+
+        /// <summary>卡面上要显示的一行：附魔类型 + 分类，例如 "附魔：热"。</summary>
+        public string KindText()
+        {
+            string s = "";
+            if (!string.IsNullOrEmpty(enchant)) s = "附魔：" + enchant;
+            if (!string.IsNullOrEmpty(category)) s = string.IsNullOrEmpty(s) ? category : s + " · " + category;
+            return s;
+        }
+
+        /// <summary>卡面正文：优先用规格里的「需求」原文，没有才退回自动生成的效果描述。</summary>
+        public string CardText()
+        {
+            if (!string.IsNullOrEmpty(requirement)) return requirement;
+            return Description();
         }
 
         public override string ToString()

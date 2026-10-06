@@ -466,6 +466,7 @@ namespace GameJam.Prototype
             interaction.turnLoop = turnLoop;   // 放进投放区的牌要报给回合循环
 
             go.AddComponent<TableHud>();     // HUD 需要用到 interaction，用 GetComponent 拿
+            go.AddComponent<CardBrowser>();  // 卡牌总览（F1）：查 v2.1 的素材/法术，不参与玩法
         }
 
         // ── 工具 ──────────────────────────────────────────────────────

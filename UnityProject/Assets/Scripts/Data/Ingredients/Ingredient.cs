@@ -32,6 +32,47 @@ namespace GameJam.Data
         /// </summary>
         public EffectGroup effects;
 
+        // ══════════════════════════════════════════════════════════════
+        //  卡牌需求设计 v2.1 的描述性字段
+        //
+        //  这一批不是数值，是**规则文本**：形态 / 标签 / 形态转换 / D耗尽 /
+        //  启动 / 献祭。它们来自策划的规格表（Resources/Config/cards_v21.json），
+        //  由 CardSpecs 读进来挂在这里。
+        //
+        //  【为什么不塞进 attrs / effects】
+        //    形态转换和献祭是**条件规则**，不是"给某个属性加个值" ——
+        //    "易燃 + 热 → 火焰"里既有触发条件又有产出，硬塞进 EffectGroup
+        //    会把效果系统变成一个什么都装的袋子。所以先原样存文本，
+        //    规则引擎（CardRules）再按自己的模型解释它们。
+        //
+        //  【对旧数据的影响】
+        //    全部有默认值（空），老的 game_config.json 少写这些字段照样能读。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>规格里的系列，例如 "水"、"铁"、"通用与特殊"。只用于图鉴分组。</summary>
+        public string series = "";
+
+        /// <summary>形态：固体 / 液体 / 气体 / 粉末。空串表示规格没写。</summary>
+        public string form = "";
+
+        /// <summary>标签："固体 / 易燃 / 遇热 / 献祭" 这些。规则引擎按标签匹配触发条件。</summary>
+        public string[] tags = new string[0];
+
+        /// <summary>形态转换：触发条件 → 变成什么。</summary>
+        public FormChange[] transitions = new FormChange[0];
+
+        /// <summary>D 耗尽后变成什么（可能多张）。</summary>
+        public string[] exhaust = new string[0];
+
+        /// <summary>启动效果（原文）。</summary>
+        public string startup = "";
+
+        /// <summary>献祭效果（原文）。</summary>
+        public string sacrifice = "";
+
+        /// <summary>策划备注 / 需求说明（原文）。</summary>
+        public string note = "";
+
         public Ingredient()
         {
             id = "";
@@ -81,7 +122,57 @@ namespace GameJam.Data
                 name,
                 attrs != null ? attrs.Clone() : new AttrSet());
             c.effects = effects != null ? effects.Clone() : new EffectGroup();
+
+            c.series   = series;
+            c.form     = form;
+            c.tags     = tags != null ? (string[])tags.Clone() : new string[0];
+            c.exhaust  = exhaust != null ? (string[])exhaust.Clone() : new string[0];
+            c.startup  = startup;
+            c.sacrifice = sacrifice;
+            c.note     = note;
+
+            if (transitions != null)
+            {
+                c.transitions = new FormChange[transitions.Length];
+                for (int i = 0; i < transitions.Length; i++)
+                    c.transitions[i] = transitions[i] != null ? transitions[i].Clone() : new FormChange();
+            }
             return c;
+        }
+
+        /// <summary>有没有标签（按规格文本精确匹配）。</summary>
+        public bool HasTag(string tag)
+        {
+            if (string.IsNullOrEmpty(tag) || tags == null) return false;
+            for (int i = 0; i < tags.Length; i++)
+                if (tags[i] == tag) return true;
+            return false;
+        }
+
+        /// <summary>卡面上要显示的一行：形态 + 标签，例如 "固体 · 易燃 · 遇热"。</summary>
+        public string FormAndTags()
+        {
+            string s = form;
+            if (tags != null && tags.Length > 0)
+            {
+                string t = string.Join(" · ", tags);
+                s = string.IsNullOrEmpty(s) ? t : s + " · " + t;
+            }
+            return s;
+        }
+
+        /// <summary>形态转换的整段文字，例如 "易燃 + 热 → 火焰　｜　遇酸 + 酸 → 空白卡"。</summary>
+        public string TransitionsText()
+        {
+            if (transitions == null || transitions.Length == 0) return "";
+            string[] parts = new string[transitions.Length];
+            for (int i = 0; i < transitions.Length; i++)
+            {
+                FormChange f = transitions[i];
+                if (f == null) continue;
+                parts[i] = string.IsNullOrEmpty(f.trigger) ? f.result : f.trigger + " → " + f.result;
+            }
+            return string.Join("　｜　", parts);
         }
 
         /// <summary>非零属性描述，例如 "铁块（硬度 10）"</summary>

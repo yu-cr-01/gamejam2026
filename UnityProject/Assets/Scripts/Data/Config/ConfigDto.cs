@@ -108,8 +108,7 @@ namespace GameJam.Data
     /// <summary>整份配置表的根节点。</summary>
     [Serializable]
     public class GameConfigDto
-    {
-        /// <summary>全部食材图鉴。牌组通过 id 引用它们。</summary>
+    {        /// <summary>全部食材图鉴。牌组通过 id 引用它们。</summary>
         public IngredientDto[] ingredients;
 
         public DeckDto[] decks;
@@ -128,5 +127,77 @@ namespace GameJam.Data
         public LevelDto level;
 
         public TextDto texts;
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    //  卡牌需求设计 v2.1（Resources/Config/cards_v21.json）
+    //
+    //  单独一份文件、单独一套 DTO，不塞进 GameConfigDto：
+    //  game_config.json 装的是"这一局怎么玩"（牌组 / 关卡 / 数值），
+    //  cards_v21.json 装的是"卡牌长什么样、有什么规则"（形态 / 标签 / 转换 / 献祭）。
+    //  两者的改动节奏完全不同 —— 策划改卡的描述不该动到关卡配置。
+    // ══════════════════════════════════════════════════════════════════
+
+    /// <summary>一次形态转换，两半分开存："易燃 + 热" → "火焰"。</summary>
+    [Serializable]
+    public class FormChangeDto
+    {
+        public string trigger;
+        public string result;
+    }
+
+    /// <summary>一张素材卡（materials 数组元素）。</summary>
+    [Serializable]
+    public class MaterialSpecDto
+    {
+        public string id;
+        public string name;
+
+        /// <summary>系列/分组，例如 "水"、"铁"、"通用与特殊"。</summary>
+        public string series;
+
+        /// <summary>形态：固体 / 液体 / 气体 / 粉末。</summary>
+        public string form;
+
+        /// <summary>标签，例如 ["固体","易燃","遇热","献祭"]。</summary>
+        public string[] tags;
+
+        public FormChangeDto[] transitions;
+
+        /// <summary>D 耗尽后变成什么（可能多张）。</summary>
+        public string[] exhaust;
+
+        public string startup;
+        public string sacrifice;
+        public string note;
+    }
+
+    /// <summary>一个法术（spells 数组元素）。</summary>
+    [Serializable]
+    public class SpellSpecDto
+    {
+        public string id;
+        public string name;
+        public string series;
+
+        /// <summary>附魔类型：热 / 冷 / 酸 / 催化（不用附魔的留空）。</summary>
+        public string enchant;
+
+        /// <summary>分类，例如 "直接得分"。</summary>
+        public string category;
+
+        /// <summary>需求 / 效果原文。</summary>
+        public string requirement;
+
+        /// <summary>来源（谁产出它）。</summary>
+        public string[] sources;
+    }
+
+    /// <summary>cards_v21.json 的根节点。</summary>
+    [Serializable]
+    public class CardSpecFileDto
+    {
+        public MaterialSpecDto[] materials;
+        public SpellSpecDto[] spells;
     }
 }
