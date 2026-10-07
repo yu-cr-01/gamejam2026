@@ -259,6 +259,14 @@ namespace GameJam.Prototype
         /// </summary>
         public void OpenLevelSelect()
         {
+            // ★ 进选关界面先清掉上一关留在桌面上的 3D 素材卡。
+            //   不清的话那张卡会飘在选关界面上、压在关卡卡旁边（用户截图：一张水卡一直杵在中间）。
+            //   ★ 为什么放在这个入口、而不是各个调用点：
+            //     进选关界面有三条路 —— 开场、退关卡、**打完一关回选关**；
+            //     前两条各自调过 V21ClearTable()，第三条（关卡结束后的「返回关卡界面」）漏了，
+            //     于是那张卡就跟着回来了。收进入口只写一处，以后再加路径也不会漏。
+            V21ClearTable();
+
             levels = GameConfig.Levels();
             if (levels.Count == 0) levels.Add(GameConfig.Level());
 
