@@ -336,6 +336,12 @@ namespace GameJam.Prototype
         /// <summary>选择①：三选一牌组。</summary>
         private void StartDeckPick()
         {
+            // ★ 进牌组选择界面同样要清掉上一关留在桌面上的 3D 素材卡。
+            //   上一轮只补了选关界面（OpenLevelSelect），漏了这条 —— 于是"退关卡 → 牌组选择"
+            //   这条路上那张卡还是杵在牌组卡旁边（用户第二次截图指的就是这里）。
+            //   规则很简单：**只要离开关卡、进到任何一个非玩法阶段，桌面就不该留着牌**。
+            V21ClearTable();
+
             Choice deckChoice = FindChoice(GameConfig.DeckPickId);
 
             if (deckChoice != null && deckChoice.OptionCount > 0 && choiceRig != null)
@@ -1144,6 +1150,24 @@ namespace GameJam.Prototype
         }
 
         /// <summary>v2.1：把上一关留在桌面上的素材 3D 卡清掉（退关卡 / 重开 / 回开场都要）。</summary>
+        /// <summary>
+        /// 这个阶段是不是"菜单类"（开场 / 选牌组 / 选关 / 关卡结算）——
+        /// 菜单上不该出现上一关留下的桌面素材卡。
+        ///
+        /// 【为什么按阶段判断，而不是在每个入口清一次】
+        ///   入口有四五条（回开场、退关卡、进选关、进牌组选择、打完一关回选关…），
+        ///   逐条补已经漏过两次：先漏"打完一关回选关"，再漏"退关卡回牌组选择"。
+        ///   阶段是**状态的函数**，按它判断不会随新增路径而失效。
+        ///   注意 LevelEnd 不算菜单类：爆刀/达标那一下还要在桌面上播冲压与结算表现。
+        /// </summary>
+        private static bool IsMenuPhase(TablePhase p)
+        {
+            return p == TablePhase.Title
+                || p == TablePhase.DeckPick
+                || p == TablePhase.LevelSelect
+                || p == TablePhase.LevelResult;
+        }
+
         private void V21ClearTable()
         {
             if (rulesV21 != null) rulesV21.ClearTable();
@@ -1155,6 +1179,13 @@ namespace GameJam.Prototype
 
         void Update()
         {
+            // ★ 兜底：只要当前停在"菜单类"阶段，桌面上就不该留着上一关的素材卡。
+            //   入口级的清理写过三次了（回开场 / 进选关 / 进牌组选择），但"漏一条路径"已经发生两次
+            //   （先是"打完一关回选关"漏，再是"退关卡回牌组选择"漏）—— 与其继续打补丁，
+            //   不如按**阶段**统一兜一句：菜单阶段本来就不该有牌。
+            //   放在 Update 最前面：暂停/设置面板开着时也照样清（那两种情况更不该留着牌）。
+            if (V21 && rulesV21 != null && IsMenuPhase(phase)) rulesV21.ClearTable();
+
             // 暂停 / 设置面板开着的时候，模拟也停住 ——
             // 否则暂停回来会发现模拟凭空跑了半截
             if (paused || settingsOpen) return;
