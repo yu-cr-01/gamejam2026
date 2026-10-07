@@ -42,7 +42,18 @@ namespace GameJam.Prototype
         /// </summary>
         public const float BodyInset = 0.955f;
 
-        private static readonly Color CardEdgeColor = new Color(0.130f, 0.118f, 0.104f);
+        /// <summary>
+        /// 卡身的颜色 —— 也就是玩家在卡片**侧面看到的那圈"厚度"**。
+        ///
+        /// 【为什么从近黑色改成卡纸色】
+        ///   卡是"立方体卡身 + 正面卡面贴图"两层。俯视 43° 时能同时看到卡身侧面，
+        ///   原来这里是近黑 (0.13, 0.118, 0.104)，于是每张卡周围都镶了一道深灰边 ——
+        ///   看起来就像卡面没裁干净、留了一圈半透明脏边（用户连着报过两次"这个边框删掉"）。
+        ///   其实那不是贴图的问题（贴图那圈早在 CardArt 里修掉了），是**卡身侧面的颜色**。
+        ///   现在取的是美术卡面**边框区域的平均色**（把 card_common_bg.png 外圈不透明像素求平均
+        ///   得到 RGB(207,190,162)），侧面和正面就连成一片，看着就是一张有厚度的卡纸。
+        /// </summary>
+        private static readonly Color CardEdgeColor = new Color(0.813f, 0.745f, 0.636f);
 
         // 版面：卡面贴图里的分区（和 ProceduralArt 的常量对齐）
         //
