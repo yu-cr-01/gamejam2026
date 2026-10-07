@@ -104,17 +104,32 @@ namespace GameJam.Prototype
         public static int V21TargetScore = 60;
 
         /// <summary>
-        /// 关卡是不是摆成**桌上的 3D 大卡**。
+        /// 开局准备环节的**大卡摆不摆到桌面上**（牌组一排 / 关卡一排，同一个开关）。
         ///
-        /// 【为什么加这个开关】用户对关卡的要求是「不要关卡手牌了，就放一个 ui 就行」：
-        ///   那排 3D 关卡卡离得远、字小，还占着桌面正中间，而关卡窗口
-        ///   （TableHud.DrawLevelWindow）一屏就能把名字 / 目标分 / 状态列全。
-        ///   v2.1 只留窗口；**旧流程那套 3D 关卡卡一行没动**（关掉开关就原样回来）。
+        /// 【用户怎么说的】先是关卡：「不要关卡手牌了，就放一个 ui 就行」；
+        ///   再是牌组：「这些流派也做成窗口，去掉卡牌」。
+        ///   那两排卡都离得远、字小，还占着桌面正中间（6 副牌组时铺满整屏，
+        ///   蜡烛从第一张中间穿出来、破壁机压在第 4/5 张上）——
+        ///   而关卡窗口 / 牌组窗口一屏就能把每张卡上那几行字列全。
+        ///   v2.1 只留窗口；**旧流程那两排卡一行没动**（开关翻过来就原样回来）。
+        ///
+        /// 【为什么两件事合成一个开关，而不是各留一个】它们是同一条时间线上的同一件事
+        ///   （"选择环节怎么选"），而且都等于 `!UseRulesV21`：分成两个的话，
+        ///   以后要加第三种模式就得记住"两处都要改"，而漏掉一处的表现是
+        ///   "牌组只有窗口、关卡还摆着卡"这种半吊子状态。
+        ///   下面两个名字只是**读起来是哪件事**（调用点写 DeckCardsOnTable 比
+        ///   写 ChoiceCardsOnTable 更清楚），值永远一致。
         ///
         /// 【为什么收在这里】"建不建卡"（TableTurnLoop）和"提示文案怎么写"（TableHud）
         ///   问的是同一件事，各写各的话迟早会出现"卡已经没有了、提示还写着点桌上的卡"。
         /// </summary>
-        public static bool LevelCardsOnTable { get { return !UseRulesV21; } }
+        public static bool ChoiceCardsOnTable { get { return !UseRulesV21; } }
+
+        /// <summary>牌组是不是摆成桌上的一排 3D 大卡（= 上面的总开关）。</summary>
+        public static bool DeckCardsOnTable { get { return ChoiceCardsOnTable; } }
+
+        /// <summary>关卡是不是摆成桌上的一排 3D 大卡（= 上面的总开关）。</summary>
+        public static bool LevelCardsOnTable { get { return ChoiceCardsOnTable; } }
 
         /// <summary>
         /// 这一关在当前规则模式下**实际**的目标分 —— 界面上的"目标分"一律走这里。

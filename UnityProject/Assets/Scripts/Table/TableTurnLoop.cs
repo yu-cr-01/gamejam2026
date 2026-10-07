@@ -439,7 +439,19 @@ namespace GameJam.Prototype
 
             if (deckChoice != null && deckChoice.OptionCount > 0 && choiceRig != null)
             {
-                choiceRig.BuildDeckCards(deckChoice);
+                // ── v2.1：牌组只在牌组窗口里选，桌上不摆那排 3D 大卡 ──────────
+                //   用户原话：「这些流派也做成窗口，去掉卡牌」。
+                //   ★ 和不建关卡卡同一个道理（见 OpenLevelSelect）：不建卡**不等于**
+                //     不用登记选择态 —— 窗口点一行 → SelectDeck(i)、按确认 →
+                //     ConfirmDeckPick() 读的都是 rig 里那个下标。
+                //   ★ 预选值传 -1：牌组是玩家要做的决定，替他默认第一副
+                //     等于"什么都没点就能开局"（原来的行为就是"没选"）。
+                //   ★ 旧流程（UseRulesV21 = false）照旧 BuildDeckCards 摆那排卡，一行没动。
+                if (TableSettings.DeckCardsOnTable)
+                    choiceRig.BuildDeckCards(deckChoice);
+                else
+                    choiceRig.SetChoiceState(deckChoice.OptionCount, -1);
+
                 phase = TablePhase.DeckPick;
                 return;
             }
@@ -511,7 +523,11 @@ namespace GameJam.Prototype
             int idx = choiceRig != null ? choiceRig.DeckSelected : -1;
             if (idx < 0)
             {
-                notice = "先在桌上点一张牌组卡";
+                // 提示得说清"该去哪儿选" —— v2.1 桌上没有牌组卡了，
+                // 还写"在桌上点一张"等于指路指到空桌子上（见 StartDeckPick 的分流）。
+                notice = TableSettings.DeckCardsOnTable
+                    ? "先在桌上点一张牌组卡"
+                    : "先在牌组窗口里点一行选一副";
                 return;
             }
 

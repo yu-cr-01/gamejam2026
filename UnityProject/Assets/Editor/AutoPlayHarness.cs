@@ -44,6 +44,13 @@ namespace GameJam.EditorTools
     ///                      （DSH_RULES_V21=0）那排卡必须原样还在。两个模式共用同一条链，
     ///                      每一步都把"rig 认领几张 / 场景里有几个 BigCard_*"打进日志，
     ///                      截图一一对照。默认 0 = 完全不介入。
+    ///   DSH_DECKPROBE=1    选牌组探针（㉜⓪~㉜⑦）：验用户那句「这些流派也做成窗口，去掉卡牌」——
+    ///                      v2.1 的牌组界面应当**桌上一张 3D 牌组卡都没有**、只剩牌组窗口，
+    ///                      窗口里点一行能选中、按「确认选择该卡组」能进选刀片；旧流程
+    ///                      （DSH_RULES_V21=0）那排卡必须原样还在。和选关探针同一套做法
+    ///                      （两个模式共用一条链、每一步都把"rig 认领几张 / 场景里几个
+    ///                      BigCard_*"打进日志），只是把"选第 2 关"换成"选第 3 副牌"。
+    ///                      默认 0 = 完全不介入。
     ///   DSH_FRAMEPROBE=1   取景探针（㉘⓪~㉘④）：验用户那句「手牌最下面那张被视口下边缘切了」——
     ///                      在手牌最宽的"选刀片"那一屏（5 张），把 Game 视图切成
     ///                      当前比例 / 竖屏 900×1600 / 打包版 1600×900 各拍一张，
@@ -126,6 +133,7 @@ namespace GameJam.EditorTools
         private static bool   blackProbe;
         private static bool   layoutProbe;
         private static bool   levelProbe;
+        private static bool   deckProbe;
         private static bool   framingProbe;
         private static bool   overlapProbe;
         private static bool   cardFaceProbe;
@@ -180,6 +188,12 @@ namespace GameJam.EditorTools
             //   而旧流程那排卡必须还在。也单独一条链，且两个模式共用 ——
             //   "有没有少东西"要两张图并排看才算数。
             levelProbe = System.Environment.GetEnvironmentVariable("DSH_LEVELPROBE") == "1";
+
+            // ★ 选牌组探针（DSH_DECKPROBE=1，见 ㉜⓪~㉜⑦ 那一段）：
+            //   用户接着对牌组说「这些流派也做成窗口，去掉卡牌」—— 同一件事再来一遍，
+            //   所以这条链和选关那条是**同一个形状**（关窗看空桌 → 点一行 → 确认 → 接回主链），
+            //   截图命名也一样（deck_ui_*），两个模式并排看就齐了。
+            deckProbe = System.Environment.GetEnvironmentVariable("DSH_DECKPROBE") == "1";
 
             // ★ 取景探针（DSH_FRAMEPROBE=1，见 ㉘⓪~㉘④ 那一段）：
             //   用户报的是"手牌最下面那张被视口下边缘切了一半"，而"装不装得下"是
@@ -336,7 +350,8 @@ namespace GameJam.EditorTools
                 case 20:
                     if (!Shot("choice_deck.png")) return;
                     if (overlapProbe) { overlapResume = 21; Stage = 285; stageTime = EditorApplication.timeSinceStartup; return; }
-                    Stage = 21;
+                    // 选牌组探针要在这一屏多拍几张（关掉窗口看那排 3D 牌组卡还在不在）
+                    Stage = deckProbe ? 321 : 21;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -498,7 +513,8 @@ namespace GameJam.EditorTools
                     if (cardFaceProbe) { Stage = 310; stageTime = EditorApplication.timeSinceStartup; return; }
                     // 相交探针：牌组卡排就在这一屏（用户新截图说的"蜡烛插穿第一张牌组卡"）
                     if (overlapProbe) { overlapResume = 96; Stage = 285; stageTime = EditorApplication.timeSinceStartup; return; }
-                    Stage = 96;
+                    // 选牌组探针要在这一屏多拍几张（关掉窗口看桌面到底有没有 3D 牌组卡）
+                    Stage = deckProbe ? 321 : 96;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -1932,7 +1948,102 @@ namespace GameJam.EditorTools
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("level_ui_03_after_confirm.png")) return;
                     ProbeLogSync("㉖⑤ 从窗口进关之后");
-                    Stage = TableSettings.UseRulesV21 ? 55 : 20;
+                    // v2.1 接回主链的 55（选牌组）；★ 两个探针一起开时走 54 ——
+                    // 那一屏才是"牌组界面"，选牌组探针的入口就挂在它后面（否则会被跳过）。
+                    Stage = TableSettings.UseRulesV21 ? (deckProbe ? 54 : 55) : 20;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㉜⓪~㉜⑦ 选牌组：v2.1 只剩 UI 窗口（DSH_DECKPROBE=1）
+                //
+                //  【它验的是用户这句话】「这些流派也做成窗口，去掉卡牌」——
+                //    v2.1 的牌组界面桌上一张 3D 牌组卡都不该有，选牌组全在牌组窗口里；
+                //    旧流程（DSH_RULES_V21=0）那排卡必须原样还在、流程照旧。
+                //    两个模式**共用这一条链**（入口分别接在 case 20 / case 54 上），
+                //    所以两边拍出来的文件名一样、位置一样，可以并排对照。
+                //
+                //  【和选关探针（㉖⓪~㉖⑤）是同一个形状】关窗看空桌 → 点一行 → 按确认 → 接回主链。
+                //    连"为什么要关掉窗口再拍一张"都一样：窗口正好盖在桌子中间，
+                //    而那里正是那排卡原来的位置 —— "看不见"和"没有"是两件事。
+                //
+                //  【为什么点第 3 副】牌组**不预选**（和关卡不同：关卡默认停在当前那一关）。
+                //    点第 3 副、确认之后看进关用的确实是第 3 副（刀片 / 手牌跟着变），
+                //    才能证明"确认用的是窗口选的那一副"，而不是"永远第一副"。
+                //
+                //  【点一行 / 按确认走的是谁】HUD 的 PickDeckInWindow / ConfirmDeckInWindow ——
+                //    和窗口里那两个按钮**同一对方法**（IMGUI 按钮探针点不了，
+                //    但绕过按钮 ≠ 绕过那条路）。
+                // ══════════════════════════════════════════════════════
+
+                // ㉜⓪ 牌组界面：窗口自动弹着 —— 玩家看到的这一屏
+                case 321:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    // ★ 先截图、后量：Shot 在"距上一张不到 ShotSettle"时会返回 false
+                    //   让本阶段重试，把日志放在它前面就会同一份数据每帧打一遍（刷屏）。
+                    if (!Shot("deck_ui_00_select.png")) return;
+                    LogDeckPickState("㉜⓪ 进牌组界面");
+                    Stage = 322;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉜① 先把窗口收起来：这一张看的是"桌子中间到底有没有那排卡"
+                case 322:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetDeckWindow(false);
+                    Stage = 323;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 323:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("deck_ui_01_table.png")) return;
+                    LogDeckPickState("㉜① 关掉窗口看桌面");
+                    LogCardRow("㉜① 牌组");
+                    Stage = 324;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉜② 重新开窗口，点第 3 副（点完先记日志，图留给下一个 stage 拍）
+                case 324:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetDeckWindow(true);
+                    Stage = 325;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 325:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    PickDeckRow(2);
+                    Stage = 326;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉜③ 点完那一行：高亮 / 「已选牌组」都该跟着走
+                case 326:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("deck_ui_02_row_picked.png")) return;
+                    Stage = 327;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉜④ 按「确认选择该卡组」（窗口底部那个按钮的同一个入口）
+                case 327:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ConfirmDeckRow();
+                    Stage = 328;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉜⑤ 确认之后：应该是"选刀片"那一屏 + 「状态与画面一致｜残留 0 张」。
+                //      拍完接回主链（v2.1 → 56，旧流程 → 22），后面的选刀片 / 第 1 回合
+                //      按原样跑完 —— 顺带证明"从窗口定的那一副真的生效了"。
+                case 328:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    if (!Shot("deck_ui_03_after_confirm.png")) return;
+                    ProbeLogSync("㉜⑤ 定完牌组之后");
+                    LogDeckPickState("㉜⑤ 定完牌组之后");
+                    Stage = TableSettings.UseRulesV21 ? 56 : 22;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -2904,6 +3015,142 @@ namespace GameJam.EditorTools
 
             hud.SetLevelWindowOpen(open);
             Debug.Log("[AutoPlay/V21] 关卡窗口 " + (open ? "已打开" : "已关闭"));
+        }
+
+        // ── 选牌组探针（㉜⓪~㉜⑦，DSH_DECKPROBE=1）用的四个口子 ──────────────
+        //   和选关探针那四个是一对一对的（Log/Pick/Confirm/SetWindow），
+        //   连日志前缀的口径都一样：认领张数与场景张数分开报。
+
+        /// <summary>
+        /// 把"这一屏的选牌组状态"打成一行日志：模式 / 桌上大卡张数 / 选中态 / 窗口状态 / 候选项顺序。
+        ///
+        /// 【为什么要把候选项顺序也打出来】"点第 3 副、确认之后生效的是第 3 副"这句话，
+        ///   光看"牌组已定：某某"证明不了 —— 得先有"第 3 副本来叫什么"。
+        ///   顺手把**卡片顺序和窗口行顺序**钉在同一份日志里（两边都读 Choice.options，
+        ///   顺序本来就该一致；不一致的话这里会一眼看出来）。
+        /// </summary>
+        private static void LogDeckPickState(string what)
+        {
+            TableChoiceRig rig = Object.FindObjectOfType<TableChoiceRig>();
+            TableTurnLoop loop = Loop();
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+
+            if (rig == null || loop == null)
+            {
+                Debug.LogWarning("[AutoPlay/Deck] 找不到 TableChoiceRig / TableTurnLoop，" + what + " 这次记不了。");
+                return;
+            }
+
+            int inScene = 0;
+            Transform[] all = Object.FindObjectsOfType<Transform>();
+            for (int i = 0; i < all.Length; i++)
+                if (all[i] != null && all[i].name.StartsWith("BigCard_")) inScene++;
+
+            // 候选项：牌组阶段用 CurrentChoice，退出这一屏之后退回配置里那份
+            GameJam.Data.Choice c = loop.CurrentChoice;
+            if (c == null) c = loop.FindChoice(GameConfig.DeckPickId);
+
+            string order = "（无）";
+            if (c != null && c.options != null)
+            {
+                System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                for (int i = 0; i < c.options.Count; i++)
+                {
+                    if (sb.Length > 0) sb.Append(" / ");
+                    sb.Append(i + 1).Append('.').Append(c.options[i] != null ? c.options[i].title : "（空）");
+                }
+                order = sb.ToString();
+            }
+
+            Debug.Log("[AutoPlay/Deck] " + what
+                      + "｜模式 " + (TableSettings.UseRulesV21 ? "v2.1" : "旧流程")
+                      + "（桌上一排 3D 牌组卡：" + (TableSettings.DeckCardsOnTable ? "有" : "没有") + "）"
+                      + "｜大卡 rig " + rig.BigCardCount + " 张 / 场景 " + inScene + " 个"
+                      + "｜rig 选中 " + rig.DeckSelected
+                      + "｜窗口 " + (hud != null ? (hud.DeckWindowOpen ? "开" : "关") : "?")
+                      + (hud != null ? "、窗口选中 " + hud.DeckWindowPick : "")
+                      + "｜候选项 " + (c != null ? c.options.Count : 0) + " 副：" + order
+                      + "｜已定牌组「" + (setup != null ? setup.deckName : "?") + "」"
+                      + "｜手牌 " + (setup != null && setup.hand != null ? setup.hand.Count : -1) + " 张"
+                      + "｜阶段 " + loop.phase);
+        }
+
+        /// <summary>
+        /// 牌组窗口里点一行 —— 走 HUD 的 PickDeckInWindow，
+        /// 和那个按钮是**同一个方法**（探针点不了 IMGUI 按钮，但不能绕过这条路）。
+        /// </summary>
+        private static void PickDeckRow(int i)
+        {
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            if (hud == null)
+            {
+                Debug.LogWarning("[AutoPlay/Deck] 找不到 TableHud，窗口点行这次验不了。");
+                return;
+            }
+
+            hud.PickDeckInWindow(i);
+            Debug.Log("[AutoPlay/Deck] 在牌组窗口里点了第 " + (i + 1) + " 副（索引 " + i + "）。");
+            LogDeckPickState("㉜② 点完之后");
+        }
+
+        /// <summary>
+        /// 按牌组窗口底部的「确认选择该卡组」—— 同样走 HUD 的公开口子，
+        /// 和按钮共用 ConfirmDeckInWindow（它里面就是 turnLoop.ConfirmDeckPick()）。
+        ///
+        /// 【为什么要打"刀片 / 手牌"】"牌组真的生效了"不能只看阶段变了 ——
+        ///   牌组决定的就是开局刀片和初始手牌，这两个数变了才算数
+        ///   （v2.1 的手牌要等选了核心才发，所以这一屏手牌还是 0，刀片名才是判据）。
+        /// </summary>
+        private static void ConfirmDeckRow()
+        {
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            TableTurnLoop loop = Loop();
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+
+            if (hud == null || loop == null)
+            {
+                Debug.LogWarning("[AutoPlay/Deck] 找不到 TableHud / TableTurnLoop，窗口确认这次验不了。");
+                return;
+            }
+
+            string beforeDeck = setup != null ? setup.deckName : "?";
+            int beforePick = hud.DeckWindowPick;
+
+            // 窗口里那一行到底对应哪一副：从**同一份配置**读出来，
+            // 这样"确认之后生效的是不是它"才有判据（只看阶段变了证明不了这件事）。
+            string wantDeck = "（无）", wantBlade = "（无）";
+            GameJam.Data.Choice c = loop.FindChoice(GameConfig.DeckPickId);
+            if (c != null && c.options != null && beforePick >= 0 && beforePick < c.options.Count
+                && c.options[beforePick] != null)
+            {
+                GameJam.Data.ChoiceOption o = c.options[beforePick];
+                wantDeck = o.title;
+
+                GameJam.Data.Ingredient b = o.deck != null ? o.deck.InitialBlade() : null;
+                wantBlade = (o.deck != null ? o.deck.name : "?")
+                            + "｜开局刀片 " + (b != null ? b.name : "（无）");
+            }
+
+            hud.ConfirmDeckInWindow();
+
+            Debug.Log("[AutoPlay/Deck] 按「确认选择该卡组」：窗口选中第 " + (beforePick + 1) + " 副「"
+                      + wantDeck + "」= " + wantBlade
+                      + "｜确认前牌组「" + beforeDeck + "」→ 确认后牌组「"
+                      + (setup != null ? setup.deckName : "?") + "」"
+                      + "｜手牌 " + (setup != null && setup.hand != null ? setup.hand.Count : -1) + " 张"
+                      + "｜阶段 " + loop.phase
+                      + "｜窗口 " + (hud.DeckWindowOpen ? "还开着（★ 应该收起来）" : "已自动收起"));
+        }
+
+        /// <summary>开 / 关牌组窗口（HUD 的公开口子，和 Esc 菜单里那一项同一个入口）。</summary>
+        private static void SetDeckWindow(bool open)
+        {
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            if (hud == null) return;
+
+            hud.SetDeckWindowOpen(open);
+            Debug.Log("[AutoPlay/V21] 牌组窗口 " + (open ? "已打开" : "已关闭"));
         }
 
         /// <summary>开 / 关卡牌图鉴（走的和 Esc 菜单里那一项同一个入口）。</summary>

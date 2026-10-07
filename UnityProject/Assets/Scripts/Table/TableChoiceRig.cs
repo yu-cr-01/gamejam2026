@@ -104,17 +104,18 @@ namespace GameJam.Prototype
         /// <summary>
         /// 登记"这次有几项可选、当前选中第几项"，**一张 3D 卡都不建**。
         ///
-        /// 【给谁用】v2.1 的关卡界面：关卡只由 TableHud 的关卡窗口来选，
-        ///   桌上不再摆那排 3D 关卡卡。但"选中的是哪一关"这份状态必须还在 ——
-        ///   窗口点一行 = <see cref="SelectDeck"/>、确认 = TableTurnLoop.ConfirmLevelSelect()，
-        ///   两条路和从前一模一样，区别只是有没有视图。
+        /// 【给谁用】v2.1 的两个选择环节：关卡（TableHud 的关卡窗口）和牌组（牌组窗口）。
+        ///   桌上不再摆那两排 3D 大卡，但"选的是哪一关 / 哪一副"这份状态必须还在 ——
+        ///   窗口点一行 = <see cref="SelectDeck"/>、确认 = TableTurnLoop.ConfirmLevelSelect()
+        ///   / ConfirmDeckPick()，两条路和从前一模一样，区别只是有没有视图。
         ///
-        /// 【为什么默认就选中当前关卡】窗口进关卡界面时那一行本来就是高亮的
-        ///   （levelWindowPick 停在当前关卡上）。状态要是还停在"没选"，
-        ///   玩家按「进入这一关」就会被一句"先选一关"挡回来 ——
-        ///   界面说选了、状态说没选，这是最容易被当成"坏了"的那种不一致。
+        /// 【selected 传什么】关卡传"当前这一关"（窗口进关卡界面时那一行本来就是高亮的
+        ///   —— levelWindowPick 停在当前关卡上），传 -1 的话玩家按「进入这一关」
+        ///   会被一句"先选一关"挡回来：界面说选了、状态说没选，最容易被当成"坏了"。
+        ///   牌组传 **-1**（和从前一样什么都不预选）—— 选牌组本来就是玩家要做的决定，
+        ///   替他默认选第一副等于"什么都没点就能开局"。
         ///
-        /// 【旧流程不走这里】UseRulesV21 = false 时照旧 BuildLevelCards 摆 3D 卡。
+        /// 【旧流程不走这里】UseRulesV21 = false 时照旧 BuildLevelCards / BuildDeckCards 摆 3D 卡。
         /// </summary>
         public void SetChoiceState(int count, int selected)
         {
@@ -158,19 +159,44 @@ namespace GameJam.Prototype
                 Ingredient blade = o.deck != null ? o.deck.InitialBlade() : null;
                 if (blade != null) dominant = ProceduralArt.DominantAttr(blade);
 
-                string module = "无";
-                if (o.deck != null && o.deck.modules != null && o.deck.modules.Count > 0
-                    && o.deck.modules[0] != null)
-                    module = o.deck.modules[0].name + "（" + o.deck.modules[0].Description() + "）";
-
                 CardSpot sp = i < spots.Count ? spots[i] : new CardSpot { x = CountToX(i, n), z = RowZ, scale = 1f };
 
                 deckCards.Add(BuildOne(o.id, o.title, accent, dominant,
-                    o.deck != null ? o.deck.DescribeIngredients() : "（无）",
-                    "模块：" + module,
-                    "开局刀片：" + (blade != null ? blade.name : "（无）"),
+                    DeckIngredientsLine(o), DeckModuleLine(o), DeckBladeLine(o),
                     sp, false));
             }
+        }
+
+        // ── 一副牌的"卡面上那三行字"只在这里算 ────────────────────────────
+        //
+        // 【为什么要抽成三个静态方法】同一副牌现在有**两个**界面要显示这几行：
+        //   旧流程的 3D 牌组卡（BuildDeckCards）和 v2.1 的牌组窗口（TableHud.DrawDeckWindow）。
+        //   各写一份的话，"食材列表怎么拼、模块缺了写什么"就有两个版本，
+        //   改一次文案要改两处 —— 而且两处会慢慢走岔（真出现过这类不一致）。
+        //   两边都从 Deck 对象读，谁也不许把文字抄成常量。
+
+        /// <summary>第一行：这副牌的食材（来自 Deck.DescribeIngredients）。</summary>
+        public static string DeckIngredientsLine(ChoiceOption o)
+        {
+            return (o != null && o.deck != null) ? o.deck.DescribeIngredients() : "（无）";
+        }
+
+        /// <summary>第二行：模块（只写第一个 —— 和卡面一致，牌组目前最多一个）。</summary>
+        public static string DeckModuleLine(ChoiceOption o)
+        {
+            string module = "无";
+            if (o != null && o.deck != null && o.deck.modules != null && o.deck.modules.Count > 0
+                && o.deck.modules[0] != null)
+                module = o.deck.modules[0].name + "（" + o.deck.modules[0].Description() + "）";
+
+            return "模块：" + module;
+        }
+
+        /// <summary>第三行：开局装到刀片槽上的那张牌。</summary>
+        public static string DeckBladeLine(ChoiceOption o)
+        {
+            Ingredient blade = (o != null && o.deck != null) ? o.deck.InitialBlade() : null;
+            return "开局刀片：" + (blade != null ? blade.name : "（无）");
         }
 
         /// <summary>

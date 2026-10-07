@@ -22,7 +22,7 @@ namespace GameJam.Prototype
         private TableTurnLoop    turnLoop;
 
         private Font cjkFont;
-        private GUIStyle h1, body, dim, btn, btnOn;
+        private GUIStyle h1, body, dim, btn, btnOn, btnRow, btnOnRow;
 
         // ── 面板专用样式 ──
         // 单独一套是因为 h1/body/dim 是给"没有背景"的场景配的：
@@ -66,6 +66,7 @@ namespace GameJam.Prototype
         private readonly PanelDrag levelResultDrag = new PanelDrag();
         private readonly PanelDrag reportDrag      = new PanelDrag();
         private readonly PanelDrag levelWindowDrag = new PanelDrag();
+        private readonly PanelDrag deckWindowDrag  = new PanelDrag();
 
         // BeginCenterPanel / EndCenterPanel 之间传状态（End 时才知道面板画在哪、要还原哪个矩阵）
         private PanelDrag centerPanelDrag;
@@ -95,6 +96,16 @@ namespace GameJam.Prototype
         // 本次运行内记下每关过没过：Level 的运行状态只对"当前这一关"有效，
         // 换关之后就丢了 —— 窗口要显示"已通过/未通过"就得自己记一份。
         private readonly Dictionary<int, bool> levelCleared = new Dictionary<int, bool>();
+
+        // ── 牌组窗口（用户："这些流派也做成窗口，去掉卡牌"）──
+        //   和关卡窗口同一个套路、同一套样式：进 DeckPick 自动弹、Esc 菜单里能开关、
+        //   点一行 = 选中、底部确认 = 原来的「确认选择该卡组」。
+        //   ★ pick 初值是 -1（和关卡窗口不同）：牌组**不预选** —— 选哪副是玩家要做的决定，
+        //     替他默认第一副等于"什么都没点就能开局"（原流程也是"没选"）。
+        private bool     deckWindowOpen;
+        private Vector2  deckWindowScroll;
+        private int      deckWindowPick = -1;       // 窗口里点中的那一副（-1 = 还没点）
+        private bool     wasDeckPick;               // 上一帧是不是牌组界面（用来"进界面自动弹窗"）
 
         // ── 卡牌图鉴（F1，实现在 CardBrowser）──
         private CardBrowser browser;
@@ -265,10 +276,11 @@ namespace GameJam.Prototype
 
             if (turnLoop.settingsOpen) { turnLoop.settingsOpen = false; return; }
 
-            // 关卡窗口 / 卡牌图鉴也在"一层一层退"的链子上：它们在暂停菜单之上，
+            // 关卡窗口 / 牌组窗口 / 卡牌图鉴也在"一层一层退"的链子上：它们在暂停菜单之上，
             // 所以要先关它们，不然按 Esc 会跳过一层（面板还在，人以为没反应）。
             if (browser != null && browser.IsOpen) { browser.SetOpen(false); return; }
             if (levelWindowOpen) { levelWindowOpen = false; return; }
+            if (deckWindowOpen)  { deckWindowOpen  = false; return; }
 
             // 开场、开局准备、总结算没有"暂停"这回事
             if (turnLoop.IsTitle || turnLoop.IsPreparing) return;
@@ -307,10 +319,22 @@ namespace GameJam.Prototype
                 btnOn = new GUIStyle(btn);
                 btnOn.normal.textColor = new Color(0.35f, 0.95f, 0.60f);
 
+                // ── 多行列表行（牌组窗口那几行）──
+                // 【为什么要单独一份】一枚牌组要写四行信息（名称 / 食材 / 模块 / 开局刀片），
+                //   挤成一行会横出窗口。btn 是按钮皮肤的居中单行，多行文本居中排出来
+                //   参差不齐、很难扫读；这一份改成**左对齐 + 自动换行**，
+                //   窗口再窄也只是多折一行（和 dimPanel 那套同一个理由）。
+                //   颜色跟 btn / btnOn 走，选中那行的绿字标记保持不变。
+                btnRow   = new GUIStyle(btn)   { alignment = TextAnchor.MiddleLeft, wordWrap = true };
+                btnOnRow = new GUIStyle(btnOn) { alignment = TextAnchor.MiddleLeft, wordWrap = true };
+                btnRow.padding   = new RectOffset(10, 10, 4, 4);
+                btnOnRow.padding = new RectOffset(10, 10, 4, 4);
+
                 if (cjkFont != null)
                 {
                     h1.font = cjkFont; body.font = cjkFont; dim.font = cjkFont;
                     btn.font = cjkFont; btnOn.font = cjkFont;
+                    btnRow.font = cjkFont; btnOnRow.font = cjkFont;
                 }
 
                 // ── 面板：深色底 + 浅色字 ──
@@ -668,6 +692,10 @@ namespace GameJam.Prototype
             TrackLevelWindow();
             if (levelWindowOpen) DrawLevelWindow();
 
+            // 牌组窗口：进牌组界面自动弹，Esc 菜单里也能随时开关（和关卡窗口同一套）
+            TrackDeckWindow();
+            if (deckWindowOpen) DrawDeckWindow();
+
             // 检视面板和划过信息条是同一个位置，二选一
             if (interaction.Inspected != null) DrawInspectPanel();
             else                               DrawCardInfo();
@@ -870,15 +898,244 @@ namespace GameJam.Prototype
         }
 
         // ══════════════════════════════════════════════════════════════
+        //  牌组窗口（用户："这些流派也做成窗口，去掉卡牌"）
+        //
+        //  【和关卡窗口是同一套做法】不是"照着写一份像的"，而是同一件事：
+        //   进界面自动弹、点一行选中、底部一个确认键、Esc 菜单里能开关、选完自动收起。
+        //   差别只有三处，都是内容本身的差别：
+        //     · 一行写的东西不同（名称 / 食材 / 模块 / 开局刀片四行，挤一行会横出窗口
+        //       → 用左对齐的多行行样式 btnRow）；
+        //     · **不预选**（关卡预选"当前这一关"，牌组什么都不选 —— 见 deckWindowPick）；
+        //     · 确认键走 ConfirmDeckPick()。
+        //
+        //  【和现有确认流程的关系】点一行 = `choiceRig.SelectDeck(i)`（和从前点 3D 牌组卡
+        //   完全同一个入口），确认键 = `turnLoop.ConfirmDeckPick()`（原流程，
+        //   后面照旧进 BladePick）。没有另开一条捷径 —— v2.1 只是**不建那排卡**。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 进入牌组界面（DeckPick）时自动把窗口打开；离开这一屏就收起来。
+        ///
+        /// 【为什么进界面要把 pick 清成 -1】牌组**不预选**：进这一屏时玩家还没做决定，
+        ///   窗口里一行都不该是"已选"、确认键也该是灰的 —— 原来那排 3D 卡就是这个状态
+        ///   （rig 那边由 SetChoiceState(n, -1) 同步清掉，两边一致）。
+        /// </summary>
+        private void TrackDeckWindow()
+        {
+            if (turnLoop == null) return;
+
+            bool nowDeckPick = (turnLoop.phase == TablePhase.DeckPick);
+            if (nowDeckPick && !wasDeckPick)
+            {
+                deckWindowOpen   = true;
+                deckWindowPick   = -1;              // 不预选（见方法说明）
+                deckWindowScroll = Vector2.zero;
+            }
+            else if (!nowDeckPick && wasDeckPick)
+            {
+                // 选完牌组（或退回关卡界面）就收起来 —— 这一屏是"挑一副牌"，
+                // 进了刀片环节再挡着桌子就碍事了。和关卡窗口同一条规矩。
+                deckWindowOpen = false;
+            }
+            wasDeckPick = nowDeckPick;
+
+            // ★ v2.1 的牌组阶段，这个窗口**关不掉**（连"关闭"按钮都不画，见 DrawDeckWindow）：
+            //   桌上一张牌组卡都没有、而开局准备阶段又开不出暂停菜单 ——
+            //   关掉它就没地方选牌，也看不见"先点一行"那句提示，玩家会直接卡在这一屏。
+            //   旧流程不强制（那边桌面上的 3D 牌组卡和上面那条小面板才是主界面）。
+            if (nowDeckPick && !TableSettings.DeckCardsOnTable) deckWindowOpen = true;
+        }
+
+        /// <summary>牌组窗口：一屏列出全部牌组（名称 / 食材 / 模块 / 开局刀片），点一行选中。</summary>
+        private void DrawDeckWindow()
+        {
+            // CurrentChoice 只认"当前阶段"，退出牌组界面就返回 null ——
+            // 中途从 Esc 菜单开出来看的时候，退回配置里那份候选项。
+            Choice c = turnLoop != null ? turnLoop.CurrentChoice : null;
+            if (c == null && turnLoop != null) c = turnLoop.FindChoice(GameConfig.DeckPickId);
+            if (c == null || c.options == null || c.options.Count == 0) return;
+
+            // 比关卡窗口宽一点：一副牌要写食材 + 模块 + 开局刀片，
+            // 620 宽会在中间折行，6 副牌叠起来就成了一堵字墙。
+            float w = Mathf.Max(420f, Mathf.Min(760f, Screen.width - 32f));
+            float h = Mathf.Max(240f, Mathf.Min(620f, Screen.height - 32f));
+            Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+
+            Matrix4x4 prevMatrix = GUI.matrix;
+            GUI.matrix = OffsetMatrix(deckWindowDrag.offset) * prevMatrix;
+
+            GUI.Box(box, GUIContent.none, panelBoxGlass);
+            GUILayout.BeginArea(new Rect(box.x + 14f, box.y + 12f, w - 28f, h - 24f));
+
+            TextDto texts = GameConfig.Texts();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("牌　组", h1Panel, GUILayout.ExpandWidth(true));
+
+            // ★ v2.1 的牌组阶段不给关（理由见 TrackDeckWindow：这一屏除了它没有别的地方能选牌）。
+            //   别的阶段照旧有「关闭」——那时窗口是"查看"，Esc 菜单里随时能再开。
+            bool canClose = !(turnLoop.phase == TablePhase.DeckPick && !TableSettings.DeckCardsOnTable);
+            if (canClose && GUILayout.Button("关闭", btn, GUILayout.Width(72f), GUILayout.Height(28f)))
+            {
+                GUI.FocusControl(null);
+                deckWindowOpen = false;
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.Label(TableSettings.DeckCardsOnTable
+                                ? "点一行选中它，再按下面的确认键 —— 和点桌上那排牌组卡是同一条路。"
+                                : "点一行选中它，再按下面的确认键 —— 牌组就在这个窗口里选。",
+                            dimPanel);
+
+            // 已选 / 提示：v2.1 里上面那条小面板整块让开了（见 DrawChoicePanel），
+            // 所以"选了哪一副""这副牌什么路子"这些话全得由窗口自己说清 ——
+            // 旧流程那边小面板照旧在，这里就不重复一遍了（免得同一句话出现两遍）。
+            bool soloUi = !TableSettings.DeckCardsOnTable;
+
+            string picked = "还没选";
+            if (deckWindowPick >= 0 && deckWindowPick < c.options.Count && c.options[deckWindowPick] != null)
+                picked = c.options[deckWindowPick].title;
+
+            if (soloUi)
+            {
+                // ★ 只写"已选"这一句，**不搬运配置里那句 hint**：
+                //   texts.deckHint 是"点击卡片查看详情　｜　每副牌组 = 4 张食材牌 + 1 个变速模块"——
+                //   后半句照样成立（每行都写着食材和模块），前半句在 v2.1 里是**过期的指路**
+                //   （桌上已经没有卡可点）。配置是只读的资源，改不了它，那就别把它当界面文案搬过来。
+                GUILayout.Label("已选牌组：" + picked, bodyPanel);
+            }
+
+            GUILayout.Space(4f);
+
+            deckWindowScroll = GUILayout.BeginScrollView(deckWindowScroll, false, false,
+                                                         GUI.skin.horizontalScrollbar,
+                                                         GUI.skin.verticalScrollbar,
+                                                         scrollGlass,
+                                                         GUILayout.ExpandHeight(true));
+
+            for (int i = 0; i < c.options.Count; i++)
+            {
+                ChoiceOption o = c.options[i];
+                if (o == null) continue;
+
+                bool pickedRow = (i == deckWindowPick);
+
+                // ★ 这几行**不是在这里拼的**：食材 / 模块 / 开局刀片来自 TableChoiceRig
+                //   那三个静态方法（旧流程那排 3D 牌组卡用的是同一份）——
+                //   两处各写一份的话，改一次文案要改两处，而且迟早会走岔。
+                string row = (pickedRow ? "▸ " : "") + "第 " + (i + 1) + " 副　" + o.title + "\n"
+                             + "食材：" + TableChoiceRig.DeckIngredientsLine(o) + "\n"
+                             + TableChoiceRig.DeckModuleLine(o) + "　　"
+                             + TableChoiceRig.DeckBladeLine(o);
+
+                if (GUILayout.Button(row, pickedRow ? btnOnRow : btnRow,
+                                     GUILayout.ExpandWidth(true), GUILayout.Height(66f)))
+                {
+                    GUI.FocusControl(null);
+                    PickDeckInWindow(i);
+                }
+            }
+
+            GUILayout.Space(10f);
+            GUILayout.EndScrollView();
+
+            // ── 确认 ──
+            //   只有真的在牌组阶段（DeckPick）才能确认 —— 别的时候点它等于跳过一个环节
+            //   （刀片核心还没定）。按钮灰着的时候一定要写清为什么。
+            bool canConfirm = turnLoop.phase == TablePhase.DeckPick && deckWindowPick >= 0;
+
+            // 小面板隐去时（v2.1）notice 没有别的地方显示 —— 引擎/流程的提示只能挂在这儿。
+            if (soloUi && !string.IsNullOrEmpty(turnLoop.notice))
+                GUILayout.Label(turnLoop.notice, dimPanel);
+
+            GUILayout.Space(4f);
+            GUILayout.BeginHorizontal();
+
+            string confirmLabel = (texts != null && !string.IsNullOrEmpty(texts.deckConfirm))
+                ? texts.deckConfirm : "确认选择该卡组";
+
+            bool oldEnabled = GUI.enabled;
+            GUI.enabled = canConfirm;
+            if (GUILayout.Button(confirmLabel, btn, GUILayout.ExpandWidth(true), GUILayout.Height(38f)))
+            {
+                GUI.FocusControl(null);
+                ConfirmDeckInWindow();
+            }
+            GUI.enabled = oldEnabled;
+            GUILayout.EndHorizontal();
+
+            if (!canConfirm)
+                GUILayout.Label(turnLoop.phase == TablePhase.DeckPick
+                                    ? "先在上面点一行选一副牌组"
+                                    : "现在不在牌组选择界面 —— 窗口只是查看；"
+                                      + "开局准备时（选完关卡之后）才能定牌组",
+                                dimPanel);
+
+            GUILayout.EndArea();
+
+            EndPanelFrame(deckWindowDrag, box, prevMatrix);
+        }
+
+        /// <summary>
+        /// 窗口里点了一行：选中它，并让 rig 里的选中态跟着走。
+        ///
+        /// 【为什么是 public】和 PickLevelInWindow 同一个理由：自动试玩探针点不了
+        ///   IMGUI 的按钮，让它调**同一个方法**，探针验的才是按钮走的那条路。
+        /// </summary>
+        public void PickDeckInWindow(int i)
+        {
+            deckWindowPick = i;
+
+            // ★ 只在牌组阶段同步给 rig：别的时候 rig 里那个下标是"选的哪一关"
+            //   （关卡界面）或者已经清空了 —— 那时候改它等于偷偷改掉别处的选择。
+            if (turnLoop.phase == TablePhase.DeckPick && turnLoop.choiceRig != null)
+                turnLoop.choiceRig.SelectDeck(i);
+        }
+
+        /// <summary>
+        /// 窗口底部「确认选择该卡组」按下去要做的事 —— 按钮和探针共用这一个入口。
+        ///
+        /// 【为什么确认成功就把窗口收起来】和关卡窗口同一条规矩：进了刀片环节
+        ///   它还杵在屏幕中间挡着桌子。阶段没变（确认被拒）就留着，让玩家看见那句提示。
+        /// </summary>
+        public void ConfirmDeckInWindow()
+        {
+            if (turnLoop == null) return;
+
+            turnLoop.ConfirmDeckPick();
+            if (turnLoop.phase != TablePhase.DeckPick) deckWindowOpen = false;
+        }
+
+        /// <summary>牌组窗口开着没有（探针用 —— "进牌组界面自动弹窗"这件事得能验证）。</summary>
+        public bool DeckWindowOpen { get { return deckWindowOpen; } }
+
+        /// <summary>牌组窗口里当前点中的是第几副（-1 = 还没点；探针用）。</summary>
+        public int DeckWindowPick { get { return deckWindowPick; } }
+
+        /// <summary>
+        /// 开关牌组窗口 —— Esc 菜单那一项和自动试玩探针共用（和 SetLevelWindowOpen 一对）。
+        /// 打开时把选中态对齐到 rig：在牌组阶段就是玩家已经点过的那一副，别的时候是"没选"。
+        /// </summary>
+        public void SetDeckWindowOpen(bool open)
+        {
+            deckWindowOpen = open;
+
+            if (!open || turnLoop == null) return;
+
+            deckWindowPick = (turnLoop.phase == TablePhase.DeckPick && turnLoop.choiceRig != null)
+                ? turnLoop.choiceRig.DeckSelected : -1;
+        }
+
+        // ══════════════════════════════════════════════════════════════
         //  暂停菜单 / 设置
         // ══════════════════════════════════════════════════════════════
 
         private void DrawPausePanel()
         {
-            // 312 → 396：多了「关卡」和「卡牌图鉴」两项，面板跟着长高。
-            // ★ 高度必须 = 66（标题）+ 6×(40+6)（六个按钮）+ 两条说明的 44 ——
-            //   第一版只加到 358，最后一个「退出游戏」正好压在下面两行说明上。
-            const float w = 400f, h = 396f;
+            // 312 → 396（多了「关卡」和「卡牌图鉴」）→ 442（再多一个「牌组」）。
+            // ★ 高度必须 = 66（标题）+ N×(40+6)（N 个按钮）+ 两条说明的 44 ——
+            //   加一项就 +46。第一版只加到 358，最后一个「退出游戏」正好压在下面两行说明上。
+            const float w = 400f, h = 442f;
             Rect r = CenterBox(w, h);
             GUI.Box(r, GUIContent.none, panelBox);
 
@@ -902,16 +1159,31 @@ namespace GameJam.Prototype
             }
             by += bh + gap;
 
-            // ── 关卡窗口 / 卡牌图鉴 ──
+            // ── 关卡窗口 / 牌组窗口 / 卡牌图鉴 ──
             //   用户原话："最好单独开一个窗口给我显示关卡"、图鉴"入口做明显"。
-            //   两项都做成"从这里开"，不再只靠一个没人知道的快捷键。
+            //   三项都做成"从这里开"，不再只靠一个没人知道的快捷键。
             if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh),
                            levelWindowOpen ? "关卡（已打开）" : "关　　卡", btn))
             {
                 GUI.FocusControl(null);
                 turnLoop.paused = false;      // 让开位置：窗口是独立一层，别和暂停菜单叠着
                 levelWindowOpen = !levelWindowOpen;
-                if (levelWindowOpen) levelWindowPick = turnLoop.levelIndex;
+                if (levelWindowOpen)
+                {
+                    deckWindowOpen  = false;      // 两块内容都钉在正中，同时开会叠在一起
+                    levelWindowPick = turnLoop.levelIndex;
+                }
+            }
+            by += bh + gap;
+
+            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh),
+                           deckWindowOpen ? "牌组（已打开）" : "牌　　组", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.paused = false;
+                bool wantOpen = !deckWindowOpen;
+                levelWindowOpen = false;          // 同上：关卡窗口和牌组窗口不同时开
+                SetDeckWindowOpen(wantOpen);
             }
             by += bh + gap;
 
@@ -1155,6 +1427,14 @@ namespace GameJam.Prototype
             if (turnLoop.V21 && turnLoop.phase == TablePhase.BladePick) { DrawBladePickV21(); return; }
 
             bool deckPhase = (turnLoop.phase == TablePhase.DeckPick);
+
+            // ── v2.1 的牌组环节：这条小面板**整块让开** ────────────────────
+            //   用户要的是"这些流派也做成窗口，去掉卡牌" —— 而牌组窗口已经把
+            //   标题 / 已选 / 逐副的四行信息 / 确认键全包了。两个界面同时出现的话，
+            //   同一屏上会有两个"确认选择该卡组"、两处"已选"，玩家不知道该看哪个。
+            //   （旧流程照旧走下面那条面板：3D 牌组卡还在桌上，一个字没动。）
+            if (deckPhase && !TableSettings.DeckCardsOnTable) return;
+
             Choice c = turnLoop.CurrentChoice;
 
             TextDto texts = GameConfig.Texts();
