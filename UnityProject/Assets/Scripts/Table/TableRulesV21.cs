@@ -284,11 +284,114 @@ namespace GameJam.Prototype
         /// </summary>
         public const int FallbackTargetScore = 30;
 
-        // ── 桌面素材摆哪 ─────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════
+        //  桌面素材摆哪：**一列级联**（像蜘蛛纸牌那样，后一张压住前一张的下半截）
+        //
+        //  【口径是谁定的】用户拍板：「像蜘蛛纸牌一样堆叠素材区」。桌面素材不再摊开，
+        //    而是一列：第一张在最上方（离玩家最远），往后每一张朝玩家方向（−z）错开固定距离，
+        //    压住前一张的下半部分 —— 露出来的正好是**卡面上缘的名字牌**
+        //    （正式卡面的名字在卡心 +CardArt.NameOnPlate.z = +0.136 处，见 CardArt），
+        //    最靠玩家那张（最后上桌的）完整可见（含 H/D/V 与插画）。
+        //    新上桌的卡**追加到级联末尾**（最靠玩家那一端）—— 上桌顺序一眼看得出。
+        //
+        //  【为什么不是"互不遮挡"】先试过把每张摊开、谁也不压谁，但桌面中间根本放不下三张：
+        //    左边是 HUD 的提示文字、右边是破壁机、前面是手牌那一排、中间是刀片与两个槽位框，
+        //    摊开的结果是第 3 张被挤到刀片卡边上、**反而压住了刀片卡**
+        //    （用户截图里"右上角那张压着下面那张"就是上一版 `0.40f * (i - 1)` 摆出来的）。
+        //    级联把"压"变成**故意**的：只压下半截，卡面信息一点没丢。
+        //
+        //  【为什么一个坐标都不能写死】张数是变量（上桌 / 收回手牌 / 形态变化 / 献祭之后都会变），
+        //    写死"第 3 张放哪儿"就等于把张数写进坐标里。所以这里只有六个常量
+        //    （列锚点 x、首张 z、错开量、错开量下限、最近能到哪、每级抬多高），
+        //    每张卡的位置由 <see cref="TableMaterialSlot"/> 按（第几张, 共几张）现算。
+        // ══════════════════════════════════════════════════════════════
 
-        /// <summary>和投放区的两个槽位对齐（TableSetup 里 board 的 origin 是 z = −0.20、间距 0.46）。</summary>
-        private static readonly Vector3 TableMaterialLeft  = new Vector3(-0.23f, 0f, -0.20f);
-        private static readonly Vector3 TableMaterialRight = new Vector3( 0.23f, 0f, -0.20f);
+        /// <summary>
+        /// 级联列的 **x 锚点**（整列所在的那条竖线上的卡心）。
+        ///
+        /// 【为什么是 +0.53】卡宽 0.24 → 这一列占 x ∈ [+0.41, +0.65]，四条边都是量出来的：
+        ///   · 左缘 0.41：让开「上　桌 位」框 —— 框的右缘在 x = +0.3575
+        ///     （槽心 0.23 + 半宽 SlotSizeX/2 = 0.1275），还剩 5.25 厘米空档，
+        ///     既压不到框、也压不到框上的字（槽名牌在框外侧、更靠玩家）；
+        ///   · 再往里也不行：刀片卡的右缘在 x = +0.12（刀片位在桌心，按正文不许动），
+        ///     级联压在刀片上就是上一版那个 bug；
+        ///   · 右缘 0.65：破壁机整机在 x = 0.72、剪影半宽约 0.26 → 机器的左缘约 0.46。
+        ///     ★ 这里**故意允许 x 上和机器重叠**：机器是立着的（高 0.53），
+        ///       桌面视角里它挡的是 z ≥ 0.26 那一片屏幕，而级联整列都在 z ≤ 0.23 之内、
+        ///       投影落在机器下沿**以下**，所以两边的画面不打架（见 TableCascadeFirstZ）。
+        /// </summary>
+        private const float TableCascadeX = 0.53f;
+
+        /// <summary>
+        /// 级联**第一张**（离玩家最远那张）的 z。整列从这里朝玩家方向长。
+        ///
+        /// 【为什么是 +0.02】它决定整列在屏幕上的高度，两头都要让开：
+        ///   · 远端：破壁机的立绘在 x = 0.72、剪影左缘约 x = 0.46，**投影下沿约在 z = 0.26**
+        ///     （桌面视角里机器立绘的底边）；第一张卡占 z ∈ [−0.148, +0.188]，
+        ///     离那条线还有 7 厘米 —— 机器不会压住它的名字牌（实拍第一版取 0.06 时
+        ///     卡的上缘正好贴着机器底边，只剩几个像素的余量，太险）；
+        ///   · 近端：见 <see cref="TableCascadeNearLimitZ"/>，整列不许压到手牌那一排。
+        ///   · 中间：卡占 x ∈ [+0.41, +0.65]，和刀片卡（x ≤ +0.12）错开 29 厘米，互不相干。
+        /// </summary>
+        private const float TableCascadeFirstZ = 0.02f;
+
+        /// <summary>
+        /// 相邻两张的**错开量**：后一张朝玩家方向挪这么多。
+        ///
+        /// 【为什么是 0.11】两个约束夹出来的：
+        ///   · 下限：被压住那张露出的上缘必须盖住名字牌 —— 名字文字占"卡远缘往下 0.044"
+        ///     （NameOnPlate.z 0.136 ± 半个字高 0.013，卡远缘在 +0.1675），
+        ///     TableCascadeNameNeed 再留 1.1 厘米富余；
+        ///   · 上限：整列别太长。0.11 = 卡深 0.335 的三分之一（露出约 33% 的上缘），
+        ///     3 张时整列 0.555 长，仍然整整齐齐落在桌面中段。
+        /// </summary>
+        private const float TableCascadeStep = 0.11f;
+
+        /// <summary>
+        /// 错开量的**下限**：张数多到一列放不下时，整列等比缩小错开量，但不低于它。
+        /// 低于 0.065 就不只是"不好看"了 —— 被压住那张的名字会被切掉一截
+        /// （名字要 0.044 + 余量），所以这是个"信息不能丢"的硬底线，不是审美参数。
+        /// </summary>
+        private const float TableCascadeStepMin = 0.065f;
+
+        /// <summary>
+        /// 级联**最靠玩家那张**的卡心 z 下限。
+        ///
+        /// 【0.20 是怎么来的】手牌那一排的远沿在 z = −0.4125
+        ///   （TableTurnLoop.HandZ −0.58 + 卡深一半 0.1675），再留 4.5 厘米空档
+        ///   → 级联最后一卡的近缘不低于 −0.3675 → 卡心不低于 −0.20。
+        ///   手牌一多，最靠玩家那张也不能压到手上那一排（用户点名的三条之一）。
+        /// </summary>
+        private const float TableCascadeNearLimitZ = -0.20f;
+
+        /// <summary>
+        /// 级联里每往后一张抬高多少（世界单位）—— **让"压住"这件事在深度上真的成立**。
+        ///
+        /// 【为什么必须抬】级联是故意重叠的，几张卡都平躺在 y ≈ 0 的桌面上：
+        ///   · 卡面（Face Quad +0.0046）与卡身（Body 顶面 +0.004）本来就差 0.6 毫米，
+        ///     而压着的那张卡的**卡身顶面**要不透明地盖住被压那张的**卡面**，
+        ///     就得 0.004 + 抬高量 &gt; 0.0046 → **抬高量 &gt; 0.0006**；
+        ///   · 不抬的话相邻两张卡面严格共面，重叠区深度值相同、谁在前每帧都在抖 ——
+        ///     画面就是一层闪烁的"花边"（和用户报过的"卡面脏边"是同一类现象）。
+        ///   取 0.003：比下限大 5 倍，卡厚本来就有 8 毫米（3 毫米是卡厚的 37%），
+        ///   在桌面上就是"一摞卡"该有的那点厚度差 —— 肉眼只觉得有层次，不会觉得浮空。
+        ///
+        /// 【它**不能**解决什么】文字在这台工程里是 ZTest Always（GUI/Text Shader 写死的），
+        ///   靠高度差是压不住文字的；"被压住那几张的 H/D/V"由 SyncTableVisuals 第③步
+        ///   显式关掉（那里写了为什么），不要指望把这个数调大来盖住它。
+        /// </summary>
+        private const float TableCascadeLift = 0.003f;
+
+        /// <summary>
+        /// 被压住的那张**至少要露出多深的上缘**，名字才算没被切。
+        ///
+        /// 【怎么算出来的】正式卡面的名字文字中心在卡心 +NameOnPlate.z（+0.136），
+        ///   字号 NameOnPlateSize（0.0075）× CardFactory 那段实测标定的 K ≈ 3.4 → 字高约 0.0255，
+        ///   于是名字最低点在"卡远缘（+0.1675）往下 0.1675 − (0.136 − 0.0128) = 0.044"。
+        ///   取 0.055 = 0.044 + 1.1 厘米余量 —— 留的不是空白，是"名字牌底下那圈边框"，
+        ///   不然名字看着就像贴在切口上（自检和报告都用这一个数，不另抄）。
+        /// </summary>
+        private const float TableCascadeNameNeed = 0.055f;
 
         // ══════════════════════════════════════════════════════════════
         //  关卡生命周期
@@ -1133,8 +1236,9 @@ namespace GameJam.Prototype
                 if (st == null || st.removed || !st.OnTable) continue;
                 if (FindTableCard(st) != null) continue;
 
-                // 先占左槽，左槽有人就占右槽；再多的往后错开（见 ③）
-                Vector3 at = (tableCards.Count == 0) ? TableMaterialLeft : TableMaterialRight;
+                // 先按"它将是级联里的第几张"给一个落点（③ 会按最终张数统一重排一遍，
+                // 同一帧内就位，所以这里差一点点也看不见）—— 级联的算式只有一份，见 TableMaterialSlot
+                Vector3 at = TableMaterialSlot(tableCards.Count, tableCards.Count + 1);
 
                 PlayCard pc = CardFactory.Create(Card.Of(st.card), cardsRoot, at, Vector3.zero);
                 if (pc == null) continue;
@@ -1142,18 +1246,33 @@ namespace GameJam.Prototype
                 TableMaterialCard t = pc.gameObject.AddComponent<TableMaterialCard>();
                 t.state = st;
                 t.view  = pc;
-                tableCards.Add(t);            }
+                tableCards.Add(t);
+            }
 
-            // ③ 位置重排：超过两张的往后错开一点，
-            //    否则新卡完全压在旧卡上，玩家看不出"桌面又多了一张"
-            for (int i = 0; i < tableCards.Count; i++)
+            // ③ 位置重排：**一列级联**（后一张压住前一张的下半截，见上面那一段）。
+            //    ★ 位置只在这一个出口算：上桌 / 收回手牌 / 形态变化带走 / 献祭吞噬之后
+            //      都会走到这里，所以级联自己会收拢、会补位 —— 交互层一个坐标都不用知道
+            //      （拖到别处松手时 PlayCard.ReturnHome 回的就是这里定下的 homePosition）。
+            int cascadeCount = tableCards.Count;
+            for (int i = 0; i < cascadeCount; i++)
             {
                 TableMaterialCard t = tableCards[i];
                 if (t == null || t.view == null) continue;
 
-                Vector3 want = (i == 0) ? TableMaterialLeft : TableMaterialRight;
-                if (i >= 2) want += new Vector3(0f, 0f, 0.40f * (i - 1));
-                t.view.SetHome(want, Vector3.zero);
+                t.view.SetHome(TableMaterialSlot(i, cascadeCount), Vector3.zero);
+
+                // ★ 被压住的那些：只露**名字**，H/D/V 显式关掉。
+                //   【为什么非得显式关，而不是"让它被上面那张盖住"】两条实测原因叠在一起：
+                //     ① 文字材质是 ZTest Always（GUI/Text Shader 写死的）—— 深度缓冲挡不住文字；
+                //     ② 数值牌的文字**比卡还宽**（CardArt 的版面），压着它的那张卡在几何上
+                //        盖不住"露到卡外的那一截"。
+                //   后果就是级联里三行 H/D/V 浮在上面的卡身上（实测截图里清清楚楚）。
+                //   而名字天生安全：它在卡的**露出区**里（见 TableCascadeStep），
+                //   压着它的那张卡根本不在那一块 —— 所以名字一直开着。
+                //   选中的那张例外：它被抬起来（PlayCard.LiftHover 3 厘米），看得见自己的数值。
+                Renderer stats = StatsTextOf(t.view);
+                if (stats != null)
+                    stats.enabled = (i == cascadeCount - 1) || (t.state == selected);
             }
 
             // ④ 残留清扫：场景里有、但谁都不认领的卡（第 4 张就是从这里抓出来的）
@@ -1161,6 +1280,10 @@ namespace GameJam.Prototype
 
             // ⑤ 自检：数一遍"状态几张 / 场景几张"，对不上就打警告（回归时一眼看得见）
             VerifyTableSync("SyncTableVisuals");
+
+            // ⑥ 布局自检：级联压得对不对（每张的名字露没露出来）、有没有压到
+            //    刀片位 / 两个槽位框 / 手牌那一排 —— 详细理由见 VerifyTableLayout
+            VerifyTableLayout();
 
             ApplySelectionHighlight();
 
@@ -1172,6 +1295,411 @@ namespace GameJam.Prototype
             for (int i = 0; i < tableCards.Count; i++)
                 if (tableCards[i] != null && tableCards[i].state == st) return tableCards[i];
             return null;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  级联排布：算位置 / 量不变式 / 出报告
+        //
+        //  【为什么"量"在这件事上格外重要】级联和"卡不能互相压"这句直觉正好相反 ——
+        //    它是**故意压**的。于是"压得对不对"（只压下半截、名字必须露出来）没法靠
+        //    看一眼截图定：错开量改小 1 厘米，被压住那张的名字就被切掉一半，
+        //    而缩略图上根本看不出来。所以这里把每一张的占地矩形、压住多深、
+        //    离刀片位 / 两个槽位框 / 手牌那一排多远全部量成数字：
+        //      · 实机自检 VerifyTableLayout（SyncTableVisuals 的第⑥步，违反就打警告）
+        //      · 探针报告 TableLayoutReport（一行一张卡 + 障碍逐条判决）
+        //      · 离线扫描 CascadeSweepReport（n = 1..8 的"假设张数"，不用真造卡）
+        //    三处共用同一份检查实现（CheckCascade），不各写一份判据。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 级联里第 <paramref name="index"/> 张（共 <paramref name="count"/> 张）该落在哪。
+        ///
+        /// 【渲染 / 自检 / 扫描共用这一个算式】摆位（SyncTableVisuals 的第③步）、
+        ///   布局自检、探针的离线扫描都从这里拿坐标 —— 各写一份的话，
+        ///   "报告说没压到、画面里其实压着"这种事永远不会被发现。
+        ///   这一点和 <see cref="TableTurnLoop.HandSlot"/> 是同一个口径。
+        ///
+        /// 【张数很多时怎么办（拍板的那条策略）】
+        ///   ① 先按 <see cref="TableCascadeStep"/> 固定错开（1~3 张就是这一档 ——
+        ///      每一档的张数变了，**已经摆好的卡一张都不动**，和蜘蛛纸牌的手感一致）；
+        ///   ② 一列放不下就**整列等比缩小错开量**，但不低于 <see cref="TableCascadeStepMin"/>
+        ///      （下限是"名字不能被切"的硬底线，不是审美）；
+        ///   ③ 连下限都放不下（本工程的常量下是 ≥ 6 张）→ 起**第二列**，镜像到左边，
+        ///      仍然从远往近长。这一档是兜底：正文的初始手牌才 4 张素材、
+        ///      其中一张还要当刀片核心，正常一局到不了；
+        ///   ④ 再多的（≥ 11 张）第三列没地方摆了（左边是 HUD 提示文字、右边是破壁机），
+        ///      会挤回第二列 —— 那种局面自检会当场报警，不会静默画错。
+        ///
+        /// 【y 为什么要抬】见 <see cref="TableCascadeLift"/>：级联是故意重叠的，
+        ///   几张卡都平躺在 y ≈ 0 的桌面上、卡面严格共面 → 重叠区会 z-fighting 闪花边。
+        ///   每往后一张抬一点点，深度缓冲就分得清谁在前。
+        /// </summary>
+        public static Vector3 TableMaterialSlot(int index, int count)
+        {
+            if (count < 1) count = 1;
+            if (index < 0) index = 0;
+
+            // 一列最多排几张：错开量触底时这一列塞得下的张数。
+            // ★ 它是**算出来的**，不是"最多 3 张"这种写死的上限 ——
+            //   以后把下限调小，一列自然就能多排几张。
+            float span = TableCascadeFirstZ - TableCascadeNearLimitZ;
+            int perColumn = Mathf.Max(1, 1 + Mathf.FloorToInt(span / TableCascadeStepMin + 1e-4f));
+
+            int column = index / perColumn;
+            if (column > 1) column = 1;               // 第三列没地方了（见上面 ④）
+            int row = index - column * perColumn;     // 这一列里从远到近的第几张
+
+            // 这一列实际排几张（最后一列可能不满）
+            int inColumn = Mathf.Min(count - column * perColumn, perColumn);
+            if (inColumn < 1) inColumn = 1;
+
+            // 一列放不下 → 整列等比缩小错开量；下限保证被压住那张的名字还露得出来
+            float step = (inColumn > 1)
+                ? Mathf.Min(TableCascadeStep, span / (inColumn - 1))
+                : TableCascadeStep;
+
+            float x = (column == 0) ? TableCascadeX : -TableCascadeX;
+            float z = TableCascadeFirstZ - row * step;
+
+            // y 按**总序号**抬：越靠后（越靠玩家）的越高，共面就无从谈起
+            return new Vector3(x, TableCascadeLift * index, z);
+        }
+
+        /// <summary>
+        /// 这张 3D 卡上的**数值文字**（H/D/V / 模块效果）渲染器 —— 级联用它控制"被压住那几张不显示数值"。
+        /// 按 <see cref="CardFactory.StatsTextObject"/> 这个固定对象名找（名字由 CardFactory 起），
+        /// 找不到就返回 null（手工在 Inspector 里造的卡没有这两行文字）。
+        /// </summary>
+        private static Renderer StatsTextOf(PlayCard view)
+        {
+            if (view == null) return null;
+
+            Transform t = view.transform.Find(CardFactory.StatsTextObject);
+            return t != null ? t.GetComponent<Renderer>() : null;
+        }
+
+        /// <summary>
+        /// 桌面平面上的一个**占地矩形**（XZ）—— 级联的重叠判断 / 障碍判断都用它。
+        /// 卡是平躺的，几毫米的抬高对"谁压着谁"没有影响，所以只算 XZ。
+        /// </summary>
+        private struct XZRect
+        {
+            public float xmin, xmax, zmin, zmax;
+
+            /// <summary>按"中心 + 宽（x）× 深（z）"建 —— 卡和槽位框都是这种形状。</summary>
+            public static XZRect FromCenter(Vector3 center, float width, float depth)
+            {
+                XZRect r;
+                r.xmin = center.x - width * 0.5f;
+                r.xmax = center.x + width * 0.5f;
+                r.zmin = center.z - depth * 0.5f;
+                r.zmax = center.z + depth * 0.5f;
+                return r;
+            }
+
+            public bool Hits(XZRect o)
+            {
+                return xmin < o.xmax && xmax > o.xmin && zmin < o.zmax && zmax > o.zmin;
+            }
+
+            public string Text()
+            {
+                return "x[" + xmin.ToString("0.###") + "," + xmax.ToString("0.###") +
+                       "] z[" + zmin.ToString("0.###") + "," + zmax.ToString("0.###") + "]";
+            }
+        }
+
+        /// <summary>
+        /// 刀片标记「刀 片」的占地。
+        ///
+        /// 【为什么要把它单独算一个障碍】那两个字是**贴在刀片卡前方（卡外）的桌面上**的
+        ///   （见 TableTurnLoop.MarkBladeCard：localZ = −0.225，就是为了不挡卡面），
+        ///   所以"卡不压刀片卡"不等于"卡不压那两个字"——级联往前一伸就可能盖住它。
+        ///   尺寸按字号估：字高 ≈ 0.0105 × 3.4 ≈ 0.036（CardFactory 那段标定），
+        ///   "刀 片"三个字位宽约 0.11。
+        /// </summary>
+        private static XZRect BladeMarkRect(Vector3 bladeAt)
+        {
+            Vector3 at = new Vector3(bladeAt.x, 0f, bladeAt.z - 0.225f);
+            return XZRect.FromCenter(at, 0.11f, 0.036f);
+        }
+
+        /// <summary>槽名牌的占地估算（字号 0.0072 → 字高约 0.0245；「附　魔 位」五个字位宽约 0.12）。</summary>
+        private const float SlotLabelHalfW = 0.075f;
+        private const float SlotLabelHalfD = 0.016f;
+
+        /// <summary>手牌那一排的横向范围取整排（张数会变，这条只关心"前后别压上"）。</summary>
+        private const float TableHandBandW = 2.4f;
+
+        /// <summary>
+        /// 级联上每一张的占地（按 <see cref="PlayCard.homePosition"/> 量 —— 那才是"布局定下来的位置"；
+        /// 卡正在滑过去的中途位置不算，否则刚上桌那几帧会误报）。
+        /// </summary>
+        private void CollectCascadeRects(List<string> names, List<XZRect> rects)
+        {
+            names.Clear();
+            rects.Clear();
+
+            for (int i = 0; i < tableCards.Count; i++)
+            {
+                TableMaterialCard t = tableCards[i];
+                if (t == null || t.view == null || t.state == null) continue;
+                if (t.state.removed || !t.state.OnTable) continue;
+
+                names.Add(t.state.name);
+                rects.Add(XZRect.FromCenter(t.view.homePosition, CardFactory.CardWidth, CardFactory.CardDepth));
+            }
+        }
+
+        /// <summary>
+        /// 布局的**固定障碍**：刀片卡、刀片标记、两个槽位框、两块槽名牌、手牌那一排。
+        ///
+        /// 【为什么每一条都用游戏自己那份几何算】槽位框走 board.SlotPosition + TableSetup.SlotSize*，
+        ///   手牌那一排走 TableTurnLoop.HandZ —— 这里一个坐标都不另抄。
+        ///   抄一份的后果是"框挪了、自检还说没压到"，那自检就成了摆设。
+        /// </summary>
+        private void CollectLayoutObstacles(List<string> names, List<XZRect> rects)
+        {
+            names.Clear();
+            rects.Clear();
+
+            // ① 刀片卡（刀片位 = 桌心，按正文不许动）+ 它前方那两个字
+            Vector3 bladeAt = TableChoiceRig.BladeSpot;
+            if (loop != null && loop.bladeCard != null) bladeAt = loop.bladeCard.homePosition;
+
+            names.Add("刀片卡");
+            rects.Add(XZRect.FromCenter(bladeAt, CardFactory.CardWidth, CardFactory.CardDepth));
+
+            names.Add("刀片标记「刀 片」");
+            rects.Add(BladeMarkRect(bladeAt));
+
+            // ② 两个槽位框 + 框外那两块槽名牌
+            TableSetup setup = loop != null ? loop.setup : null;
+            TableBoard board = setup != null ? setup.board : null;
+
+            if (board != null)
+            {
+                string[] slotNames = TableSettings.UseRulesV21 ? TableSetup.V21SlotNames : TableSetup.LegacySlotNames;
+
+                for (int i = 0; i < board.SlotCount; i++)
+                {
+                    string label = (slotNames != null && i < slotNames.Length) ? slotNames[i] : ("槽 " + i);
+                    names.Add("槽位框 " + label);
+                    rects.Add(XZRect.FromCenter(board.SlotPosition(i), TableSetup.SlotSizeX, TableSetup.SlotSizeZ));
+                }
+
+                for (int i = 0; i < board.SlotCount; i++)
+                {
+                    string label = (slotNames != null && i < slotNames.Length) ? slotNames[i] : ("槽 " + i);
+                    names.Add("槽名牌 " + label);
+                    rects.Add(XZRect.FromCenter(setup.SlotLabelPosition(i),
+                                                SlotLabelHalfW * 2f, SlotLabelHalfD * 2f));
+                }
+            }
+
+            // ③ 手牌那一排（前后就是 HandZ ± 卡深一半）
+            float handFarEdge = TableTurnLoop.HandZ + CardFactory.CardDepth * 0.5f;
+            names.Add("手牌那一排（远沿 z=" + handFarEdge.ToString("0.###") + "）");
+            rects.Add(XZRect.FromCenter(new Vector3(0f, 0f, TableTurnLoop.HandZ),
+                                        TableHandBandW, CardFactory.CardDepth));
+        }
+
+        /// <summary>
+        /// 级联的**四条不变式**（实机自检 / 探针报告 / 离线扫描共用这一份实现）：
+        ///   ① 压对方向、只压下半截：两张重叠时靠后的那张必须更靠玩家，
+        ///      而且被压那张的上缘至少露出 <see cref="TableCascadeNameNeed"/>（名字才不会被切）；
+        ///   ② 最靠玩家那张（最后上桌的）完整可见：谁都不许压它 —— 它要露出 H/D/V 与插画；
+        ///   ③ 不压刀片卡 / 刀片标记 / 两个槽位框 / 两块槽名牌（都是玩家要看见或要往上拖的东西）；
+        ///   ④ 不压手牌那一排（手牌是另一个交互区，压上去就分不清哪张在手上）。
+        /// 违反的每一条都写进 <paramref name="bad"/>，返回"有没有问题"。
+        /// </summary>
+        private static bool CheckCascade(List<string> names, List<XZRect> rects,
+                                         List<string> obsNames, List<XZRect> obsRects,
+                                         List<string> bad)
+        {
+            // ① 逐对：靠后的那张必须更靠玩家，且只压下半截
+            for (int i = 0; i < rects.Count; i++)
+            {
+                for (int j = i + 1; j < rects.Count; j++)
+                {
+                    if (!rects[i].Hits(rects[j])) continue;
+
+                    if (rects[j].zmax > rects[i].zmax)
+                    {
+                        bad.Add("「" + names[j] + "」压在「" + names[i] + "」的**上缘**上 —— "
+                                + "级联要求后一张更靠玩家、只压前一张的下半截");
+                        continue;
+                    }
+
+                    float shown = rects[i].zmax - rects[j].zmax;      // i 露出来的上缘有多深
+                    if (shown < TableCascadeNameNeed)
+                        bad.Add("「" + names[i] + "」被「" + names[j] + "」压得只剩 "
+                                + shown.ToString("0.###") + " 露出（名字至少要 "
+                                + TableCascadeNameNeed.ToString("0.###") + "）");
+                }
+            }
+
+            // ② 最靠玩家那张：只有"更靠后的"那张可能压住它（更靠后的更高、画在上面）
+            int front = -1;
+            for (int i = 0; i < rects.Count; i++)
+                if (front < 0 || rects[i].zmin < rects[front].zmin) front = i;
+
+            for (int i = 0; i < rects.Count; i++)
+            {
+                if (front < 0 || i <= front) continue;
+                if (rects[i].Hits(rects[front]))
+                    bad.Add("最靠玩家那张「" + names[front] + "」被「" + names[i] + "」压住了 —— 它必须完整可见");
+            }
+
+            // ③④ 固定障碍逐条量
+            for (int i = 0; i < rects.Count; i++)
+            {
+                for (int k = 0; k < obsRects.Count; k++)
+                {
+                    if (!rects[i].Hits(obsRects[k])) continue;
+                    bad.Add("「" + names[i] + "」压到了" + obsNames[k] + "（" + obsRects[k].Text() + "）");
+                }
+            }
+
+            return bad.Count == 0;
+        }
+
+        /// <summary>
+        /// 级联排布的**报告**（一行一张卡 + 障碍逐条判决 + 结论）—— 探针把整段打进日志，
+        /// "每张被压住的卡都还看得见名字"这件事就有据可查，不靠看缩略图。
+        /// </summary>
+        public string TableLayoutReport()
+        {
+            List<string> names = new List<string>();
+            List<XZRect> rects = new List<XZRect>();
+            List<string> obsNames = new List<string>();
+            List<XZRect> obsRects = new List<XZRect>();
+            List<string> bad = new List<string>();
+
+            CollectCascadeRects(names, rects);
+            CollectLayoutObstacles(obsNames, obsRects);
+            CheckCascade(names, rects, obsNames, obsRects, bad);
+
+            float span = TableCascadeFirstZ - TableCascadeNearLimitZ;
+            int perColumn = Mathf.Max(1, 1 + Mathf.FloorToInt(span / TableCascadeStepMin + 1e-4f));
+
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            sb.Append("桌面素材级联 ").Append(rects.Count).Append(" 张｜列锚点 x=")
+              .Append(TableCascadeX.ToString("0.###"))
+              .Append("、首张 z=").Append(TableCascadeFirstZ.ToString("0.###"))
+              .Append("、错开量 ").Append(TableCascadeStep.ToString("0.###"))
+              .Append("（触底 ").Append(TableCascadeStepMin.ToString("0.###"))
+              .Append("，一列最多 ").Append(perColumn).Append(" 张）")
+              .Append("｜每张按序号抬高 ").Append(TableCascadeLift.ToString("0.0000"))
+              .Append("（防共面 z-fighting，本档最高 ").Append((TableCascadeLift * Mathf.Max(0, rects.Count - 1)).ToString("0.0000")).Append("）");
+
+            for (int i = 0; i < rects.Count; i++)
+            {
+                // 这一张露出来的上缘：被它后面那些卡压掉之后还剩多深
+                float shown = CardFactory.CardDepth;
+                for (int j = i + 1; j < rects.Count; j++)
+                    if (rects[i].Hits(rects[j])) shown = Mathf.Min(shown, rects[i].zmax - rects[j].zmax);
+
+                sb.Append("\n   ").Append(i + 1).Append(". ").Append(names[i])
+                  .Append("　").Append(rects[i].Text());
+
+                if (i == rects.Count - 1)
+                    sb.Append("　← 最靠玩家：完整可见");
+                else
+                    sb.Append("　上缘露出 ").Append(shown.ToString("0.###"))
+                      .Append("（名字要 ").Append(TableCascadeNameNeed.ToString("0.###")).Append("）");
+            }
+
+            sb.Append("\n   障碍（一张都不许有交集）：");
+            for (int k = 0; k < obsRects.Count; k++)
+            {
+                bool hit = false;
+                for (int i = 0; i < rects.Count && !hit; i++)
+                    if (rects[i].Hits(obsRects[k])) hit = true;
+
+                sb.Append('　').Append(obsNames[k]).Append(hit ? " ★有交集" : " ✓");
+            }
+
+            sb.Append("\n   结论：").Append(bad.Count == 0
+                ? "✓ 四条不变式全通过（压对方向、每张名字都露着、最靠玩家那张完整、没压刀片位/槽位框/手牌）"
+                : ("★ " + bad.Count + " 处违反不变式："));
+
+            for (int i = 0; i < bad.Count; i++) sb.Append("\n      · ").Append(bad[i]);
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 级联算式的**离线扫描**（探针用）：不用真的凑出 8 张素材，直接把 n = 1..maxCount
+        /// 的坐标算出来逐档验 —— 走的是 <see cref="TableMaterialSlot"/> 本身，
+        /// 和实机摆位是同一个算式。这样"以后张数变多会不会撞"当下就有答案，
+        /// 而不是等哪天真摆了 6 张才发现第 6 张压在第 1 张身上。
+        /// </summary>
+        public string CascadeSweepReport(int maxCount)
+        {
+            List<string> obsNames = new List<string>();
+            List<XZRect> obsRects = new List<XZRect>();
+            CollectLayoutObstacles(obsNames, obsRects);
+
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            sb.Append("级联算式扫描 n=1..").Append(maxCount)
+              .Append("（列锚点 x=").Append(TableCascadeX.ToString("0.###")).Append("）");
+
+            for (int n = 1; n <= maxCount; n++)
+            {
+                List<string> names = new List<string>();
+                List<XZRect> rects = new List<XZRect>();
+
+                for (int i = 0; i < n; i++)
+                {
+                    names.Add("#" + (i + 1));
+                    rects.Add(XZRect.FromCenter(TableMaterialSlot(i, n),
+                                                CardFactory.CardWidth, CardFactory.CardDepth));
+                }
+
+                List<string> bad = new List<string>();
+                CheckCascade(names, rects, obsNames, obsRects, bad);
+
+                float firstZ = TableMaterialSlot(0, n).z;
+                float lastZ  = TableMaterialSlot(n - 1, n).z;
+
+                sb.Append("\n   n=").Append(n)
+                  .Append("｜首张 z=").Append(firstZ.ToString("0.###"))
+                  .Append("、末张 z=").Append(lastZ.ToString("0.###"))
+                  .Append("（下限 ").Append(TableCascadeNearLimitZ.ToString("0.###")).Append("）")
+                  .Append("｜").Append(bad.Count == 0 ? "✓ 通过" : ("★ " + bad.Count + " 处违反"));
+
+                for (int i = 0; i < bad.Count; i++) sb.Append("\n        · ").Append(bad[i]);
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 级联布局的**常驻自检**（SyncTableVisuals 的第⑥步）：违反不变式就打警告 + 附整份报告。
+        /// 只在真有问题时说话 —— 正常玩一局，日志里一个字都不多。
+        ///
+        /// 【为什么不信"看起来没问题"】这一版改的正是"故意让卡互相压"，
+        ///   而错开量 / 列锚点任何一处被后人调一下，症状都是"某张卡的名字少了一半"——
+        ///   它不会报错、不会崩，只会让玩家看不清牌。这类回归必须由不等式守着。
+        /// </summary>
+        private void VerifyTableLayout()
+        {
+            List<string> names = new List<string>();
+            List<XZRect> rects = new List<XZRect>();
+            List<string> obsNames = new List<string>();
+            List<XZRect> obsRects = new List<XZRect>();
+            List<string> bad = new List<string>();
+
+            CollectCascadeRects(names, rects);
+            CollectLayoutObstacles(obsNames, obsRects);
+            CheckCascade(names, rects, obsNames, obsRects, bad);
+
+            if (bad.Count == 0) return;
+
+            Debug.LogWarning("[V21][布局] 桌面素材级联有 " + bad.Count + " 处违反不变式：\n   · "
+                             + string.Join("\n   · ", bad.ToArray())
+                             + "\n" + TableLayoutReport());
         }
 
         // ══════════════════════════════════════════════════════════════

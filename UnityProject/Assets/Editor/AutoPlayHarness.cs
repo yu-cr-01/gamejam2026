@@ -33,6 +33,10 @@ namespace GameJam.EditorTools
     ///   DSH_FX_LAYER=热/冷/酸/催化   启动前给刀片补哪一类附魔（默认"热"）
     ///   DSH_FX_LAYER_INDEX=n  ★ 纯 ASCII 的替身：0=热 1=冷 2=酸 3=催化（≥0 时优先于名字）
     ///   DSH_FX_LAYERS=n    补几层（默认 2 —— "遇热/遇冷"这类反应大多要求 ×2）
+    ///   DSH_LAYOUTPROBE=1  桌面素材级联探针（㉔⓪~㉕⑤）：从第 1 回合起一张张素材上桌，
+    ///                      每一档都出「桌面视角 + 俯视」截图并打一段布局报告
+    ///                      （每张的占地、上缘露出多少、有没有压到刀片位/槽位框/手牌），
+    ///                      再把中间那张拖回手牌、看级联自己收拢。默认 0 = 完全不介入。
     ///
     /// 【★ 命令行怎么用：-executeMethod 必须指向一个**方法**】
     ///   Unity 的 -executeMethod 只认 `类.方法`，不能指向一个带 [InitializeOnLoad] 的静态类本身。
@@ -85,6 +89,7 @@ namespace GameJam.EditorTools
         private static bool   slotProbe;
         private static bool   fxProbe;
         private static bool   blackProbe;
+        private static bool   layoutProbe;
 
         static AutoPlayHarness()
         {
@@ -115,6 +120,13 @@ namespace GameJam.EditorTools
             //   每一步都截图 **并且把桌面渲染出来的像素量进日志** ——
             //   "哪一帧开始变黑"必须是个数字，靠眼睛看截图只会吵起来。
             blackProbe = System.Environment.GetEnvironmentVariable("DSH_BLACKPROBE") == "1";
+
+            // ★ 桌面素材级联探针（DSH_LAYOUTPROBE=1，见 ㉔⓪~㉕⑤ 那一段）：
+            //   用户拍板的是"像蜘蛛纸牌一样堆叠素材区"，所以这一条链专门验**故意重叠**的排布：
+            //   每张被压住的卡名字还得露着、最靠玩家那张完整、没压到刀片位/槽位框/手牌。
+            //   也单独一条链 —— 它会把三张素材一次性铺到桌面上，混进主链会让后面
+            //   "验形态变化 / 验回合推进"那几步的前提（桌面只有一张）失效。
+            layoutProbe = System.Environment.GetEnvironmentVariable("DSH_LAYOUTPROBE") == "1";
 
             // ★ 每次域重载都要订阅，否则进 Play 之后就再也没人推进流程了
             EditorApplication.update += Tick;
@@ -440,8 +452,9 @@ namespace GameJam.EditorTools
                 case 59:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("v21_turn1.png")) return;
-                    // 三条支线各走各的（都不设 = 原来的"只用点击"那条路，行为一个字没变）
-                    Stage = fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110));
+                    // 四条支线各走各的（都不设 = 原来的"只用点击"那条路，行为一个字没变）
+                    Stage = layoutProbe ? 240
+                          : (fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110)));
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -930,6 +943,184 @@ namespace GameJam.EditorTools
                     ProbeLogSync("⑳⑪ 刀片已确认");
                     Stage = 58;
                     stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㉔⓪~㉕⑤ 桌面素材级联排布（DSH_LAYOUTPROBE=1）
+                //
+                //  【它验的是用户拍板的那句话】「像蜘蛛纸牌一样堆叠素材区」——
+                //    一列级联、后一张压住前一张的下半截、**每张被压住的卡都还看得见名字**
+                //    （名字在卡面上部，露出来的上缘正是它）、最靠玩家那张完整可见，
+                //    而这一列不许压到刀片位 / 两个槽位框（附魔位·上桌位）/ 手牌那一排。
+                //
+                //  【为什么每一步都打一段 TableLayoutReport】级联是"故意压"的，
+                //    "压得对不对"没法靠看缩略图定（错开量小 1 厘米，名字就被切一半，
+                //    而图上看不出来）。报告把每张的占地矩形、上缘露出多少、
+                //    和五个障碍有没有交集全量成数字 —— 违反时日志里直接是 ★，
+                //    判据和实机自检（TableRulesV21.VerifyTableLayout）是同一份实现。
+                //
+                //  【为什么还要跑一遍"收回手牌"】级联的位置全部由状态算出来
+                //    （SyncTableVisuals 的第③步），所以抽掉中间那张之后整列必须**自己收拢** ——
+                //    这一步验的就是"收得回来"，顺带看 ViewSyncSummary 的"残留 0 张"。
+                //
+                //  ★ 一律"先截图、后量"：Shot 在距上一张不到 ShotSettle 时会返回 false
+                //    让本阶段重试，把量测放在它前面会把同一份数据每帧打一遍（日志刷屏）。
+                // ══════════════════════════════════════════════════════
+
+                // ㉔⓪ 第 1 回合、桌面 0 张素材（对照图：列还没起）
+                case 240:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("layout_00_empty_board.png")) return;
+                    ProbeLayoutReport("㉔⓪ 桌面 0 张素材（对照）");
+                    Stage = 241;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉔① 出第 1 张素材（走玩家那条路：摆进上桌位 + 确认）
+                case 241:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeStageMaterialV21();
+                    Stage = 242;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉔② 1 张：第一张在最上方（离玩家最远）
+                case 242:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    if (!Shot("layout_01_one_board.png")) return;
+                    ProbeLayoutReport("㉔② 级联 1 张");
+                    Stage = 243;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉔③ 出第 2 张（追加到级联末尾 = 最靠玩家那一端）
+                case 243:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeStageMaterialV21();
+                    Stage = 244;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉔④ 2 张：后一张压住前一张的下半截，前一张露出名字
+                case 244:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    if (!Shot("layout_02_two_board.png")) return;
+                    ProbeLayoutReport("㉔④ 级联 2 张");
+                    Stage = 245;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉔⑤ 出第 3 张 —— 就是用户截图里"右上角那张"的位置（原来是压在刀片卡上的那个）
+                case 245:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeStageMaterialV21();
+                    Stage = 246;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉔⑥⑦ 3 张 + 刀片卡：桌面视角一张（用户看的就是这个机位）
+                //       —— 两张被压住的必须都还看得见名字，最后一张完整
+                case 246:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    if (!Shot("layout_03_three_board.png")) return;
+                    ProbeLayoutReport("㉔⑦ 级联 3 张 + 刀片卡（桌面视角）");
+                    ProbeTextMeshDiag("㉔⑦ 桌面视角：名字/属性两个 TextMesh 的渲染状态");
+                    ProbeLogSync("㉔⑦ 级联 3 张（状态 vs 画面）");
+                    Stage = 247;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉔⑧ 切俯视
+                case 247:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("top");
+                    Stage = 248;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉔⑨ 俯视：这一张看"级联方向对不对"—— 从上往下看，每张只露出上缘那一条
+                case 248:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("layout_04_three_top.png")) return;
+                    ProbeLayoutReport("㉔⑨ 级联 3 张（俯视）");
+                    ProbeTextMeshDiag("㉔⑨ 俯视：名字/属性两个 TextMesh 的渲染状态");
+                    Stage = 249;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕⓪ 切回桌面视角（后面拍"收回手牌"也在这个机位）
+                case 249:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("board");
+                    Stage = 250;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕① 把**中间那张**拖回手牌区（抽中间的才看得出"整列会不会自己收拢"）
+                case 250:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeWithdrawTableCardAt(1, "㉕① 抽掉级联中间那张");
+                    Stage = 251;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕②③ 收回之后：剩 2 张、整列收拢；顺带看"状态与画面一致｜残留 0 张"
+                case 251:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    if (!Shot("layout_05_after_withdraw_board.png")) return;
+                    ProbeLayoutReport("㉕③ 收回手牌之后（剩 2 张）");
+                    ProbeLogSync("㉕③ 收回手牌之后");
+                    Stage = 252;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕④⑤ 俯视再看一眼收拢后的两列张
+                case 252:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("top");
+                    Stage = 253;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 253:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("layout_06_after_withdraw_top.png")) return;
+                    ProbeLayoutReport("㉕⑤ 收回手牌之后（俯视）");
+                    Stage = 256;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕⑦⑧ 切「手牌特写」拍一张 —— 手牌和桌面卡走的是**同一个造卡出口**
+                //       （CardFactory.BuildCard → AddText 的名字那一行），
+                //       所以"名字看得见"这条在手牌上也必须成立（顺带看牌组选择界面那张
+                //       也在同一批截图里：v21_choice_deck.png）
+                case 256:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("hand");
+                    Stage = 257;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 257:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    if (!Shot("layout_07_hand_view.png")) return;
+                    ProbeTextMeshDiag("㉕⑧ 手牌特写：手牌上名字/属性 TextMesh 的渲染状态");
+                    Stage = 254;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕⑥ 离线扫描：n = 1..8 的级联坐标逐档验一遍（不用真的凑出 8 张素材）
+                //      —— "以后张数变多会不会撞"当下就有答案
+                case 254:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeCascadeSweep(8);
+                    Stage = 255;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 255:
+                    if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
+                    Finish();
                     return;
 
                 // ══════════════════════════════════════════════════════
@@ -2914,6 +3105,175 @@ namespace GameJam.EditorTools
 
             Debug.Log("[AutoPlay/Black] " + what + "：把桌面上的「" + target.DisplayName + "」拖到手牌区（z " +
                       (TableInteraction.HandZoneZ - 0.15f).ToString("0.##") + "）→ 被处理 " + handled
+                      + "｜桌面素材 " + tableBefore + " → " + r.LiveTableCount() + " 张"
+                      + "｜3D 手牌 " + handBefore + " → " + (setup.hand != null ? setup.hand.Count : -1) + " 张"
+                      + "｜notice " + loop.notice
+                      + "｜" + r.ViewSyncSummary());
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  桌面素材级联探针（DSH_LAYOUTPROBE=1）用的动作 —— 见 ㉔⓪~㉕⑥ 那一段
+        //
+        //  【为什么要"报告"而不是"截图 + 眼睛"】级联是故意重叠的布局：
+        //    错开量小 1 厘米，被压住那张的名字就被切掉一半 —— 而在一张 1470 像素宽的
+        //    游戏截图里，半行小字的差别根本看不出来。所以每一步都打一段
+        //    TableRulesV21.TableLayoutReport：占地矩形、上缘露出多少、和五个障碍有没有
+        //    交集，全是数字。报告里的判据和实机自检是**同一份实现**（CheckCascade），
+        //    不存在"探针说没事、实机却报警"。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>把桌面素材级联的排布打一段进日志（位置 / 谁压住谁 / 障碍逐条判决）。</summary>
+        private static void ProbeLayoutReport(string what)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) return;
+
+            Debug.Log("[AutoPlay/Layout] " + what + "\n" + loop.rulesV21.TableLayoutReport());
+        }
+
+        /// <summary>
+        /// 级联算式的**离线扫描**：n = 1..maxCount 逐档算出坐标并验一遍
+        /// （见 TableRulesV21.CascadeSweepReport）—— 不用真的凑出 8 张素材，
+        /// 就能回答"以后张数变多会不会撞"。
+        /// </summary>
+        private static void ProbeCascadeSweep(int maxCount)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) return;
+
+            Debug.Log("[AutoPlay/Layout] " + loop.rulesV21.CascadeSweepReport(maxCount));
+        }
+
+        /// <summary>
+        /// 诊断：把桌面卡（含刀片卡）身上那几个 TextMesh 的**渲染状态**打出来。
+        ///
+        /// 【为什么要它】级联的验收条件是"每张被压住的卡都还看得见**名字**"，
+        ///   而"看不见"至少有三种完全不同的原因，截图里长得一模一样：
+        ///     ① 被别的卡真挡住了（布局问题 —— 这一版要修的就是它）；
+        ///     ② 被视锥剔掉了 / 材质队列不对（渲染问题，和布局无关）；
+        ///     ③ 文字压根没建出来（数据问题）。
+        ///   所以这里一次把 **世界坐标 / 屏幕坐标 / isVisible / shader / 渲染队列** 全打出来，
+        ///   再拿"名字"和"属性"两行互相对照 —— 同在一张卡上、只差一个局部坐标，
+        ///   一行可见一行不可见，原因当场就分得开（属性那行是能看见的，见截图）。
+        /// </summary>
+        private static void ProbeTextMeshDiag(string what)
+        {
+            TableTurnLoop loop = Loop();
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (loop == null || loop.rulesV21 == null || setup == null || setup.cam == null) return;
+
+            TableRulesV21 r = loop.rulesV21;
+            Camera cam = setup.cam;
+
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            sb.Append("[AutoPlay/Diag] ").Append(what)
+              .Append("｜相机 ").Append(cam.transform.position.ToString("0.###"))
+              .Append("　朝向 ").Append(cam.transform.forward.ToString("0.###"));
+
+            PlayCard[] all = Object.FindObjectsOfType<PlayCard>();
+            for (int i = 0; i < all.Length; i++)
+            {
+                PlayCard pc = all[i];
+                if (pc == null) continue;
+
+                bool isBlade = loop.bladeCard == pc;
+                if (!isBlade && r.FindTable(pc) == null) continue;
+
+                TextMesh[] tms = pc.GetComponentsInChildren<TextMesh>(true);
+                for (int k = 0; k < tms.Length; k++)
+                {
+                    TextMesh tm = tms[k];
+                    if (tm == null) continue;
+
+                    MeshRenderer mr = tm.GetComponent<MeshRenderer>();
+                    Vector3 sp = cam.WorldToScreenPoint(tm.transform.position);
+
+                    sb.Append("\n   ").Append(isBlade ? "刀片卡" : "桌面卡")
+                      .Append("「").Append(pc.DisplayName).Append("」")
+                      .Append(" 文本=\"").Append(tm.text).Append('"')
+                      .Append(" 世界=").Append(tm.transform.position.ToString("0.####"))
+                      .Append(" 屏幕=(").Append(sp.x.ToString("0")).Append(',')
+                      .Append(sp.y.ToString("0")).Append(',').Append(sp.z.ToString("0.##")).Append(')')
+                      .Append(" isVisible=").Append(mr != null ? mr.isVisible.ToString() : "无渲染器")
+                      .Append(" 材质=").Append(mr != null && mr.sharedMaterial != null && mr.sharedMaterial.shader != null
+                                                  ? mr.sharedMaterial.shader.name : "?")
+                      .Append(" 队列=").Append(mr != null && mr.sharedMaterial != null
+                                                  ? mr.sharedMaterial.renderQueue.ToString() : "?")
+                      .Append(" enabled=").Append(mr != null ? mr.enabled.ToString() : "-");
+                }
+            }
+
+            Debug.Log(sb.ToString());
+        }
+
+        /// <summary>
+        /// 把级联里第 <paramref name="index"/> 张（按 r.table 的顺序 = 上桌顺序）拖回手牌区。
+        ///
+        /// 【为什么按序号点名，而不是像 ProbeWithdrawTableMaterial 那样随便挑一张】
+        ///   这一步要验的是"**抽掉中间那张**之后整列会不会自己收拢" ——
+        ///   抽最后一张只是列变短，看不出收拢。
+        ///
+        /// 【走的是玩家那条路】Teleport 到手牌区 + TableInteraction.DropCard（松手判决），
+        ///   探针只把"鼠标把牌拖到哪儿"换成"由探针指定"；判决函数一模一样。
+        /// </summary>
+        private static void ProbeWithdrawTableCardAt(int index, string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+
+            if (setup == null || it == null || loop == null || loop.rulesV21 == null)
+            {
+                Debug.LogWarning("[AutoPlay/Layout] " + what + "：找不到 TableSetup / TableInteraction，跳过。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+
+            // 级联顺序 = r.table 里"还活着"的那些的顺序（SyncTableVisuals 就是照它摆的）
+            GameJam.Rules.MaterialState st = null;
+            int k = 0;
+            for (int i = 0; i < r.table.Count; i++)
+            {
+                GameJam.Rules.MaterialState s = r.table[i];
+                if (s == null || s.removed || !s.OnTable) continue;
+                if (k == index) { st = s; break; }
+                k++;
+            }
+
+            if (st == null)
+            {
+                Debug.LogWarning("[AutoPlay/Layout] " + what + "：桌面只有 " + r.LiveTableCount() +
+                                 " 张素材（要抽第 " + (index + 1) + " 张），跳过。｜桌面 " + r.TableText());
+                return;
+            }
+
+            // 状态 → 3D 卡：用规则层的 FindTable 认（不靠名字，名字会随 D 变）
+            PlayCard target = null;
+            PlayCard[] all = Object.FindObjectsOfType<PlayCard>();
+            for (int i = 0; i < all.Length && target == null; i++)
+            {
+                if (all[i] == null) continue;
+                if (r.FindTable(all[i]) == st) target = all[i];
+            }
+
+            if (target == null)
+            {
+                Debug.LogWarning("[AutoPlay/Layout] " + what + "：「" + st.name + "」没有对应的 3D 卡，跳过。");
+                return;
+            }
+
+            int tableBefore = r.LiveTableCount();
+            int handBefore  = setup.hand != null ? setup.hand.Count : -1;
+
+            // 玩家的鼠标把这张卡拖到手牌那一片（比 HandZoneZ 再往玩家一侧 0.15，避免压线）
+            target.Teleport(new Vector3(target.transform.position.x, 0.022f,
+                                        TableInteraction.HandZoneZ - 0.15f),
+                            target.homeEuler);
+            bool handled = it.DropCard(target, false);
+
+            Debug.Log("[AutoPlay/Layout] " + what + "：把级联里第 " + (index + 1) + " 张「" + st.name + "」"
+                      + "拖回手牌区（z " + (TableInteraction.HandZoneZ - 0.15f).ToString("0.##") + "）→ 被处理 " + handled
                       + "｜桌面素材 " + tableBefore + " → " + r.LiveTableCount() + " 张"
                       + "｜3D 手牌 " + handBefore + " → " + (setup.hand != null ? setup.hand.Count : -1) + " 张"
                       + "｜notice " + loop.notice

@@ -310,19 +310,23 @@ namespace GameJam.Prototype
             {
                 float y = CardThick * 0.5f + 0.0022f;
                 AddText(root.transform, title, CardArt.NameOnPlate.z, CardArt.NameOnPlateSize,
-                        CardArt.InkOnPlate, y, CardArt.NameOnPlate.x);
+                        CardArt.InkOnPlate, y, CardArt.NameOnPlate.x,
+                        NameTextObject, NameTextSortingOrder);
 
                 if (!string.IsNullOrEmpty(subText))
                     AddText(root.transform, subText, CardArt.StatsOnPlate.z, CardArt.StatsOnPlateSize,
-                            CardArt.InkOnPlate, y, CardArt.StatsOnPlate.x);
+                            CardArt.InkOnPlate, y, CardArt.StatsOnPlate.x, StatsTextObject);
             }
             else
             {
-                AddText(root.transform, title, NameZ, NameSize, ProceduralArt.InkOn(accent));
+                AddText(root.transform, title, NameZ, NameSize, ProceduralArt.InkOn(accent),
+                        CardThick * 0.5f + 0.0022f, 0f,
+                        NameTextObject, NameTextSortingOrder);
 
                 // 副文本：食材写三属性，模块写效果描述
                 if (!string.IsNullOrEmpty(subText))
-                    AddText(root.transform, subText, StatsZ, StatsSize, InkOnPaper());
+                    AddText(root.transform, subText, StatsZ, StatsSize, InkOnPaper(),
+                            CardThick * 0.5f + 0.0022f, 0f, StatsTextObject);
             }
 
             // 卡身和卡面都要跟着悬停/拖动变亮，所以两个渲染器都绑上
@@ -395,11 +399,17 @@ namespace GameJam.Prototype
         ///
         /// localX 是给正式美术版面用的：美术的名字牌在左上角、数值牌在右侧，
         /// 文字得跟着离开中线。程序化卡面继续传 0（居中）。
+        ///
+        /// objectName / sortingOrder 是给"上层按用途找文字"用的（见
+        /// <see cref="NameTextObject"/> / <see cref="StatsTextObject"/> 与
+        /// <see cref="NameTextSortingOrder"/>）：级联要把被压住那张的**数值**藏起来、
+        /// **名字**留在露出区，靠的就是这两个参数，而不是靠猜"两个 Text 谁是谁"。
         /// </summary>
         public static void AddText(Transform parent, string text, float localZ, float size,
-                                   Color color, float localY, float localX = 0f)
+                                   Color color, float localY, float localX = 0f,
+                                   string objectName = "Text", int sortingOrder = 0)
         {
-            GameObject go = new GameObject("Text");
+            GameObject go = new GameObject(string.IsNullOrEmpty(objectName) ? "Text" : objectName);
             go.transform.SetParent(parent, false);
 
             go.transform.localPosition = new Vector3(localX, localY, localZ);
@@ -422,6 +432,56 @@ namespace GameJam.Prototype
                 MeshRenderer mr = go.GetComponent<MeshRenderer>();
                 if (mr != null) mr.sharedMaterial = f.material;
             }
+
+            // ★ 名字要比卡面后画 —— 见 NameTextSortingOrder 那段（"名字在桌面视角看不见"的根因）
+            MeshRenderer rend = go.GetComponent<MeshRenderer>();
+            if (rend != null) rend.sortingOrder = sortingOrder;
         }
+
+        /// <summary>卡面**名字**那一行文字的对象名（上层按用途找它：级联要保证它一直露着）。</summary>
+        public const string NameTextObject = "NameText";
+
+        /// <summary>卡面**三属性**（H/D/V）那几行文字的对象名。</summary>
+        public const string StatsTextObject = "StatsText";
+
+        /// <summary>
+        /// **名字**文字的渲染次序：排在卡面之后。
+        ///
+        /// ★★ 它修的是"桌面视角下名字看不见"★★
+        ///
+        /// 【症状】**桌面视角下所有卡的名字牌都是空的**，而同一张卡上的 H/D/V 却清清楚楚。
+        ///   这不是摆位问题 —— 还没做级联之前（上一轮）的截图
+        ///   docs/verify/black-table-fix/05 / 10 / 14 三张里，名字牌就同样是空的。
+        ///
+        /// 【根因：两个透明物体谁盖谁，是按"包围盒中心离相机多远"定的】
+        ///   卡面走 <see cref="MakeUnlit"/> → `Sprites/Default`，也就是 **Transparent 队列（3000）**；
+        ///   文字用字体材质（GUI/Text Shader），队列也是 3000。
+        ///   同一队列里 Unity 按渲染器包围盒中心的距离排序（远的先画、近的后画），于是：
+        ///     · 桌面视角（相机在近侧、43° 俯角）：**卡面中心比名字更靠近相机** ——
+        ///       名字在卡远端（`CardArt.NameOnPlate.z` = +0.136），卡面中心在卡心 →
+        ///       卡面后画、把名字整片盖住 ✗；
+        ///     · H/D/V 在卡近端（`StatsOnPlate.z` = −0.087）→ 比卡面中心更近 → 后画 → 一直可见 ✓；
+        ///     · 俯视（相机在正上方）时文字 y = 0.0062 > 卡面 y = 0.0046 → 文字更近 → 后画 → 可见 ✓。
+        ///   三个现象对得上，这条判断才算"根因"而不是"猜的"。
+        ///
+        /// 【为什么只抬名字、不抬 H/D/V】★ 这一条是实测出来的：
+        ///   把**所有**文字都抬到卡面之后，被压住那几张的 H/D/V 就"透"到了压着它的卡身上
+        ///   （级联的实测截图里三行数值浮在上一张卡的插画上）。原因是两条叠在一起：
+        ///     ① 文字材质是 **ZTest Always**（GUI/Text Shader 写死的），深度缓冲挡不住它；
+        ///     ② 数值牌的文字**比卡还宽**（CardArt 的版面如此），压在它上面的那张卡
+        ///        在几何上盖不住"露到卡外的那一截"。
+        ///   所以数值必须**由布局来决定显不显示**（见 TableRulesV21 级联那一节：
+        ///   被压住的卡只留名字），而不是靠排序去抢 —— 抢不干净。
+        ///   名字则天生安全：它在卡的**露出区**里，压着它的那张卡根本不在那一块。
+        ///
+        /// 【为什么不去动卡面材质】卡面是 `Sprites/Default`：**ZWrite Off**（圆角与边缘的
+        ///   半透明靠混合抠出来，见 CardArt 里修脏边那一大段）。把它的队列压到 Geometry（2000）
+        ///   会落进不透明批次，而卡身（Body 立方体，Standard、ZWrite On）也在 2000 ——
+        ///   不透明批次按"近→远"排，卡面（y 更高、更近）会先画、卡身随后把卡面整个盖掉
+        ///   （卡面自己不写深度）；反过来给卡面开 ZWrite 抢在前面，圆角处的半透明边就变成
+        ///   硬边/黑边，还会挡掉圆角外的桌面 —— 正是 CardArt 花大力气修掉的那圈脏边。
+        ///   两条都是"修好名字、弄坏卡面"，所以卡面一个字节都不动。
+        /// </summary>
+        private const int NameTextSortingOrder = 1;
     }
 }

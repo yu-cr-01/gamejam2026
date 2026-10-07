@@ -60,9 +60,15 @@ namespace GameJam.Prototype
         /// </summary>
         private static readonly Color TableColor  = new Color(0.62f, 0.50f, 0.42f);
 
-        /// <summary>卡槽指示块（也就是吸附判定用的"框"）的尺寸。两处共用，别各写一个数。</summary>
-        private const float SlotSizeX = 0.255f;
-        private const float SlotSizeZ = 0.350f;
+        /// <summary>
+        /// 卡槽指示块（也就是吸附判定用的"框"）的尺寸。两处共用，别各写一个数。
+        ///
+        /// ★ public 是给 **桌面素材级联的布局自检**用的（TableRulesV21.CollectLayoutObstacles）：
+        ///   那边要按"框的真实矩形"量"卡有没有压到框"。让自检自己抄一份尺寸的话，
+        ///   改了这里、自检还按旧尺寸判，就会变成"框被压住了而日志说没事"。
+        /// </summary>
+        public const float SlotSizeX = 0.255f;
+        public const float SlotSizeZ = 0.350f;
 
         public readonly List<PlayCard> hand = new List<PlayCard>();
 
