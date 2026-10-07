@@ -80,6 +80,20 @@ namespace GameJam.Prototype
         /// </summary>
         public static int V21TargetScore = 60;
 
+        /// <summary>
+        /// 这一关在当前规则模式下**实际**的目标分 —— 界面上的"目标分"一律走这里。
+        ///
+        /// 【为什么要有这个函数，而不是各处直接读 lv.targetScore】
+        ///   3D 关卡卡、关卡窗口、HUD 顶栏三处都要显示目标分。如果一处读旧数值、一处读 v2.1 的 60，
+        ///   同一屏上就会出现"目标分 1000"和"目标分 60"打架（真出现过），玩家只会以为坏了一个。
+        ///   判断逻辑收在这里一处，以后加新模式也只改这里。
+        /// </summary>
+        public static int LevelTargetScore(GameJam.Data.LevelData level)
+        {
+            if (UseRulesV21) return V21TargetScore;            // v2.1 走专用目标分
+            return level != null ? level.targetScore : 0;      // 旧流程读关卡自己的数值
+        }
+
         /// <summary>右键 / 中键转头灵敏度（度 / 鼠标单位）。</summary>
         public static float LookSensitivity = 3.2f;
 

@@ -162,7 +162,10 @@ namespace GameJam.Prototype
                 CardSpot sp = i < spots.Count ? spots[i] : new CardSpot { x = CountToX(i, n), z = RowZ, scale = 1f };
 
                 deckCards.Add(BuildOne(lv.id, lv.name, accent, AttrId.Salt,
-                    "目标分：" + lv.targetScore,
+                    // ★ 目标分要跟当前规则模式一致：v2.1 用的是 TableSettings.V21TargetScore（60），
+                    //   旧流程才是 levels[].targetScore（1000/1500/2000）。
+                    //   卡片上写旧数值、关卡窗口里写新数值，玩家会以为其中一个坏了。
+                    "目标分：" + TableSettings.LevelTargetScore(lv),
                     "选择环节：" + lv.ChoiceCount + " 个",
                     isCurrent ? "▸ 当前关卡" : ("第 " + (i + 1) + " 关"),
                     sp, isCurrent));
