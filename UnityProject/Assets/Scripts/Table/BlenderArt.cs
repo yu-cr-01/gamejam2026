@@ -118,6 +118,17 @@ namespace GameJam.Prototype
         private float localH;
 
         /// <summary>
+        /// 立绘在**世界里**的实际尺寸（米，已经含整机缩放）—— "机器占多宽多高"就是它。
+        ///
+        /// 【谁在用】<see cref="TableSetup.ReframeBoardView"/> 的「桌面视角」取景拟合：
+        ///   机器整个必须落在画面里，所以要按它的真实宽高算边距。
+        ///   由这里报出去、而不是让取景那边抄一个 0.52 × 0.61 —— 这张图的宽高是按
+        ///   像素反算的（见 Setup 里那段：机身 0.70 米对应 93~671 像素），
+        ///   抄一份的话美术换一张立绘，取景就会按旧尺寸算，机器又被切了。
+        /// </summary>
+        public Vector2 WorldSize { get { return new Vector2(widthWorld, heightWorld); } }
+
+        /// <summary>
         /// 有美术就挂一块立绘并返回组件；缺任何一张图就返回 null（调用方保持纯程序化）。
         /// </summary>
         public static BlenderArt Attach(JuicerRig owner)

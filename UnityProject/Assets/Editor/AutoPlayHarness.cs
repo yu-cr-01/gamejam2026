@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -43,6 +44,30 @@ namespace GameJam.EditorTools
     ///                      （DSH_RULES_V21=0）那排卡必须原样还在。两个模式共用同一条链，
     ///                      每一步都把"rig 认领几张 / 场景里有几个 BigCard_*"打进日志，
     ///                      截图一一对照。默认 0 = 完全不介入。
+    ///   DSH_FRAMEPROBE=1   取景探针（㉘⓪~㉘④）：验用户那句「手牌最下面那张被视口下边缘切了」——
+    ///                      在手牌最宽的"选刀片"那一屏（5 张），把 Game 视图切成
+    ///                      当前比例 / 竖屏 900×1600 / 打包版 1600×900 各拍一张，
+    ///                      并把**手牌那一排在屏幕上占的包围盒和四条边余量**打进日志。
+    ///                      默认 0 = 完全不介入（不会去动 Game 视图的分辨率）。
+    ///   DSH_OVERLAPPROBE=1 开场取景 + 相交清单探针（㉙⓪~㉙⑨）：验用户那两句话
+    ///                      「你怎么换摄像头视角了？换回来」和「把卡牌和破壁机和计分板穿模的 bug 改一改」——
+    ///                      ① 开场那一屏（桌面视角 + 俯视）各拍一张，并把**相机此刻的真实机位**
+    ///                         （位置 / 朝向 / fov / 宽高比）打进日志，好和"以前那组写死的坐标"逐个数字对；
+    ///                      ② 把桌上这些东西两两量一遍世界包围盒（蜡烛 / 量筒 / 破壁机立绘与机身 /
+    ///                         两个槽位框 / 两块槽名牌 / 桌面素材级联列 / 刀片卡与「刀 片」标记 / 手牌那一排），
+    ///                         世界 AABB、桌面 XZ、**屏幕 AABB** 三种口径都报，逐对给"重叠多少 / 隔多少"。
+    ///                      默认 0 = 完全不介入。
+    ///   DSH_OVERLAP_BASELINE=1  配合它用：开场多拍一张**历史机位**（0, 1.05, −1.02 → 0, 0, 0.10）的基线图。
+    ///                      这是探针动作（只在副本工程里跑），用来证明"还原回去就是以前那一屏"。
+    ///   DSH_CARDFACEPROBE=1 卡面文字探针（㛢⓪~㛢⑨）：验两件用户拿截图报上来的事 ——
+    ///                      ① 牌组选择界面（6 张大卡）在**桌面视角 / 俯视**下，每一行文字
+    ///                         （标题 / 食材 / 模块 / 开局刀片）都必须看得见
+    ///                         （用户那张"下半屏三张牌一个字都没有"就是偏俯视拍的）；
+    ///                      ② 手牌与刀片卡**卡面特写**：H/D/V 三个数字要各自落在数值牌上的
+    ///                         菱形 / 圆形 / 方形里、居中、不压边框，两位数（16/26）和零值都拍。
+    ///                      每一步都先把"每张卡上文字的 sortingOrder vs 卡面的 sortingOrder"
+    ///                      打进日志（"文字排在卡面之后"是个可以逐条核对的数字），再截图。
+    ///                      默认 0 = 完全不介入（不会临时注册 cardface 机位）。
     ///
     /// 【★ 命令行怎么用：-executeMethod 必须指向一个**方法**】
     ///   Unity 的 -executeMethod 只认 `类.方法`，不能指向一个带 [InitializeOnLoad] 的静态类本身。
@@ -69,6 +94,10 @@ namespace GameJam.EditorTools
     public static class AutoPlayHarness
     {
         private const string KeyStage = "DSH_AutoPlayStage";
+
+        /// <summary>卡面探针切 Game 视图尺寸前，把原尺寸记在这两个键里（探针跑完要还回去）。</summary>
+        private const string KeyGvW = "DSH_AutoPlayGvW";
+        private const string KeyGvH = "DSH_AutoPlayGvH";
 
         /// <summary>
         /// 命令行 -executeMethod 的入口。
@@ -97,6 +126,16 @@ namespace GameJam.EditorTools
         private static bool   blackProbe;
         private static bool   layoutProbe;
         private static bool   levelProbe;
+        private static bool   framingProbe;
+        private static bool   overlapProbe;
+        private static bool   cardFaceProbe;
+
+        /// <summary>
+        /// 相交探针拍完之后回哪一步 —— 进探针时按**来路**记下（开场那条链和牌组/关卡那条链
+        /// 各有各的下一步：v2.1 是 51/96，旧流程是 31/33/21）。
+        /// 用一个字段而不是各写一份 stage，是为了让"拍完接回原链"只有一处实现。
+        /// </summary>
+        private static int    overlapResume;
 
         static AutoPlayHarness()
         {
@@ -141,6 +180,27 @@ namespace GameJam.EditorTools
             //   而旧流程那排卡必须还在。也单独一条链，且两个模式共用 ——
             //   "有没有少东西"要两张图并排看才算数。
             levelProbe = System.Environment.GetEnvironmentVariable("DSH_LEVELPROBE") == "1";
+
+            // ★ 取景探针（DSH_FRAMEPROBE=1，见 ㉘⓪~㉘④ 那一段）：
+            //   用户报的是"手牌最下面那张被视口下边缘切了一半"，而"装不装得下"是
+            //   按**宽高比**算出来的 —— 所以这一条链要能把 Game 视图切成两个分辨率各拍一张。
+            //   单独一个开关：它会去动 Game 视图的分辨率（虽然只动副本工程），
+            //   混进别的链会让那些"按屏幕坐标量"的日志换一个口径。
+            framingProbe = System.Environment.GetEnvironmentVariable("DSH_FRAMEPROBE") == "1";
+
+            // ★ 开场取景 + 相交清单探针（DSH_OVERLAPPROBE=1，见 ㉙⓪~㉙⑨ 那一段）：
+            //   它验的两件事都**只能在真跑起来的时候量**：机位是算出来的（不是常量），
+            //   世界包围盒要等美术立绘 / 量筒 / 蜡烛都建出来才有。所以单独一个开关。
+            overlapProbe = System.Environment.GetEnvironmentVariable("DSH_OVERLAPPROBE") == "1";
+
+            // ★ 卡面文字探针（DSH_CARDFACEPROBE=1，见 㛢⓪~㛢⑨ 那一段）：
+            //   验两件都是"用户拿截图报上来的"事：
+            //     ① 三个数字（H/D/V）要各自落进数值牌上的菱形/圆形/方形里 —— 要**卡面特写**才看得清；
+            //     ② **所有**卡面文字在俯视和斜视下都得看得见 —— 用户那张"牌组选择界面下半屏
+            //        三张牌一个字都没有"是偏俯视机位拍的，所以这一条必须两种机位各拍一次。
+            //   也单独一条链：它会把镜头怼到卡面上（临时注册一个 cardface 机位），
+            //   混进别的链会让那些"按默认机位量"的日志换一个口径。
+            cardFaceProbe = System.Environment.GetEnvironmentVariable("DSH_CARDFACEPROBE") == "1";
 
             // ★ 每次域重载都要订阅，否则进 Play 之后就再也没人推进流程了
             EditorApplication.update += Tick;
@@ -240,6 +300,7 @@ namespace GameJam.EditorTools
                 // ⑲ 开场界面（书 / 木牌 / 蜡烛）
                 case 19:
                     if (!Shot("title.png")) return;
+                    if (overlapProbe) { overlapResume = 31; Stage = 288; stageTime = EditorApplication.timeSinceStartup; return; }
                     Stage = 31;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -257,6 +318,8 @@ namespace GameJam.EditorTools
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("level_select.png")) return;
                     // 选关探针要在这一屏多拍几张（关掉窗口看那排 3D 关卡卡还在不在）
+                    // 相交探针也走这一屏：旧流程的**关卡卡排**就在这里（用户要求"别只量 v2.1"）
+                    if (overlapProbe) { overlapResume = 33; Stage = 285; stageTime = EditorApplication.timeSinceStartup; return; }
                     Stage = levelProbe ? 260 : 33;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -272,6 +335,7 @@ namespace GameJam.EditorTools
                 // ⑳ 三选一牌组
                 case 20:
                     if (!Shot("choice_deck.png")) return;
+                    if (overlapProbe) { overlapResume = 21; Stage = 285; stageTime = EditorApplication.timeSinceStartup; return; }
                     Stage = 21;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -396,6 +460,8 @@ namespace GameJam.EditorTools
                 // ㊵ 开场界面
                 case 40:
                     if (!Shot("v21_title.png")) return;
+                    // 相交探针要在**开场这一屏**多拍两张（机位 + 相交清单），拍完回 51 接回主链
+                    if (overlapProbe) { overlapResume = 51; Stage = 288; stageTime = EditorApplication.timeSinceStartup; return; }
                     Stage = 51;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -428,6 +494,10 @@ namespace GameJam.EditorTools
                 case 54:
                     if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
                     if (!Shot("v21_choice_deck.png")) return;
+                    // 卡面文字探针：牌组卡排就在这一屏（用户那张"下半屏一个字都没有"的截图）
+                    if (cardFaceProbe) { Stage = 310; stageTime = EditorApplication.timeSinceStartup; return; }
+                    // 相交探针：牌组卡排就在这一屏（用户新截图说的"蜡烛插穿第一张牌组卡"）
+                    if (overlapProbe) { overlapResume = 96; Stage = 285; stageTime = EditorApplication.timeSinceStartup; return; }
                     Stage = 96;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -445,7 +515,8 @@ namespace GameJam.EditorTools
                     if (!Shot("v21_choice_blade.png")) return;
                     // 黑桌探针顺带把"点候选核心 → 桌面刀片卡立刻跟着换"验一遍
                     // （★ 必须在 BladePick 阶段做：SwapBladeWith 只在选刀片阶段受理）
-                    Stage = blackProbe ? 220 : 57;
+                    // 取景探针在这一屏做（手里 5 张 = 手牌最宽的一档），拍完回 57 接回主链
+                    Stage = framingProbe ? 280 : (blackProbe ? 220 : 57);
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -468,9 +539,80 @@ namespace GameJam.EditorTools
                 case 59:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("v21_turn1.png")) return;
-                    // 四条支线各走各的（都不设 = 原来的"只用点击"那条路，行为一个字没变）
-                    Stage = layoutProbe ? 240
-                          : (fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110)));
+                    // 取景探针要接着在**这一屏**量"提示块压不压手牌"（见 ㉚⓪ 那一段的说明：
+                    // 提示块只在正式回合画，开局准备那几屏根本没有它）；
+                    // 其余支线各走各的（都不设 = 原来的"只用点击"那条路，行为一个字没变）
+                    Stage = framingProbe ? 270
+                          : (cardFaceProbe ? 300
+                          : (overlapProbe ? 296
+                          : (layoutProbe ? 240
+                          : (fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110))))));
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㉚⓪~㉚④ 取景探针第二段：**操作提示压不压手牌**（DSH_FRAMEPROBE=1）
+                //
+                //  【为什么必须换到"第 1 回合"这一屏】提示块只在**正式回合**画
+                //    （TableHud.OnGUI：开场 / 选关 / 开局准备各走各的分支，IsPreparing 那一档
+                //      根本不画提示）—— 在"选刀片"那一屏量，提示块是空的，等于没量。
+                //    而用户报的"牌被压住"正是**正式回合**那一屏（提示块 + 手牌排在同一带）。
+                //
+                //  【量什么】ProbeFramingReport 把手牌包围盒和 HUD 这一帧**真画出来**的矩形
+                //    （提示块 / 检视窗口 / v2.1 面板）逐对求交，压住了就把重叠像素数写进日志 ——
+                //    "没被任何 UI 压住"是个数字，不是"我看着还行"。
+                //    三种比例各拍一张：1470×1167（编辑器那块面板的像素尺寸，宽高比 1.26）、
+                //    1600×900（打包版）、900×1600（竖屏，最窄的一档）。
+                // ══════════════════════════════════════════════════════
+
+                // ㉚⓪ 1600×900（上一条链切过来的就是这个分辨率）
+                case 270:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (Mathf.Abs(Object.FindObjectOfType<TableSetup>().cam.aspect - 1600f / 900f) > 0.02f)
+                        ForceCameraAspect(1600f / 900f);
+                    if (!Shot("fit_10_1600x900_ui.png")) return;
+                    ProbeFramingReport("㉚⓪ 打包版比例 1600×900｜第 1 回合（提示块 + 手牌）");
+                    Stage = 271;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉚① 切竖屏
+                case 271:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ClearCameraAspect();
+                    SetGameViewSize(900, 1600);
+                    Stage = 272;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉚② 竖屏
+                case 272:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.6) return;
+                    if (Mathf.Abs(Object.FindObjectOfType<TableSetup>().cam.aspect - 900f / 1600f) > 0.02f)
+                        ForceCameraAspect(900f / 1600f);
+                    if (!Shot("fit_11_portrait_ui.png")) return;
+                    ProbeFramingReport("㉚② 竖屏 900×1600｜第 1 回合（提示块 + 手牌）");
+                    Stage = 273;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉚③ 切回编辑器那块面板自己的像素尺寸（宽高比 1.26 —— 用户编辑器就是这个比例）
+                case 273:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ClearCameraAspect();
+                    SetGameViewSize(1470, 1167);
+                    Stage = 274;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉚④ 1.26（编辑器比例）→ 拍完接回主链（级联回归那一段）
+                case 274:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.6) return;
+                    if (Mathf.Abs(Object.FindObjectOfType<TableSetup>().cam.aspect - 1470f / 1167f) > 0.02f)
+                        ForceCameraAspect(1470f / 1167f);
+                    if (!Shot("fit_12_editor_ui.png")) return;
+                    ProbeFramingReport("㉚④ 编辑器比例 1470×1167｜第 1 回合（提示块 + 手牌）");
+                    Stage = layoutProbe ? 240 : 110;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -1136,6 +1278,505 @@ namespace GameJam.EditorTools
 
                 case 255:
                     if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
+                    Finish();
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㉘⓪~㉘④ 取景探针：手牌那一排在任何宽高比下都完整可见（DSH_FRAMEPROBE=1）
+                //
+                //  【它验的是用户那句话】「v2.1 里手牌那张法术卡被视口下边缘切掉了一半 ——
+                //    它挂在画面最底部、「附 魔 位 / 上 桌 位」两行字的下方，只露出上半截」。
+                //
+                //  【为什么必须换着分辨率拍】"装不装得下"是**按宽高比**算出来的
+                //    （水平半角 = 垂直半角 × aspect）：竖着的窗口和 1600×900 拟合出来的
+                //    不是同一台机位。只在自己这台机器的面板比例下拍一张，等于只验了一半 ——
+                //    而用户点名的两个比例恰好是"编辑器 Free Aspect（接近竖长）"和"打包版 1600×900"。
+                //
+                //  【为什么接在"选刀片"这一屏】那一刻手里正好 **5 张**（4 素材 + 1 法术），
+                //    是手牌最宽的一档：手牌越宽，纵向越容易沉出下边缘、横向越容易出两边。
+                //    拍完接回主链（㊼ 选核心 → ㊽ 确认 → ㊾ 第 1 回合），后面流程一个字不变。
+                //
+                //  【量什么】ProbeFramingReport 把每张手牌的四角用**真实投影**
+                //    （Camera.WorldToScreenPoint）投到屏幕上，报出屏幕包围盒和四条边余量 ——
+                //    "完整可见"是个数字（余量 > 0），不是"我看着还行"。
+                // ══════════════════════════════════════════════════════
+
+                // ㉘⓪ 编辑器当前比例（Game 视图 Free Aspect 那种）
+                case 280:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    // ★ 先确认"手里真有 5 张"：这一屏会被别人动过（见 ProbeEnsureBladePick）
+                    ProbeEnsureBladePick();
+                    if (!Shot("fit_00_free_5cards.png")) return;
+                    ProbeFramingReport("㉘⓪ 编辑器当前比例｜5 张手牌（选刀片那一屏）");
+                    Stage = 281;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉘① 切成竖屏分辨率：宽高比 < 1 时水平可视范围最窄，横向最容易出画
+                case 281:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetGameViewSize(900, 1600);
+                    Stage = 282;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉘② 竖屏：整排必须都在画面里（含最外侧那两张的角）
+                case 282:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.6) return;   // 等宽高比变化触发取景重算
+                    ProbeEnsureBladePick();          // 再确认一次状态（这一条链全程都可能被别的进程点到）
+                    // 分辨率切不动（内部 API 在这个版本上变了）→ 退到"只压相机比例"：
+                    // 取景是按 cam.aspect 算的，压了比例算出来的就是同一台机位，照样能验。
+                    if (Mathf.Abs(Object.FindObjectOfType<TableSetup>().cam.aspect - 900f / 1600f) > 0.02f)
+                        ForceCameraAspect(900f / 1600f);
+                    if (!Shot("fit_01_portrait_5cards.png")) return;
+                    ProbeFramingReport("㉘② 竖屏 900×1600｜5 张手牌");
+                    Stage = 283;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉘③ 切成打包版那个分辨率
+                case 283:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ClearCameraAspect();                 // 先把兜底压的比例还原，再试着真换分辨率
+                    SetGameViewSize(1600, 900);
+                    Stage = 284;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉘④ 1600×900（打包版的比例）：同上，整排完整可见
+                case 284:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.6) return;
+                    ProbeEnsureBladePick();
+                    if (Mathf.Abs(Object.FindObjectOfType<TableSetup>().cam.aspect - 1600f / 900f) > 0.02f)
+                        ForceCameraAspect(1600f / 900f);
+                    if (!Shot("fit_02_1600x900_5cards.png")) return;
+                    ProbeFramingReport("㉘④ 打包版比例 1600×900｜5 张手牌");
+                    Stage = 279;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉘⑤ 把兜底压上去的相机比例还原，接回主链 —— 后面那些回归图要在
+                //      **这台机器原本的比例**下拍（不然黑边会跟着进 layout_* 那几张）
+                //      ★ 用 279 而不是 285：285~299 那一段被相交探针（㉙⓪）占了，
+                //        两条链各写各的 stage 号，抢号会直接编不过（switch 重复标签）。
+                case 279:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.5) return;
+                    ClearCameraAspect();
+                    Stage = 57;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㉙⓪~㉙⑨ 开场取景 + 相交清单（DSH_OVERLAPPROBE=1）
+                //
+                //  【它验的是用户这两句话】
+                //    ① 「不是，你怎么换摄像头视角了？换回来」—— 配图是开场那一屏。
+                //       "机位有没有被换掉"不能靠看两张缩略图：**先把它量成数字**。
+                //       LogCameraPose 把相机此刻的位置 / 朝向 / fov / 宽高比打出来，
+                //       和 BuildCamera 里那组历史坐标（0, 1.05, −1.02）→（0, 0, 0.10）逐个数对。
+                //    ② 「把卡牌和破壁机和计分板穿模的 bug 改一改」——
+                //       ProbeOverlapReport 把桌上这些东西两两量一遍世界包围盒。
+                //
+                //  【为什么"穿模"要用三种口径量】
+                //    用户看到的"叠在一起"有两种，长得像、根因完全不同：
+                //      · 世界 AABB 相交 = 两个东西真的占同一块空间（深度上打架）；
+                //      · 世界 AABB **不相交**、屏幕 AABB 相交 = 它们在不同的深度上，
+                //        只是这个机位下前后投影叠在一起（量筒压在蜡烛底座旁就是这一种 ——
+                //        量筒在 z ≈ +0.10、蜡烛在 z ≈ +0.34，隔了 24 厘米）。
+                //    只报一种，另一种就会被当成"没事"。所以三种都报。
+                //
+                //  【为什么先拍开场这一屏】用户点名的就是它（书 / 木牌 / 蜡烛 / 破壁机同框），
+                //    而且这一屏**桌上没有卡**，相交清单最干净（正好把用户报的
+                //    "量筒 × 蜡烛"单独拎出来）。
+                // ══════════════════════════════════════════════════════
+
+                // ㉙⑩ 定下"改前 / 改后同一个窗口尺寸"这一条：切成 1600×900（打包版比例）。
+                //
+                //  【为什么非要换】用户那张"6 副牌组排成一行、蜡烛从第一张卡中间穿出来、
+                //    破壁机压在第 4/5 张上"的截图是**宽窗口**下拍的：宽高比一大，
+                //    那一排就从 2 行 3 张变成 1 行 6 张、铺满整屏 —— 窄窗口里根本复现不出来。
+                //    打包版也是 1600×900，所以这一档就是玩家真正看到的比例。
+                //    ★ 原来那个 SetGameViewSize 在这台机器上抛 NRE（见 SetGameViewSizeEx 的说明），
+                //      这里走自己那一份；切不动就照当前尺寸拍（两边同口径仍然成立）。
+                case 288:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    if (EnvInt("DSH_OVERLAP_SIZE16X9", 1) == 1) SetGameViewSizeEx(1600, 900);
+                    Debug.Log("[AutoPlay/相交] ㉙⑩ 这一轮所有截图都用同一个 Game 视图尺寸："
+                              + Screen.width + "×" + Screen.height
+                              + "（改前 / 改后同口径，才能逐对数字对比）");
+                    Stage = 290;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉙⓪ 开场界面：桌面视角（用户配图那一屏）
+                case 290:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.8) return;   // 等分辨率切换生效
+                    if (!Shot("ov_10_title_board.png")) return;
+                    LogCameraPose("㉙⓪ 开场·桌面视角");
+                    ProbeOverlapReport("㉙⓪ 开场·桌面视角");
+                    Stage = 291;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉙① 切俯视
+                case 291:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("top");
+                    Stage = 292;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉙② 开场·俯视：这一张看"谁和谁在桌面上真的占同一块地方"
+                case 292:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("ov_11_title_top.png")) return;
+                    LogCameraPose("㉙② 开场·俯视");
+                    ProbeOverlapReport("㉙② 开场·俯视");
+                    Stage = 293;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉙③ 回桌面视角；开了 DSH_OVERLAP_BASELINE=1 就**多拍一张历史机位的基线**
+                //
+                //  ★ 这里那组坐标不是新写的：它就是 BuildCamera 里从 755313c（3D 桌面第一版）
+                //    起一直没动过的那一行 `rig.Register("board", (0, 1.05, −1.02), (0, 0, 0.10))`。
+                //    临时重设它 = 把"以前那一屏"在同一帧、同一个窗口尺寸下再拍一遍，
+                //    于是"还原之后和以前一样"这句话有图可对（而不是拿两张隔了好几天的图比）。
+                //    纯探针动作：只在副本工程里跑，不改工程、不改游戏里的任何常量。
+                case 293:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("board");
+
+                    if (EnvInt("DSH_OVERLAP_BASELINE", 0) == 1)
+                    {
+                        TableSetup s = Object.FindObjectOfType<TableSetup>();
+                        if (s != null && s.rig != null)
+                        {
+                            s.rig.Register("board", new Vector3(0f, 1.05f, -1.02f), new Vector3(0f, 0f, 0.10f));
+                            s.rig.SnapTo("board");
+                            Debug.Log("[AutoPlay/相交] ㉙③ 已把「桌面视角」临时设回历史坐标 "
+                                      + "(0, 1.05, −1.02) → (0, 0, 0.10)（探针动作，不改工程）");
+                            Stage = 294;
+                            stageTime = EditorApplication.timeSinceStartup;
+                            return;
+                        }
+                    }
+
+                    Stage = overlapResume;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉙④ 历史机位下的开场界面（基线图）
+                case 294:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("ov_12_title_history.png")) return;
+                    LogCameraPose("㉙④ 开场·历史机位（基线）");
+                    Stage = overlapResume;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㉙⑤~㉙⑦ 牌组卡排 / 关卡卡排（用户追加的那一条：蜡烛插穿第一张牌组卡）
+                //
+                //  【它验的是用户新截图的这一幕】牌组选择界面（6 副）：
+                //    蜡烛从第一张卡（硫硝爆燃）中间穿出来、破壁机立绘压在第 4/5 张上。
+                //
+                //  【为什么这条链要能被两条路进来】牌组卡排（v2.1 与旧流程都有）和
+                //    关卡卡排（只有旧流程在桌上摆 3D 卡）用的是同一套布局（TableChoiceRig.LayoutCards），
+                //    所以这里只写一条链，来路各记各的"下一步"（overlapResume）——
+                //    v2.1 从 ⑤④ 牌组界面进来回 ⑨⑥，旧流程从 ㉜ 关卡界面进来回 ㉝。
+                // ══════════════════════════════════════════════════════
+
+                // ㉙⑤ 牌组/关卡卡排：桌面视角
+                case 285:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("ov_30_bigrow_board.png")) return;
+                    LogCameraPose("㉙⑤ 卡排·桌面视角");
+                    ProbeOverlapReport("㉙⑤ 卡排·桌面视角");
+                    Stage = 286;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉙⑥ 切俯视（俯视最能看清"卡片和物件在桌面上是不是占同一块地方"）
+                case 286:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("top");
+                    Stage = 287;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 287:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("ov_31_bigrow_top.png")) return;
+                    LogCameraPose("㉙⑦ 卡排·俯视");
+                    ProbeOverlapReport("㉙⑦ 卡排·俯视");
+                    GoToView("board");
+                    Stage = overlapResume;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  㛢⓪~㛢⑨ 卡面文字探针（DSH_CARDFACEPROBE=1）
+                //
+                //  【它验的是用户拿截图报上来的两件事】
+                //    ① 「牌组选择界面**下面一排三张牌完全没有文字**」——
+                //       用户那屏是**偏俯视**机位，而同一屏上面一排的标题却看得见：
+                //       说明"文字和卡面谁盖谁"这件事当时是**交给距离去排**的
+                //       （Transparent 队列里按包围盒中心离相机多远排），机位一换就翻脸。
+                //       修法是把次序写死（CardFactory.CardTextSortingOrder = 1，
+                //       卡面是 0），所以这里必须**俯视 + 斜视各拍一次**才叫验过。
+                //    ② 三个属性从"三行字（H 盐性 12 …）"改成"三个数字分别进
+                //       数值牌上的菱形/圆形/方形"—— 这一条不看特写根本量不了：
+                //       数字有没有居中、有没有压到形状边框、两位数挤不挤得下，
+                //       在整桌那一屏里只有几个像素。
+                //
+                //  【为什么每一步都先打一份"文字次序"清单】"文字排在卡面之后"是个**数字**
+                //    （每个文字渲染器的 sortingOrder 对卡面的 sortingOrder），
+                //    截图只能证明"这一屏这一次没出事"，清单能证明"每一张卡的每一行都排在后面"。
+                //    两者都要有 —— 这也正是用户上一轮"只给名字设了次序"能漏过去的原因。
+                //
+                //  【为什么单开一个临时机位】卡面特写要把镜头怼到一张牌上（离地约 0.4 米），
+                //    而游戏里的机位都是"装得下整张桌子 / 整排手牌"的。临时 Register 一个
+                //    `cardface` 机位属于**探针动作**（只在副本工程里跑，不改工程里任何常量），
+                //    拍完切回 board，和相交探针那套做法一致。
+                // ══════════════════════════════════════════════════════
+
+                // 㛢⓪ 刀片卡特写（斜视 62°）：三属性里数字最多的那一张
+                //   （DSH_DECK_INDEX=1 → 刀片是秘银锭 H=16 D=2 V=0：两位数 + 一位数 + 零值，
+                //    三种情况在同一张卡上，正好一次拍全）
+                case 300:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!ShotCardCloseup("cf_10_blade_oblique.png", BladeCard(), 62f)) return;
+                    Debug.Log("[AutoPlay/卡面] 㛢⓪ 刀片卡特写（62°）：" + CardStatsText(BladeCard()));
+                    Stage = 301;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 㛢① 同一张刀片卡的更陡机位（78°）—— 俯视下三个形状最容易看清
+                case 301:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!ShotCardCloseup("cf_11_blade_top.png", BladeCard(), 78f)) return;
+                    Stage = 302;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 㛢②~㛢④ 手牌里每一张素材各来一张俯视特写（一位数的那几张）
+                case 302:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!ShotCardCloseup("cf_20_hand0_top.png", HandMaterial(0), 78f)) return;
+                    Debug.Log("[AutoPlay/卡面] 㛢② 手牌素材 #0：" + CardStatsText(HandMaterial(0)));
+                    Stage = 303;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 303:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!ShotCardCloseup("cf_21_hand1_top.png", HandMaterial(1), 78f)) return;
+                    Debug.Log("[AutoPlay/卡面] 㛢③ 手牌素材 #1：" + CardStatsText(HandMaterial(1)));
+                    Stage = 304;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 304:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!ShotCardCloseup("cf_22_hand2_top.png", HandMaterial(2), 78f)) return;
+                    Debug.Log("[AutoPlay/卡面] 㛢④ 手牌素材 #2：" + CardStatsText(HandMaterial(2)));
+                    Stage = 305;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 㛢⑤ 造三张**对照卡**：两位数 / 一位数 / 零值各一张。
+                //   【为什么非要造】真实卡表里 v2.1 素材的 H/D/V 全是 1 位数、没有 0 ——
+                //   而用户点名要看"两位数放不放得下""零值会不会偏小偏空"。
+                //   造法走的是 CardFactory.Create 那条真路（只临时改运行期的 attrs，立刻改回）。
+                case 305:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    BuildDemoStatCards();
+                    Stage = 306;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 㛢⑥~㛢⑧ 三张对照卡各一张俯视特写
+                case 306:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!ShotCardCloseup("cf_40_demo_12_3_1.png", DemoCard(0), 78f)) return;
+                    Stage = 307;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 307:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!ShotCardCloseup("cf_41_demo_3_3_3.png", DemoCard(1), 78f)) return;
+                    Stage = 308;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 308:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!ShotCardCloseup("cf_42_demo_8_0_0.png", DemoCard(2), 78f)) return;
+                    Stage = 309;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 㛢⑨ 量三个数字（字号 / 墨迹盒 / 余量 / 居中误差）→ 销毁对照卡 → 接回主链
+                case 309:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeStatDigitReport("㛢⑨ 三个数字的实测（字号 / 墨迹盒 / 余量 / 居中误差）");
+                    DestroyDemoStatCards();
+                    // 回归：桌面素材级联的自检 + "状态与画面一致 / 残留 0 张"
+                    //   （对照卡是探针自己造的、挂在独立根节点下，这里刚销毁 —— 它不该出现在残留里）
+                    ProbeLogSync("㛢⑨ 卡面特写之后（回归：状态与画面一致 / 残留 0 张）");
+                    GoToView("board");
+                    Stage = 110;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 㛢⑩ 牌组选择界面·桌面视角（斜视）：每一行文字都得看得见
+                case 310:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("board");
+                    Stage = 311;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 311:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("cf_30_decks_board.png")) return;
+                    ProbeCardTextReport("㛢⑩ 牌组界面·桌面视角");
+                    ProbeLogSync("㛢⑩ 牌组界面·桌面视角（回归：状态与画面一致 / 残留 0 张）");
+                    Stage = 312;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 㛢⑪ 牌组选择界面·俯视（★ 用户那张截图就是这一档）
+                case 312:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("top");
+                    Stage = 313;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 313:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("cf_31_decks_top.png")) return;
+                    ProbeCardTextReport("㛢⑪ 牌组界面·俯视");
+                    // 㛢⑫ 再拉近一点拍两张**牌组卡**的特写：整屏看不出一行字有没有被盖住，
+                    //   特写下"这一行在不在"是一眼的事（牌组卡的标题/三行说明都在近端）
+                    Stage = 314;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 314:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!ShotBigCardCloseup("cf_32_deckcard0_top.png", 0)) return;
+                    Stage = 315;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 315:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!ShotBigCardCloseup("cf_33_deckcard3_top.png", 3)) return;
+                    Stage = 316;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 㛢⑬~㛢⑯ 把 Game 视图切成**窄窗口**再来一遍。
+                //
+                //  【为什么非要切】用户那张"下面一排三张牌完全没有文字"的截图里，6 副牌组是
+                //    **3 + 3 两排**的；而 1470×1167 这种偏宽的窗口下 TableChoiceRig 会把它们排成
+                //    **一行 6 张**（日志 [V21][牌组排] 会写"1 行"）—— 那样"下面一排"根本不存在，
+                //    等于没验到用户报的那一幕。竖屏 900×1600 才会折成两排。
+                //    （这和取景探针切成竖屏是同一个理由：宽高比一变，布局就换一种排法。）
+                case 316:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SessionState.SetInt(KeyGvW, Screen.width);
+                    SessionState.SetInt(KeyGvH, Screen.height);
+                    SetGameViewSizeEx(900, 1600);
+                    Debug.Log("[AutoPlay/卡面] 㛢⑬ Game 视图切成 900×1600（原 "
+                              + SessionState.GetInt(KeyGvW, 0) + "×" + SessionState.GetInt(KeyGvH, 0)
+                              + "）—— 牌组卡这一屏在窄窗口下才会排成两排");
+                    Stage = 317;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 㛢⑭ 窄窗口·桌面视角：**下面那一排**的文字必须在
+                case 317:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.6) return;
+                    if (!Shot("cf_34_decks_narrow_board.png")) return;
+                    ProbeCardTextReport("㛢⑭ 牌组界面·窄窗口 900×1600·桌面视角");
+                    Stage = 318;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 㛢⑮ 窄窗口·俯视（★ 用户那张就是俯视）
+                case 318:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("top");
+                    Stage = 319;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 319:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.6) return;
+                    if (!Shot("cf_35_decks_narrow_top.png")) return;
+                    ProbeCardTextReport("㛢⑮ 牌组界面·窄窗口·俯视");
+                    ProbeLogSync("㛢⑮ 牌组界面·窄窗口（回归：状态与画面一致 / 残留 0 张）");
+                    Stage = 320;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 㛢⑯ 把 Game 视图和机位都还原，接回主链（㊴ 选刀片之前）
+                case 320:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetGameViewSizeEx(SessionState.GetInt(KeyGvW, 1470), SessionState.GetInt(KeyGvH, 1167));
+                    GoToView("board");
+                    Stage = 96;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉙⑤⑥ 进关之后往桌上出两张素材（走玩家那条路：摆进上桌位 + 确认）。
+                //   为什么要两张：一张看不出"级联"，而量筒/蜡烛/破壁机与**整列级联**的关系
+                //   正是用户报的那一类（卡牌 × 破壁机 × 计分板）。
+                case 296:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeStageMaterialV21();
+                    Stage = 297;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 297:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeStageMaterialV21();
+                    Stage = 298;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉙⑦ 桌面视角：级联 + 刀片卡 + 量筒 + 蜡烛 + 破壁机同框
+                case 298:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    if (!Shot("ov_20_inlevel_board.png")) return;
+                    LogCameraPose("㉙⑦ 进关后·桌面视角");
+                    ProbeOverlapReport("㉙⑦ 进关后·桌面视角");
+                    ProbeLogSync("㉙⑦ 进关后（2 张素材在桌上）");
+                    Stage = 299;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉙⑧ 切俯视
+                case 299:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("top");
+                    Stage = 289;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉙⑨ 进关后·俯视：这一张看"整列级联到底有没有顶到破壁机"
+                case 289:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("ov_21_inlevel_top.png")) return;
+                    LogCameraPose("㉙⑨ 进关后·俯视");
+                    ProbeOverlapReport("㉙⑨ 进关后·俯视");
+                    ProbeLogSync("㉙⑨ 进关后（俯视）");
                     Finish();
                     return;
 
@@ -2229,10 +2870,657 @@ namespace GameJam.EditorTools
             Debug.Log("[AutoPlay/V21] 暂停菜单 " + (paused ? "已打开" : "已关闭"));
         }
 
-        /// <summary>切机位（走游戏自己的公开入口 CameraRig.GoTo）。</summary>
-        private static void GoToView(string name)
+        /// <summary>
+        /// 把"手牌那一排现在占屏幕哪一块"量成数字（主链/取景探针共用）。
+        ///
+        /// 【为什么要拿 WorldToScreenPoint 再量一遍】游戏里那条 [V21][取景] 自检证明的是
+        ///   "**算出来的机位**装得下"；这里量的是**这一帧真正画出来的东西** ——
+        ///   相机此刻的实际位置、当前宽高比、每张牌的真实坐标。
+        ///   两条都对上，"手牌完整可见"才算数（少任何一条都可能是"算对了但没生效"）。
+        /// </summary>
+        private static void ProbeFramingReport(string what)
         {
             TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null || setup.cam == null)
+            {
+                Debug.LogWarning("[AutoPlay/取景] 找不到 TableSetup / Camera，这一屏量不了。");
+                return;
+            }
+
+            Camera cam = setup.cam;
+            float x0 = float.MaxValue, y0 = float.MaxValue, x1 = float.MinValue, y1 = float.MinValue;
+            int cards = 0;
+            bool behind = false;
+
+            if (setup.hand != null)
+            {
+                for (int i = 0; i < setup.hand.Count; i++)
+                {
+                    PlayCard c = setup.hand[i];
+                    if (c == null || c.slotIndex >= 0) continue;      // 已经放进槽里的不算"手牌那一排"
+                    cards++;
+
+                    // 四个角按卡的偏航算（手牌是扇形张开的，最外侧那一点就在角上）
+                    float yaw = c.transform.eulerAngles.y * Mathf.Deg2Rad;
+                    float cos = Mathf.Cos(yaw), sin = Mathf.Sin(yaw);
+                    for (int sx = -1; sx <= 1; sx += 2)
+                    {
+                        for (int sz = -1; sz <= 1; sz += 2)
+                        {
+                            float lx = sx * CardFactory.CardWidth * 0.5f;
+                            float lz = sz * CardFactory.CardDepth * 0.5f;
+                            Vector3 corner = new Vector3(lx * cos + lz * sin, 0f, -lx * sin + lz * cos);
+
+                            Vector3 sp = cam.WorldToScreenPoint(c.transform.position + corner);
+                            if (sp.z <= 0f) { behind = true; continue; }   // 在相机背后，投影没有意义
+
+                            if (sp.x < x0) x0 = sp.x;
+                            if (sp.x > x1) x1 = sp.x;
+                            if (sp.y < y0) y0 = sp.y;
+                            if (sp.y > y1) y1 = sp.y;
+                        }
+                    }
+                }
+            }
+
+            if (cards == 0)
+            {
+                Debug.Log("[AutoPlay/取景] " + what + "：手牌是空的，这一屏没有手牌可量。");
+                return;
+            }
+
+            // WorldToScreenPoint 的原点在左下角：所以 y0 就是"离画面下边缘多少像素"。
+            // ★ 边界取**相机的视口**（cam.pixelRect）而不是整块屏幕：取景探针的兜底办法是
+            //   把相机压成目标比例（见 ForceCameraAspect），那时画面四周是黑边、
+            //   真正的画面只是视口那一块 —— 拿屏幕边界量会量出一个假的"完整可见"。
+            float left = x0 - cam.pixelRect.xMin;
+            float right = cam.pixelRect.xMax - x1;
+            float bottom = y0 - cam.pixelRect.yMin;
+            float top = cam.pixelRect.yMax - y1;
+            float worst = Mathf.Min(Mathf.Min(left, right), Mathf.Min(bottom, top));
+            bool ok = !behind && worst > 0f;
+
+            // ★★「手牌有没有被 UI 压住」**不能靠眼睛看**：把 HUD 这一帧真画出来的矩形
+            //    （提示块 + v2.1 那几块面板）和手牌包围盒逐对求交，写成像素数。
+            //    用户那次报的正是"牌在画面里、但提示压在上面"—— 只量"在不在画面里"量不出来。
+            string uiText = "UI 压住：HUD 没找到（量不了）";
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            if (hud != null)
+            {
+                // 手牌的屏幕包围盒换成 IMGUI 那套坐标（左上原点）
+                Rect handBox = Rect.MinMaxRect(x0, Screen.height - y1, x1, Screen.height - y0);
+
+                float worstArea = 0f;
+                string worstName = "";
+
+                UiOverlap(handBox, hud.HintBlockScreenRect, "提示块", ref worstArea, ref worstName);
+                UiOverlap(handBox, hud.InspectScreenRect, "检视窗口", ref worstArea, ref worstName);
+
+                List<Rect> panels = hud.PanelScreenRects;
+                if (panels != null)
+                    for (int i = 0; i < panels.Count; i++)
+                        UiOverlap(handBox, panels[i], "v2.1 面板 " + i, ref worstArea, ref worstName);
+
+                uiText = worstArea > 0f
+                    ? ("★ UI 压住手牌：" + worstName)
+                    : ("UI 压住：无（提示块 / 检视窗口 / " + (panels != null ? panels.Count : 0) + " 块面板都不相交）");
+            }
+
+            Debug.Log("[AutoPlay/取景] " + what
+                      + "：屏幕 " + Screen.width + "×" + Screen.height
+                      + "（宽高比 " + cam.aspect.ToString("0.00") + "）"
+                      + "｜视口 " + cam.pixelRect.width.ToString("0") + "×" + cam.pixelRect.height.ToString("0")
+                      + "｜视角 " + (setup.rig != null ? setup.rig.CurrentView : "?")
+                      + "｜机位 (" + cam.transform.position.x.ToString("0.00") + ", "
+                      + cam.transform.position.y.ToString("0.00") + ", "
+                      + cam.transform.position.z.ToString("0.00") + ")"
+                      + "｜手牌 " + cards + " 张的屏幕包围盒 x ∈ [" + x0.ToString("0") + ", " + x1.ToString("0")
+                      + "] y ∈ [" + y0.ToString("0") + ", " + y1.ToString("0") + "]"
+                      + "（" + (x1 - x0).ToString("0") + " × " + (y1 - y0).ToString("0") + " px）"
+                      + "｜四边余量 左 " + left.ToString("0") + " 右 " + right.ToString("0")
+                      + " 下 " + bottom.ToString("0") + " 上 " + top.ToString("0") + " px"
+                      + "｜" + uiText
+                      + (ok ? " —— ✓ 完整可见" : " —— ★ 出画了"));
+        }
+
+        /// <summary>
+        /// 两个屏幕矩形（左上原点）相交了多少 —— 把最严重那一对的名字与尺寸记进 ref。
+        /// 取景探针用它把"UI 压住手牌"变成数字（提示块压住牌那次，就是这么量出来的）。
+        /// </summary>
+        private static void UiOverlap(Rect hand, Rect ui, string name, ref float worstArea, ref string worstName)
+        {
+            if (ui.width <= 0f || ui.height <= 0f) return;
+
+            float w = Mathf.Min(hand.xMax, ui.xMax) - Mathf.Max(hand.xMin, ui.xMin);
+            float h = Mathf.Min(hand.yMax, ui.yMax) - Mathf.Max(hand.yMin, ui.yMin);
+            if (w <= 0f || h <= 0f) return;
+
+            float area = w * h;
+            if (area <= worstArea) return;
+
+            worstArea = area;
+            worstName = name + "（重叠 " + w.ToString("0") + "×" + h.ToString("0") + " px）";
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  相交清单：桌上这些东西**两两**量世界包围盒（DSH_OVERLAPPROBE=1）
+        //
+        //  【为什么要两两量，而不是"看一眼截图"】
+        //   用户说的"穿模"有两种，长得像、根因完全不同：
+        //     ① 世界包围盒真的相交 —— 两个东西占同一块空间（深度上打架、会闪面）；
+        //     ② 世界包围盒**不相交**、屏幕包围盒相交 —— 它们在不同的深度上，
+        //        只是这个机位下前后投影叠在一起。
+        //   只报一种，另一种就会被当成"没事"。所以这里三种口径各量一次：
+        //   世界 AABB（三维）/ 桌面 XZ（谁占了同一块桌面）/ 屏幕 AABB（这一帧画面上叠没叠）。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>一件要被两两求交的东西：名字 + 世界包围盒 + 屏幕包围盒（左上原点）。</summary>
+        private class BoundItem
+        {
+            public string name;
+            public Bounds box;
+            public bool   onScreen;
+            public float  px0, py0, px1, py1;
+
+            /// <summary>
+            /// 同一个"整体"的多个口径（比如破壁机整机和它那块立绘）—— **组内不互相判交**：
+            /// 立绘本来就是机身的一部分，父子之间"相交"是废话，混进清单里会让人以为还有一处穿模。
+            /// </summary>
+            public string group;
+        }
+
+        /// <summary>
+        /// 相机此刻的**真实**机位 —— "有没有被换掉"的原始数字。
+        ///
+        /// 【为什么不能只看 rig.CurrentView】视角名一样不代表机位一样：桌面视角这个名字下，
+        ///   坐标既可能是写死的常量、也可能是每次按内容拟合出来的。要对历史坐标，
+        ///   只能把相机的位置 / 朝向 / fov 打出来逐个数比。
+        /// </summary>
+        private static void LogCameraPose(string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null || setup.cam == null)
+            {
+                Debug.LogWarning("[AutoPlay/机位] " + what + "：找不到 TableSetup / 相机，机位量不了。");
+                return;
+            }
+
+            Camera cam = setup.cam;
+            Vector3 p = cam.transform.position;
+            Vector3 e = cam.transform.eulerAngles;
+
+            // 视轴打在桌面（y = 0）上的那一点 —— 就是这批机位的"注视点"口径
+            Vector3 look = p + cam.transform.forward * (p.y / Mathf.Max(0.0001f, -cam.transform.forward.y));
+
+            Debug.Log("[AutoPlay/机位] " + what
+                      + "：视角 " + (setup.rig != null ? setup.rig.CurrentView : "?")
+                      + "｜机位 (" + p.x.ToString("0.000") + ", " + p.y.ToString("0.000") + ", " + p.z.ToString("0.000") + ")"
+                      + "｜朝向 (" + e.x.ToString("0.0") + ", " + e.y.ToString("0.0") + ", " + e.z.ToString("0.0") + ")"
+                      + "｜fov " + cam.fieldOfView.ToString("0.##")
+                      + "｜视轴落桌点 (" + look.x.ToString("0.000") + ", " + look.z.ToString("0.000") + ")"
+                      + "｜宽高比 " + cam.aspect.ToString("0.000")
+                      + "｜屏幕 " + Screen.width + "×" + Screen.height);
+        }
+
+        /// <summary>把一个物体（含子物体）**活着的**渲染器合成一个世界包围盒，加进清单。</summary>
+        private static void AddPropBounds(List<BoundItem> list, string name, GameObject root, Camera cam,
+                                          string group = null)
+        {
+            if (root == null) return;
+
+            Renderer[] rs = root.GetComponentsInChildren<Renderer>();
+            bool any = false;
+            Bounds b = new Bounds();
+            for (int i = 0; i < rs.Length; i++)
+            {
+                Renderer r = rs[i];
+                if (r == null || !r.enabled) continue;                 // 关掉的（比如被立绘顶掉的机身）不算
+                if (!r.gameObject.activeInHierarchy) continue;
+                if (!any) { b = r.bounds; any = true; }
+                else b.Encapsulate(r.bounds);
+            }
+            if (!any) return;
+
+            AddBox(list, name, b, cam, group);
+        }
+
+        /// <summary>把一个世界包围盒加进清单，顺带按当前相机算出它的屏幕包围盒。</summary>
+        private static void AddBox(List<BoundItem> list, string name, Bounds b, Camera cam, string group = null)
+        {
+            BoundItem it = new BoundItem();
+            it.name  = name;
+            it.box   = b;
+            it.group = group;
+
+            if (cam != null)
+            {
+                float x0 = float.MaxValue, y0 = float.MaxValue, x1 = float.MinValue, y1 = float.MinValue;
+                bool ok = true;
+
+                for (int i = 0; i < 8; i++)
+                {
+                    Vector3 c = new Vector3((i & 1) == 0 ? b.min.x : b.max.x,
+                                            (i & 2) == 0 ? b.min.y : b.max.y,
+                                            (i & 4) == 0 ? b.min.z : b.max.z);
+                    Vector3 s = cam.WorldToScreenPoint(c);
+                    if (s.z <= 0f) { ok = false; break; }              // 角在相机背后，投影没意义
+                    float sy = Screen.height - s.y;                    // 左下原点 → 左上原点
+                    if (s.x  < x0) x0 = s.x;
+                    if (s.x  > x1) x1 = s.x;
+                    if (sy   < y0) y0 = sy;
+                    if (sy   > y1) y1 = sy;
+                }
+
+                it.onScreen = ok;
+                if (ok) { it.px0 = x0; it.py0 = y0; it.px1 = x1; it.py1 = y1; }
+            }
+
+            list.Add(it);
+        }
+
+        /// <summary>一根轴上的重叠量：正数 = 重叠、负数 = 隔着多少（报告里两种都要看得见）。</summary>
+        private static float AxisGap(float a0, float a1, float b0, float b1)
+        {
+            return Mathf.Min(a1, b1) - Mathf.Max(a0, b0);
+        }
+
+        private static string AxisText(string axis, float gap)
+        {
+            return axis + (gap > 0f ? (" 重叠 " + gap.ToString("0.000")) : (" 隔 " + (-gap).ToString("0.000")));
+        }
+
+        /// <summary>
+        /// 桌上这些东西的世界包围盒清单 —— 用户点名的那几样一个不少。
+        ///
+        /// 【为什么按根节点名找蜡烛和量筒】它们是 TableTitleRig / ScoreCylinderRig 各自建的，
+        ///   TableSetup 上没有引用（量筒只有 juicer.scoreBoard 那一条路）。按名字找是探针的做法，
+        ///   游戏里那两处各自有常量（这次改动把它们收成常量了）。
+        ///   ★ 量筒的包围盒**含左边那排刻度数字** —— 用户截图里压在蜡烛旁边的正是那几个数，
+        ///     所以数字必须是这个盒子的一部分，漏掉它就等于把用户报的那一幕量没了。
+        /// </summary>
+        private static List<BoundItem> CollectBoundItems(TableSetup setup, Camera cam)
+        {
+            List<BoundItem> list = new List<BoundItem>();
+
+            // ① 蜡烛 / 量筒
+            AddPropBounds(list, "蜡烛（TitleCandle）", GameObject.Find("TitleCandle"), cam);
+            AddPropBounds(list, "量筒（ScoreCylinder，含刻度数字）", GameObject.Find("ScoreCylinder"), cam);
+
+            // ② 破壁机：整机 + 立绘单独一份（立绘是玩家真正看到的那个剪影）
+            if (setup.juicer != null)
+            {
+                AddPropBounds(list, "破壁机（立绘+机身，活着的）", setup.juicer.gameObject, cam, "juicer");
+
+                Transform art = setup.juicer.transform.Find("BlenderArt");
+                if (art != null) AddPropBounds(list, "破壁机立绘（BlenderArt）", art.gameObject, cam, "juicer");
+            }
+
+            // ③ 两个槽位框（框平时是隐形的，按 board 的矩形算）+ 两块槽名牌
+            if (setup.board != null)
+            {
+                for (int i = 0; i < setup.board.SlotCount; i++)
+                {
+                    Vector3 sp = setup.board.SlotPosition(i);
+                    AddBox(list, "槽位框 " + i,
+                           new Bounds(new Vector3(sp.x, 0.0022f, sp.z),
+                                      new Vector3(setup.board.slotSizeX, 0.0001f, setup.board.slotSizeZ)), cam);
+                }
+            }
+            AddPropBounds(list, "槽名牌 0", GameObject.Find("SlotLabel0"), cam);
+            AddPropBounds(list, "槽名牌 1", GameObject.Find("SlotLabel1"), cam);
+
+            // ④ 卡：手牌那一排 / 刀片卡（含「刀 片」标记）/ 桌面素材级联 —— 都是场景里真实那几张
+            TableTurnLoop loop = Loop();
+            PlayCard[] all = Object.FindObjectsOfType<PlayCard>();
+
+            bool  anyHand = false, anyTable = false;
+            Bounds handBox = new Bounds(), tableBox = new Bounds();
+            int   handN = 0, tableN = 0;
+
+            for (int i = 0; i < all.Length; i++)
+            {
+                PlayCard c = all[i];
+                if (c == null || c.markedForDestroy) continue;
+
+                if (setup.hand != null && setup.hand.Contains(c))
+                {
+                    if (!anyHand) { handBox = CardBounds(c); anyHand = true; }
+                    else handBox.Encapsulate(CardBounds(c));
+                    handN++;
+                    continue;
+                }
+
+                if (loop != null && loop.bladeCard == c)
+                {
+                    AddPropBounds(list, "刀片卡（" + c.DisplayName + "）", c.gameObject, cam, "blade");
+
+                    // 「刀 片」那两个字是**贴在卡前方桌面上**的（不在卡身里），单独量一份
+                    TextMesh[] marks = c.GetComponentsInChildren<TextMesh>();
+                    bool anyMark = false;
+                    Bounds markBox = new Bounds();
+                    for (int k = 0; k < marks.Length; k++)
+                    {
+                        if (marks[k] == null || marks[k].text == null) continue;
+                        if (marks[k].text.IndexOf('刀') < 0) continue;
+
+                        Renderer mr = marks[k].GetComponent<Renderer>();
+                        if (mr == null || !mr.enabled) continue;
+
+                        if (!anyMark) { markBox = mr.bounds; anyMark = true; }
+                        else markBox.Encapsulate(mr.bounds);
+                    }
+                    if (anyMark) AddBox(list, "刀片标记「刀 片」", markBox, cam, "blade");
+                    continue;
+                }
+
+                if (!anyTable) { tableBox = CardBounds(c); anyTable = true; }
+                else tableBox.Encapsulate(CardBounds(c));
+                tableN++;
+            }
+
+            if (anyHand)  AddBox(list, "手牌那一排（" + handN + " 张）", handBox, cam);
+            if (anyTable) AddBox(list, "桌面素材级联（" + tableN + " 张）", tableBox, cam);
+
+            // ⑤ 牌组卡排 / 关卡卡排 —— TableChoiceRig.BuildOne 建的那些大卡，名字是 "BigCard_" + id。
+            //
+            //  【为什么要**逐张**列】用户新截图的症状就是逐张的："蜡烛从**第一张**（硫硝爆燃）中间穿出来、
+            //    破壁机压在第 **4/5** 张上" —— 合成一个"整排"的盒子只能说"整排和机器有关",
+            //    说不出是哪几张；而修法（换行 / 缩排）恰恰是按张算的。
+            if (loop != null && loop.choiceRig != null && loop.choiceRig.root != null)
+            {
+                Transform[] kids = loop.choiceRig.root.GetComponentsInChildren<Transform>(true);
+                int bigN = 0;
+
+                for (int i = 0; i < kids.Length; i++)
+                {
+                    Transform t = kids[i];
+                    if (t == null) continue;
+                    if (!t.name.StartsWith("BigCard_")) continue;
+
+                    bigN++;
+                    AddPropBounds(list, "大卡 " + t.name.Substring("BigCard_".Length), t.gameObject, cam);
+                }
+
+                Debug.Log("[AutoPlay/相交]   　（这一屏有 " + bigN + " 张大卡：" + loop.choiceRig.LastLayoutRows
+                          + " 行、缩放 " + loop.choiceRig.LastLayoutScale.ToString("0.00") + "）");
+            }
+
+            return list;
+        }
+
+        /// <summary>一张 3D 卡的占地（含卡身上的文字）—— 按它所有活着的渲染器合成。</summary>
+        private static Bounds CardBounds(PlayCard c)
+        {
+            Renderer[] rs = c.GetComponentsInChildren<Renderer>();
+            bool any = false;
+            Bounds b = new Bounds();
+            for (int i = 0; i < rs.Length; i++)
+            {
+                if (rs[i] == null || !rs[i].enabled) continue;
+                if (!rs[i].gameObject.activeInHierarchy) continue;
+                if (!any) { b = rs[i].bounds; any = true; }
+                else b.Encapsulate(rs[i].bounds);
+            }
+            return any ? b : new Bounds(c.transform.position, Vector3.one * 0.01f);
+        }
+
+        /// <summary>
+        /// 相交清单报告：逐件打世界 / 屏幕包围盒，再**两两**判一次，把有关系的成对列出来。
+        ///
+        /// 判据（三种口径全报，缺一种就会把另一类"穿模"漏掉）：
+        ///   · 世界 AABB：三根轴都重叠才算"占同一块空间"；
+        ///   · 桌面 XZ：卡是平躺的，这一口径专门看"谁压在谁的地盘上"；
+        ///   · 屏幕 AABB：这一帧画面上叠没叠（"看起来穿模"就是它）。
+        /// </summary>
+        private static void ProbeOverlapReport(string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null) { Debug.LogWarning("[AutoPlay/相交] 找不到 TableSetup，这一屏量不了。"); return; }
+
+            List<BoundItem> list = CollectBoundItems(setup, setup.cam);
+
+            Debug.Log("[AutoPlay/相交] " + what + "｜共 " + list.Count + " 件东西（屏幕 "
+                      + Screen.width + "×" + Screen.height + "，视角 "
+                      + (setup.rig != null ? setup.rig.CurrentView : "?") + "）：");
+
+            for (int i = 0; i < list.Count; i++)
+            {
+                BoundItem it = list[i];
+                Bounds b = it.box;
+                Debug.Log("[AutoPlay/相交]   　" + it.name
+                          + "：世界 x " + b.min.x.ToString("0.000") + " ~ " + b.max.x.ToString("0.000")
+                          + "，y " + b.min.y.ToString("0.000") + " ~ " + b.max.y.ToString("0.000")
+                          + "，z " + b.min.z.ToString("0.000") + " ~ " + b.max.z.ToString("0.000")
+                          + (it.onScreen
+                             ? ("｜屏幕 x " + it.px0.ToString("0") + " ~ " + it.px1.ToString("0")
+                                + "，y " + it.py0.ToString("0") + " ~ " + it.py1.ToString("0"))
+                             : "｜（有角落在相机背后，屏幕盒没意义）"));
+            }
+
+            int pairs = 0, hits = 0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                for (int j = i + 1; j < list.Count; j++)
+                {
+                    pairs++;
+                    BoundItem a = list[i], b = list[j];
+
+                    // 同一个"整体"的两个口径（破壁机整机 × 它那块立绘、刀片卡 × 卡上那两个字）
+                    // 不互相判交：父子之间有交集是必然的，混进清单会让人以为还有一处穿模。
+                    if (!string.IsNullOrEmpty(a.group) && a.group == b.group) continue;
+
+                    float gx = AxisGap(a.box.min.x, a.box.max.x, b.box.min.x, b.box.max.x);
+                    float gy = AxisGap(a.box.min.y, a.box.max.y, b.box.min.y, b.box.max.y);
+                    float gz = AxisGap(a.box.min.z, a.box.max.z, b.box.min.z, b.box.max.z);
+
+                    bool world = gx > 0f && gy > 0f && gz > 0f;
+                    bool xz    = gx > 0f && gz > 0f;
+
+                    float sx = 0f, sy = 0f;
+                    bool screen = a.onScreen && b.onScreen;
+                    if (screen)
+                    {
+                        sx = AxisGap(a.px0, a.px1, b.px0, b.px1);
+                        sy = AxisGap(a.py0, a.py1, b.py0, b.py1);
+                        screen = sx > 0f && sy > 0f;
+                    }
+
+                    if (!world && !xz && !screen) continue;
+
+                    hits++;
+                    Debug.Log("[AutoPlay/相交]   ★ " + a.name + " × " + b.name + "："
+                              + (world ? "世界 AABB 相交" : "世界 AABB 不相交")
+                              + "（x " + AxisText("x", gx) + "、y " + AxisText("y", gy) + "、z " + AxisText("z", gz) + "）"
+                              + "｜桌面 XZ " + (xz ? "重叠" : "错开")
+                              + "｜屏幕 AABB "
+                              + (screen
+                                 ? ("重叠 " + sx.ToString("0") + " × " + sy.ToString("0") + " px")
+                                 : (a.onScreen && b.onScreen ? "不相交" : "没量到")));
+                }
+            }
+
+            Debug.Log("[AutoPlay/相交] " + what + "｜结论：" + pairs + " 对里 "
+                      + (hits == 0 ? "✓ 一对都没有关系（不相交、不叠影）"
+                                   : ("★ " + hits + " 对有关系（世界相交 / 桌面 XZ 重叠 / 屏幕叠影）")));
+        }
+
+        /// <summary>
+        /// 把 Game 视图切成一个固定分辨率（**自己这一份，不走 SetGameViewSize**）。
+        ///
+        /// 【为什么要另写一份】原来那个 SetGameViewSize 在这台机器上抛 NRE
+        ///   （"Object reference not set..."）：它在 `currentGroup` 这个对象上找 `GetGroup`，
+        ///   而那个方法在 **GameViewSizes**（sizes）上、不在 group 上 —— 拿到 null 再 Invoke 就是 NRE。
+        ///   这一份把每一步都拆开检查、失败时**说清卡在哪一步**，并且把"选中新尺寸"这一步也走完
+        ///   （只 AddCustomSize 不选中，视图还是旧的）。
+        ///
+        /// 【为什么非要换分辨率】用户那张"6 副牌组排成一行、蜡烛插穿第一张卡"的截图是**宽窗口**下拍的：
+        ///   宽高比一大，那一排就从 2 行 3 张变成 1 行 6 张、铺满整屏 —— 窄窗口里根本复现不出来。
+        ///   它改的是**副本工程**的 Game 视图设置，不碰用户那份工程。
+        /// </summary>
+        private static bool SetGameViewSizeEx(int w, int h)
+        {
+            const string tag = "[AutoPlay/相交] 切 Game 视图 " + "";
+
+            try
+            {
+                System.Type gvType    = System.Type.GetType("UnityEditor.GameView,UnityEditor");
+                System.Type sizesType = System.Type.GetType("UnityEditor.GameViewSizes,UnityEditor");
+                System.Type sizeType  = System.Type.GetType("UnityEditor.GameViewSize,UnityEditor");
+                System.Type groupType = System.Type.GetType("UnityEditor.GameViewSizeGroupType,UnityEditor");
+
+                if (gvType == null || sizesType == null || sizeType == null || groupType == null)
+                { Debug.LogWarning(tag + "拿不到 GameViewSizes 类型。"); return false; }
+
+                EditorWindow gv = EditorWindow.GetWindow(gvType);
+                if (gv == null) { Debug.LogWarning(tag + "拿不到 Game 视图窗口。"); return false; }
+
+                System.Reflection.PropertyInfo inst = typeof(ScriptableSingleton<>).MakeGenericType(sizesType)
+                    .GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                object sizes = inst != null ? inst.GetValue(null) : null;
+                if (sizes == null) { Debug.LogWarning(tag + "GameViewSizes.instance 是空的。"); return false; }
+
+                object standalone = System.Enum.Parse(groupType, "Standalone");
+                System.Reflection.MethodInfo getGroup = sizesType.GetMethod("GetGroup", new[] { groupType });
+                if (getGroup == null) { Debug.LogWarning(tag + "GameViewSizes 上没有 GetGroup。"); return false; }
+
+                object group = getGroup.Invoke(sizes, new object[] { standalone });
+                if (group == null) { Debug.LogWarning(tag + "GetGroup(Standalone) 返回空。"); return false; }
+
+                System.Reflection.ConstructorInfo ctor = null;
+                System.Reflection.ParameterInfo[] ps = null;
+                foreach (System.Reflection.ConstructorInfo c in sizeType.GetConstructors())
+                    if (c.GetParameters().Length == 4) { ctor = c; ps = c.GetParameters(); break; }
+
+                if (ctor == null) { Debug.LogWarning(tag + "GameViewSize 没有 4 参数构造。"); return false; }
+
+                object kind = ps[0].ParameterType.IsEnum
+                    ? System.Enum.Parse(ps[0].ParameterType, "FixedResolution")
+                    : (object)1;
+
+                object size = ctor.Invoke(new object[] { kind, w, h, "DSH " + w + "x" + h });
+
+                System.Reflection.MethodInfo add = group.GetType().GetMethod("AddCustomSize", new[] { sizeType });
+                if (add == null) { Debug.LogWarning(tag + "尺寸组上没有 AddCustomSize。"); return false; }
+                add.Invoke(group, new object[] { size });
+
+                System.Reflection.MethodInfo total = group.GetType().GetMethod("GetTotalCount");
+                int index = total != null ? (int)total.Invoke(group, null) - 1 : -1;
+
+                System.Reflection.MethodInfo sel = gvType.GetMethod("SizeSelectionCallback",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic);
+                if (sel == null) { Debug.LogWarning(tag + "Game 视图上没有 SizeSelectionCallback。"); return false; }
+
+                sel.Invoke(gv, new object[] { index, null });
+                gv.Repaint();
+
+                Debug.Log(tag + "已切到 " + w + "×" + h + "（尺寸组第 " + index + " 项）");
+                return true;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning(tag + "失败：" + e.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 把编辑器的 Game 视图切到一个**固定分辨率**（取景探针按比例验收用）。
+        ///
+        /// 【为什么要动它】"装不装得下"随**宽高比**变：竖着的窗口和 1600×900 拟合出来的
+        ///   不是同一台机位。要在一趟探针里同时验两种比例，就得能把 Game 视图换成两个分辨率 ——
+        ///   否则只能验"我这台机器当前面板"的那一个，而用户点名的两个比例里
+        ///   有一个（打包版 1600×900）在这台机器上根本复现不出来。
+        ///
+        /// ★ **实现只有一份**：㉙⓪ 那条相交链的 <see cref="SetGameViewSizeEx"/>（这台机器上实测能切成
+        ///   1600×900 ✓）。我这份原来自己写了一份反射，写错了 `GetGroup` 找在哪个对象上
+        ///   （它是 GameViewSizes 的方法，不是 currentGroup 的）→ 一 Invoke 就是一句
+        ///   "Object reference not set"，日志里看不出卡在哪一步。两份反射实现迟早走岔，
+        ///   所以这里只做转发 —— 要改就改那一份。
+        /// </summary>
+        private static bool SetGameViewSize(int w, int h)
+        {
+            return SetGameViewSizeEx(w, h);
+        }
+
+        /// <summary>
+        /// 兜底：内部 API 用不了时**只压相机的宽高比**（公开 API，一定能成）。
+        ///
+        /// 【为什么这样也算验过】"装不装得下"是**投影**的事：Camera.aspect 一改，
+        ///   游戏里的取景（TableSetup.Update → ReframeBoardView）就按新比例重算 ——
+        ///   和真把窗口拉成那个比例**算出来的是同一台机位**。
+        ///   视口矩形按比例居中，渲染不会被拉伸，所以图上量到的"完整可见"是真的。
+        ///
+        /// 【它验不到什么】HUD 是按 Screen 尺寸排的，这里 Screen 没变 ——
+        ///   所以"窄窗口下 HUD 会不会盖住手牌"这一条**不算验过**（日志里写明）。
+        /// </summary>
+        private static void ForceCameraAspect(float aspect)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null || setup.cam == null) { Debug.LogWarning("[AutoPlay/取景] 没有相机，压不了比例。"); return; }
+
+            Camera cam = setup.cam;
+            cam.aspect = aspect;
+
+            float panel = (float)Screen.width / Mathf.Max(1, Screen.height);
+            float rw, rh;
+            if (aspect <= panel) { rh = 1f; rw = aspect / panel; }
+            else                 { rw = 1f; rh = panel / aspect; }
+
+            cam.rect = new Rect((1f - rw) * 0.5f, (1f - rh) * 0.5f, rw, rh);
+
+            Debug.Log("[AutoPlay/取景] 兜底：只压相机比例 —— 宽高比 " + aspect.ToString("0.000")
+                      + "，3D 视口 " + (Screen.width * rw).ToString("0") + "×" + (Screen.height * rh).ToString("0")
+                      + "（HUD 仍按整块 " + Screen.width + "×" + Screen.height + " 排，这一条不算验过）");
+        }
+
+        /// <summary>把 <see cref="ForceCameraAspect"/> 压上去的东西还原（相机比例 + 视口矩形）。</summary>
+        private static void ClearCameraAspect()
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null || setup.cam == null) return;
+
+            setup.cam.ResetAspect();
+            setup.cam.rect = new Rect(0f, 0f, 1f, 1f);
+            Debug.Log("[AutoPlay/取景] 相机比例已还原（宽高比 " + setup.cam.aspect.ToString("0.000") + "）");
+        }
+
+        /// <summary>
+        /// 取景探针要的那一屏：**v2.1 的"选刀片"**（手里 5 张 = 手牌最宽的一档）。
+        ///
+        /// 【为什么要能"修状态"】这条链验的是"手牌那一排装不装得下"，前提是手里真有 5 张。
+        ///   而这一局的状态**可能被别人动过**：这台机器上同时跑着第二个 Unity 实例
+        ///   （另一份副本、另一条探针），它的自动化脚本会去点"最前面那个 Unity 窗口"——
+        ///   点到这边就等于替玩家把牌组确认掉、一路打到关卡结束。
+        ///   实测踩过一次：探针还没开始跑，画面里这一关已经打完了、手里 0 张，
+        ///   于是三张"验收图"拍的全是空手牌。
+        ///   所以关键 stage 之前先**走游戏自己的入口**把状态摆回"选刀片"，
+        ///   并把"修之前是什么阶段"打进日志 —— 再被点一下，日志里也看得出来。
+        /// </summary>
+        private static void ProbeEnsureBladePick()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null) { Debug.LogWarning("[AutoPlay/取景] 找不到 TableTurnLoop，状态没法摆。"); return; }
+
+            TablePhase before = loop.phase;
+
+            if (loop.IsTitle)                       loop.ConfirmTitleStart();
+            if (loop.IsLevelSelect)                 PickLevel();
+            if (loop.phase == TablePhase.DeckPick)  PickDeck();
+
+            if (before != loop.phase || loop.phase != TablePhase.BladePick)
+            {
+                string hand = loop.rulesV21 != null
+                    ? (loop.rulesV21.hand.Count + " 素材 + " + loop.rulesV21.handSpells.Count + " 法术")
+                    : "（规则侧不在）";
+
+                Debug.Log("[AutoPlay/取景] 状态摆位：" + before + " → " + loop.phase + "，初始手牌 " + hand);
+            }
+        }
+
+        /// <summary>切机位（走游戏自己的公开入口 CameraRig.GoTo）。</summary>
+        private static void GoToView(string name)
+        {            TableSetup setup = Object.FindObjectOfType<TableSetup>();
             if (setup == null || setup.rig == null)
             {
                 Debug.LogWarning("[AutoPlay] 找不到 CameraRig，切机位跳过（" + name + "）。");
@@ -3892,6 +5180,445 @@ namespace GameJam.EditorTools
 
             CardFactory.DestroySafe(read);
             return sb.ToString() + "　（RT " + w + "×" + h + "）";
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  卡面文字探针（DSH_CARDFACEPROBE=1，㛢⓪~㛢⑫）用的口子
+        //
+        //  【这一节只做三件事】认牌 / 怼近拍 / 把"文字排行"和"数字实测"量成数字。
+        //   一个游戏规则都不碰 —— 拍特写只是临时注册一个 cardface 机位（探针动作）。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 卡面特写的取景边距 —— 比 FrameTableBounds 的默认 1.1 略紧一点，但比 1.0 松：
+        /// 实测 1.02 那一档在 78° 俯视下会把卡的下缘切掉几十个像素（公式只按盒子中心估深度，
+        /// 卡又是"很薄但很长"的那种），1.12 能把整张卡完整放进画面还留一圈背景。
+        /// </summary>
+        private const float CardFaceCloseupMargin = 1.12f;
+
+        /// <summary>桌上那张刀片卡（它不在任何列表里，只能按引用认 —— 见 TableTurnLoop.bladeCard）。</summary>
+        private static PlayCard BladeCard()
+        {
+            TableTurnLoop loop = Loop();
+            return loop != null ? loop.bladeCard : null;
+        }
+
+        /// <summary>手牌里第 <paramref name="index"/> 张**素材**（法术的 bindingMaterial 是空的，靠它区分）。</summary>
+        private static PlayCard HandMaterial(int index)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null || setup.hand == null || index < 0) return null;
+
+            int seen = 0;
+            for (int i = 0; i < setup.hand.Count; i++)
+            {
+                PlayCard c = setup.hand[i];
+                if (c == null || c.bindingMaterial == null) continue;
+                if (seen == index) return c;
+                seen++;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 一张 3D 卡**不含文字**的世界包围盒。
+        ///
+        /// 【为什么要把文字排掉】文字渲染器的包围盒是"墨迹盒"，高只有几毫米、
+        ///   又贴在卡的两端 —— 算进去会把取景拉偏（特写就会歪、还会变远）。
+        ///   这里只要卡身 + 卡面：那才是"这张牌占的地方"。
+        /// </summary>
+        private static Bounds CardBodyBounds(PlayCard card)
+        {
+            Bounds b = new Bounds(card != null ? card.transform.position : Vector3.zero, Vector3.one * 0.01f);
+            if (card == null) return b;
+
+            Renderer[] rs = card.GetComponentsInChildren<Renderer>();
+            bool any = false;
+            for (int i = 0; i < rs.Length; i++)
+            {
+                if (rs[i] == null) continue;
+                if (rs[i].GetComponent<TextMesh>() != null) continue;   // 文字不算
+                if (!any) { b = rs[i].bounds; any = true; }
+                else b.Encapsulate(rs[i].bounds);
+            }
+            return b;
+        }
+
+        /// <summary>
+        /// 把镜头怼到一张卡的卡面上拍一张。
+        ///
+        /// 【为什么临时注册一个机位】游戏里的机位全是"装得下整桌 / 整排手牌"的，
+        ///   最紧的那一档下手牌也只占屏幕一小块 —— 三个只有二十几像素的装饰形状
+        ///   在那个距离上根本看不出"数字有没有压到边框"。
+        ///   所以按卡的包围盒算一个只装得下这一张牌的机位，**复用**
+        ///   CameraRig.FrameTableBounds 那一套投影（不在这里另写一份取景算式）。
+        ///   SnapTo 立刻到位 —— GoTo 是平滑过渡，截图会拍到中途。
+        ///
+        /// tiltDeg 是俯角：62° 接近游戏里的桌面视角，78° 接近正上方俯视。
+        /// 牌不在（还没建出来）时打一条警告并返回 true（本阶段放行，别卡死）。
+        /// </summary>
+        private static bool ShotCardCloseup(string name, PlayCard card, float tiltDeg)
+        {
+            if (card == null)
+            {
+                Debug.LogWarning("[AutoPlay/卡面] 要拍的那张牌现在不在（" + name + "），这一步跳过。");
+                return true;
+            }
+
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null || setup.rig == null) return true;
+
+            setup.rig.FrameTableBounds("cardface", CardBodyBounds(card), tiltDeg, CardFaceCloseupMargin, false);
+            setup.rig.SnapTo("cardface");
+            return Shot(name);
+        }
+
+        /// <summary>
+        /// 牌组卡排里第 <paramref name="index"/> 张大卡（TableChoiceRig.BuildOne 建的，
+        /// 名字是 "BigCard_" + id）拍一张特写 —— 用户那张"下半屏一个字都没有"的截图就是这一排。
+        ///
+        /// 取哪一张按**屏幕位置**排（先上下、再左右）：用户说的"下面一排"就是屏幕口径，
+        /// 而物体层级顺序 / 名字顺序都跟摆位无关。
+        /// </summary>
+        private static bool ShotBigCardCloseup(string name, int index)
+        {
+            TableChoiceRig rig = Object.FindObjectOfType<TableChoiceRig>();
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (rig == null || setup == null || setup.rig == null) return true;
+
+            List<Transform> cards = new List<Transform>();
+            Transform[] all = Object.FindObjectsOfType<Transform>();
+            for (int i = 0; i < all.Length; i++)
+                if (all[i] != null && all[i].name.StartsWith("BigCard_")) cards.Add(all[i]);
+
+            if (cards.Count == 0)
+            {
+                Debug.LogWarning("[AutoPlay/卡面] 桌上一张牌组卡都没有，" + name + " 拍不到。");
+                return true;
+            }
+
+            Camera cam = Camera.main != null ? Camera.main : Object.FindObjectOfType<Camera>();
+            if (cam != null)
+            {
+                cards.Sort(delegate (Transform a, Transform b)
+                {
+                    Vector3 sa = cam.WorldToScreenPoint(a.position);
+                    Vector3 sb = cam.WorldToScreenPoint(b.position);
+                    if (Mathf.Abs(sa.y - sb.y) > 1f) return sa.y.CompareTo(sb.y);   // 先按屏幕上下
+                    return sa.x.CompareTo(sb.x);                                   // 同一排再按左右
+                });
+            }
+
+            Transform pick = cards[Mathf.Clamp(index, 0, cards.Count - 1)];
+
+            Bounds b = new Bounds(pick.position, Vector3.one * 0.01f);
+            Renderer[] rs = pick.GetComponentsInChildren<Renderer>();
+            bool any = false;
+            for (int i = 0; i < rs.Length; i++)
+            {
+                if (rs[i] == null || rs[i].GetComponent<TextMesh>() != null) continue;
+                if (!any) { b = rs[i].bounds; any = true; }
+                else b.Encapsulate(rs[i].bounds);
+            }
+
+            setup.rig.FrameTableBounds("cardface", b, 78f, CardFaceCloseupMargin, false);
+            setup.rig.SnapTo("cardface");
+            return Shot(name);
+        }
+
+        /// <summary>一张卡上的 H/D/V 三个值，写成一行（日志用；读的是卡自己绑的数据）。</summary>
+        private static string CardStatsText(PlayCard card)
+        {
+            if (card == null) return "（没有这张牌）";
+
+            string label = card.DisplayName;
+            GameJam.Data.Ingredient ing = card.card != null ? card.card.ingredient : null;
+            if (ing == null || ing.attrs == null) return label + "（模块 / 没有三属性）";
+
+            return label + "　H=" + ing.attrs.Get(GameJam.Data.AttrId.Salt)
+                         + " D=" + ing.attrs.Get(GameJam.Data.AttrId.Mercury)
+                         + " V=" + ing.attrs.Get(GameJam.Data.AttrId.Sulfur);
+        }
+
+        /// <summary>
+        /// 把场上每一张卡（3D 手牌 / 刀片卡 / 桌面卡，以及牌组大卡）的**每一行文字**
+        /// 和**卡面**的渲染次序比一次，逐张报一行、最后给一个总数。
+        ///
+        /// 【为什么这条清单比截图重要】"文字排在卡面之后"是用户那两张截图（桌面视角名字不见、
+        ///   俯视牌组卡整片不见）的**同一个根因**，而它是个可以逐条核对的数字：
+        ///   文字 sortingOrder &gt; 卡面 sortingOrder，就永远排在后面，跟机位无关。
+        ///   截图只能证明"这一屏这一次没事"，清单能证明"每一张卡的每一行都排对了"。
+        ///
+        /// "被显式关掉"的行不算错：级联会把被压住那几张的数值关掉（见 CardFactory.CardTextSortingOrder
+        /// 里"为什么只抬名字不抬 H/D/V"那一段），那是有意为之。
+        /// </summary>
+        private static void ProbeCardTextReport(string what)
+        {
+            Debug.Log("[AutoPlay/卡面] ═══ " + what + "：卡面文字次序 ═══");
+
+            int cards = 0, bad = 0;
+
+            Transform[] roots = Object.FindObjectsOfType<Transform>();
+            for (int i = 0; i < roots.Length; i++)
+            {
+                Transform t = roots[i];
+                if (t == null) continue;
+
+                bool isCard = t.GetComponent<PlayCard>() != null || t.name.StartsWith("BigCard_");
+                if (!isCard) continue;
+
+                int faceOrder   = FaceSortingOrder(t);
+                int textOrder   = TextSortingOrderOf(t);
+                int textLines   = 0, textBad = 0, textOff = 0;
+
+                Renderer[] rs = t.GetComponentsInChildren<Renderer>();
+                for (int k = 0; k < rs.Length; k++)
+                {
+                    if (rs[k] == null || rs[k].GetComponent<TextMesh>() == null) continue;
+                    textLines++;
+                    if (rs[k].sortingOrder <= faceOrder) textBad++;
+                    if (!rs[k].enabled) textOff++;
+                }
+
+                cards++;
+                bad += textBad;
+
+                string line = "[AutoPlay/卡面] " + (textBad == 0 ? "✓" : "✗") + " " + t.name
+                            + "：文字 " + textLines + " 行、卡面 order " + faceOrder
+                            + "、文字 order " + textOrder
+                            + "、排错 " + textBad + " 行、显式关掉 " + textOff + " 行";
+
+                if (textBad == 0) Debug.Log(line);
+                else Debug.LogWarning(line + "　→ ★ 这些行排在卡面之前，换个机位就会被卡面盖住");
+            }
+
+            Debug.Log("[AutoPlay/卡面] ═══ " + what + " 汇总：卡 " + cards + " 张，排错文字 "
+                      + bad + " 行（必须 0）═══");
+
+            if (bad > 0)
+                Debug.LogWarning("[AutoPlay/卡面] ★ " + what + "：有 " + bad
+                                 + " 行文字排在卡面**之前** —— 正是用户报的那两个症状的根因。");
+        }
+
+        /// <summary>这张卡的**卡面**渲染次序（名字叫 Face 的那个 Quad；找不到就按 0 算）。</summary>
+        private static int FaceSortingOrder(Transform cardRoot)
+        {
+            Renderer[] rs = cardRoot.GetComponentsInChildren<Renderer>();
+            for (int i = 0; i < rs.Length; i++)
+            {
+                if (rs[i] == null) continue;
+                if (rs[i].GetComponent<TextMesh>() != null) continue;
+                if (rs[i].name != "Face") continue;
+                return rs[i].sortingOrder;
+            }
+            return 0;
+        }
+
+        /// <summary>这张卡上第一个文字渲染器的 sortingOrder（日志里报一个代表值）。</summary>
+        private static int TextSortingOrderOf(Transform cardRoot)
+        {
+            Renderer[] rs = cardRoot.GetComponentsInChildren<Renderer>();
+            for (int i = 0; i < rs.Length; i++)
+            {
+                if (rs[i] == null) continue;
+                if (rs[i].GetComponent<TextMesh>() == null) continue;
+                return rs[i].sortingOrder;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// 把三个数字的**实测结果**报出来：字号 / 墨迹盒 / 它那一格的内圈尺寸 / 四条边的余量 /
+        /// 居中误差。
+        ///
+        /// 【为什么"余量"和"居中"必须是个数字】用户要的是"不压形状边框、居中"，
+        ///   而形状边框在卡面上只有一两个像素宽 —— 缩略图里根本看不出来。
+        ///   这里把"墨迹盒"和"形状内圈"都换成**效果图像素**（和 CardArt 量版面用的是同一套坐标），
+        ///   余量为负就是压上了；居中误差是"墨迹盒中心"和"形状中心"之差，同样是像素。
+        ///
+        /// 【为什么量的是网格、不是 Renderer.bounds】bounds 是**世界** AABB：
+        ///   卡是带偏航摆的，一转角度同一个墨迹盒的 AABB 就被撑大（实测同一串 "12"、
+        ///   同一个字号在不同卡上量出 12.0 / 12.9 px 两个值）。网格顶点在**局部**坐标里，
+        ///   和朝向无关，才是这个串真实的宽高。
+        /// </summary>
+        private static void ProbeStatDigitReport(string what)
+        {
+            Debug.Log("[AutoPlay/卡面] ═══ " + what + " ═══");
+
+            // 对照卡优先报（它们就是为"两位数 / 一位数 / 零值"这三种情况造的）
+            for (int i = 0; i < demoCards.Count; i++)
+                if (demoCards[i] != null) ReportStatDigits(demoCards[i].transform, "对照卡" + (i + 1));
+
+            // 场上真实卡再报几张（正式美术卡面 = 牌面上有三个同名的数值文字对象）
+            Transform[] roots = Object.FindObjectsOfType<Transform>();
+            int done = 0;
+            for (int i = 0; i < roots.Length && done < 3; i++)
+            {
+                Transform t = roots[i];
+                if (t == null || t.GetComponent<PlayCard>() == null) continue;
+                if (CountStatTexts(t) < 3) continue;
+                if (IsDemoCard(t)) continue;
+
+                done++;
+                ReportStatDigits(t, null);
+            }
+
+            if (done == 0 && demoCards.Count == 0)
+                Debug.LogWarning("[AutoPlay/卡面] 场上没有带正式美术卡面（三个数字）的牌，这一步量不到东西。");
+        }
+
+        /// <summary>这张卡上有几个"数值文字"对象（正式美术卡面 = 3 个，程序化卡面 = 1 个）。</summary>
+        private static int CountStatTexts(Transform cardRoot)
+        {
+            int n = 0;
+            Renderer[] rs = cardRoot.GetComponentsInChildren<Renderer>();
+            for (int i = 0; i < rs.Length; i++)
+                if (rs[i] != null && rs[i].name == CardFactory.StatsTextObject) n++;
+            return n;
+        }
+
+        private static bool IsDemoCard(Transform t)
+        {
+            for (Transform p = t; p != null; p = p.parent)
+                if (p.name == "ProbeDemoCards") return true;
+            return false;
+        }
+
+        /// <summary>量一张卡上那三个数字，一行一个。</summary>
+        private static void ReportStatDigits(Transform cardRoot, string label)
+        {
+            Renderer[] rs = cardRoot.GetComponentsInChildren<Renderer>();
+            int slots = 0;
+
+            for (int k = 0; k < rs.Length && slots < CardArt.StatSlots.Length; k++)
+            {
+                Renderer r = rs[k];
+                if (r == null || r.name != CardFactory.StatsTextObject) continue;
+
+                GameObject go = r.gameObject;
+                TextMesh tm = go.GetComponent<TextMesh>();
+                string digits = tm != null ? tm.text : "?";
+                string head = label != null ? label : cardRoot.name;
+
+                Vector3 inkCenter, inkSize;
+                if (!CardFactory.InkBox(go, out inkCenter, out inkSize))
+                {
+                    Debug.LogWarning("[AutoPlay/卡面]   " + head + " 的「" + digits
+                                     + "」：量不到墨迹盒（TextMesh 网格为空）");
+                    slots++;
+                    continue;
+                }
+
+                float size = go.transform.localScale.x;
+
+                // 墨迹盒（局部单位 × 字号）→ 效果图像素：卡深 0.335 对应效果图 182 px
+                float inkPxW = inkSize.x * size / CardFactory.CardDepth * 182f;
+                float inkPxH = inkSize.y * size / CardFactory.CardDepth * 182f;
+
+                CardArt.StatSlot s = CardArt.StatSlots[slots];
+                float innerW = 2f * s.halfW * CardArt.StatFitMargin;
+                float innerH = 2f * s.halfH * CardArt.StatFitMargin;
+
+                // 居中误差：墨迹盒中心（卡根节点局部）与形状中心之差，同样换成效果图像素
+                Vector2 at = CardArt.EffectPxToLocal(s.centerPx);
+                Vector3 actual = go.transform.localPosition
+                               + go.transform.localRotation * (inkCenter * size);
+                float dxPx = (actual.x - at.x) / CardFactory.CardWidth * 136f;
+                float dzPx = (actual.z - at.y) / CardFactory.CardDepth * 182f;
+
+                bool fit = inkPxW <= innerW + 0.01f && inkPxH <= innerH + 0.01f;
+                bool centered = Mathf.Abs(dxPx) <= 0.5f && Mathf.Abs(dzPx) <= 0.5f;
+
+                string slotName = slots == 0 ? "H(菱形)" : (slots == 1 ? "D(圆形)" : "V(方形)");
+                string line = "[AutoPlay/卡面]   " + head + " " + slotName + "「" + digits + "」"
+                            + "｜字号 " + size.ToString("0.00000")
+                            + "｜墨迹 " + inkPxW.ToString("0.0") + "×" + inkPxH.ToString("0.0") + " px"
+                            + "｜这一格可用 " + innerW.ToString("0.0") + "×" + innerH.ToString("0.0") + " px"
+                            + "｜余量 横 " + (innerW - inkPxW).ToString("0.0")
+                            + " 纵 " + (innerH - inkPxH).ToString("0.0")
+                            + "｜居中误差 " + dxPx.ToString("0.00") + "," + dzPx.ToString("0.00") + " px";
+
+                if (fit && centered) Debug.Log(line + "　✓");
+                else Debug.LogWarning(line + "　★ " + (fit ? "居中偏了" : "压到边框了"));
+
+                slots++;
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  对照卡（两位数 / 一位数 / 零值）
+        //
+        //  【为什么要临时造卡】用户要看的是"两位数也放得下""零值会不会偏小偏空"，
+        //    而**真实卡表里这两种情况都没有**：cards_v21.json 里所有素材的 H/D/V
+        //    都是 1 位数（1~6）、没有 0。所以这里把某一副食材的三属性临时改成三种组合，
+        //    各造一张卡拍特写 —— 走的还是 CardFactory.Create 那条真路，一个字都不绕。
+        //
+        //  ★ 探针动作，只在副本工程里跑：改的是**运行期**的 attrs，每造一张立刻改回原值；
+        //    对照卡挂在一个独立的根节点下（不在 cardsRoot 里），拍完整个销毁 ——
+        //    所以"桌面素材残留几张"那条自检不会被它们污染。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>三张对照卡的三属性值：H / D / V。</summary>
+        private static readonly int[][] DemoStatValues =
+        {
+            new int[] { 12, 3, 1 },    // 用户报的那张卡：H 两位数 + D/V 一位数
+            new int[] {  3, 3, 3 },    // 全一位数：三个数字应该一样大
+            new int[] {  8, 0, 0 },    // 零值：会不会偏小 / 形状显得空
+        };
+
+        private static GameObject     demoRoot;
+        private static List<PlayCard> demoCards = new List<PlayCard>();
+
+        private static void BuildDemoStatCards()
+        {
+            PlayCard src = HandMaterial(0);
+            if (src == null || src.card == null || src.card.ingredient == null)
+            {
+                Debug.LogWarning("[AutoPlay/卡面] 手牌里没有素材，对照卡造不出来。");
+                return;
+            }
+
+            GameJam.Data.Ingredient ing = src.card.ingredient;
+            int h0 = ing.attrs.Get(GameJam.Data.AttrId.Salt);
+            int d0 = ing.attrs.Get(GameJam.Data.AttrId.Mercury);
+            int v0 = ing.attrs.Get(GameJam.Data.AttrId.Sulfur);
+
+            // 摆在桌子下面（y = −1.0）：那里什么都没有，特写背景干净，也不会挡到桌上的任何东西
+            demoRoot = new GameObject("ProbeDemoCards");
+            demoRoot.transform.position = new Vector3(0f, -1.0f, 0f);
+
+            for (int i = 0; i < DemoStatValues.Length; i++)
+            {
+                int[] v = DemoStatValues[i];
+
+                ing.attrs.Set(GameJam.Data.AttrId.Salt,    v[0]);
+                ing.attrs.Set(GameJam.Data.AttrId.Mercury, v[1]);
+                ing.attrs.Set(GameJam.Data.AttrId.Sulfur,  v[2]);
+
+                Vector3 home = demoRoot.transform.position + new Vector3((i - 1) * 0.55f, 0f, 0f);
+                PlayCard c = CardFactory.Create(src.card, demoRoot.transform, home, Vector3.zero);
+                if (c != null) demoCards.Add(c);
+
+                Debug.Log("[AutoPlay/卡面] 对照卡 " + (i + 1) + "：H=" + v[0] + " D=" + v[1] + " V=" + v[2]
+                          + "（卡面皮取自「" + src.DisplayName + "」，这三个值只是运行期临时改的）");
+            }
+
+            // ★ 立刻改回去：这份 attrs 是**游戏正在用的那一份**（手牌那张卡、刀片都指着它）
+            ing.attrs.Set(GameJam.Data.AttrId.Salt,    h0);
+            ing.attrs.Set(GameJam.Data.AttrId.Mercury, d0);
+            ing.attrs.Set(GameJam.Data.AttrId.Sulfur,  v0);
+        }
+
+        private static void DestroyDemoStatCards()
+        {
+            if (demoRoot != null) CardFactory.DestroySafe(demoRoot);
+            demoRoot = null;
+            demoCards.Clear();
+        }
+
+        private static PlayCard DemoCard(int i)
+        {
+            return (i >= 0 && i < demoCards.Count) ? demoCards[i] : null;
         }
 
         private static void OpenInspect()

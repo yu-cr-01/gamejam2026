@@ -333,8 +333,11 @@ namespace GameJam.Prototype
         ///     卡的上缘正好贴着机器底边，只剩几个像素的余量，太险）；
         ///   · 近端：见 <see cref="TableCascadeNearLimitZ"/>，整列不许压到手牌那一排。
         ///   · 中间：卡占 x ∈ [+0.41, +0.65]，和刀片卡（x ≤ +0.12）错开 29 厘米，互不相干。
+        ///
+        /// ★ public 是给 <see cref="TableSetup.ReframeBoardView"/> 的取景拟合用的：
+        ///   级联那一列整个都得在画面里（它就是"新上桌那张卡的落点"）。
         /// </summary>
-        private const float TableCascadeFirstZ = 0.02f;
+        public const float TableCascadeFirstZ = 0.02f;
 
         /// <summary>
         /// 相邻两张的**错开量**：后一张朝玩家方向挪这么多。
@@ -1275,9 +1278,12 @@ namespace GameJam.Prototype
                 //   而名字天生安全：它在卡的**露出区**里（见 TableCascadeStep），
                 //   压着它的那张卡根本不在那一块 —— 所以名字一直开着。
                 //   选中的那张例外：它被抬起来（PlayCard.LiftHover 3 厘米），看得见自己的数值。
-                Renderer stats = StatsTextOf(t.view);
-                if (stats != null)
-                    stats.enabled = (i == cascadeCount - 1) || (t.state == selected);
+                //   ★ 现在是**三个**对象（H/D/V 各一个数字），所以走 CardFactory 的统一出口
+                //     （SetStatsVisible 一次把同名的那几个全关掉）—— 用 Find 只会拿到第一个，
+                //     另外两个数字照样浮在压着它的那张卡上。
+                if (t.view != null)
+                    CardFactory.SetStatsVisible(t.view.transform,
+                                                (i == cascadeCount - 1) || (t.state == selected));
             }
 
             // ④ 残留清扫：场景里有、但谁都不认领的卡（第 4 张就是从这里抓出来的）
@@ -1370,18 +1376,12 @@ namespace GameJam.Prototype
             return new Vector3(x, TableCascadeLift * index, z);
         }
 
-        /// <summary>
-        /// 这张 3D 卡上的**数值文字**（H/D/V / 模块效果）渲染器 —— 级联用它控制"被压住那几张不显示数值"。
-        /// 按 <see cref="CardFactory.StatsTextObject"/> 这个固定对象名找（名字由 CardFactory 起），
-        /// 找不到就返回 null（手工在 Inspector 里造的卡没有这两行文字）。
-        /// </summary>
-        private static Renderer StatsTextOf(PlayCard view)
-        {
-            if (view == null) return null;
-
-            Transform t = view.transform.Find(CardFactory.StatsTextObject);
-            return t != null ? t.GetComponent<Renderer>() : null;
-        }
+        //  这张 3D 卡上的**数值文字**怎么显隐：走 CardFactory.SetStatsVisible ——
+        //  正式美术卡面上的数值是**三个**对象（数值牌上的菱形/圆形/方形各一个数字，
+        //  见 CardFactory.AddStatNumbers），所以"按对象名找一个渲染器"这种写法已经不够用了：
+        //  它只会拿到第一个，另外两个数字照样浮在压着它的那张卡上。
+        //  这个名字常量仍然由 CardFactory 起（CardFactory.StatsTextObject），
+        //  显隐逻辑也只有那一份实现。
 
         /// <summary>
         /// 桌面平面上的一个**占地矩形**（XZ）—— 级联的重叠判断 / 障碍判断都用它。
@@ -1429,9 +1429,15 @@ namespace GameJam.Prototype
             return XZRect.FromCenter(at, 0.11f, 0.036f);
         }
 
-        /// <summary>槽名牌的占地估算（字号 0.0072 → 字高约 0.0245；「附　魔 位」五个字位宽约 0.12）。</summary>
-        private const float SlotLabelHalfW = 0.075f;
-        private const float SlotLabelHalfD = 0.016f;
+        /// <summary>
+        /// 槽名牌的占地估算（字号 0.0072 → 字高约 0.0245；「附　魔 位」五个字位宽约 0.12）。
+        ///
+        /// ★ public 是给 <see cref="TableSetup.ReframeBoardView"/> 的取景拟合用的：
+        ///   那三个字是"必须看得见"的东西之一，取景得按**同一个矩形**算边距 ——
+        ///   让取景那边另估一个尺寸的话，改了字号这里就会变成"拟合说装下了、字其实露在外面"。
+        /// </summary>
+        public const float SlotLabelHalfW = 0.075f;
+        public const float SlotLabelHalfD = 0.016f;
 
         /// <summary>手牌那一排的横向范围取整排（张数会变，这条只关心"前后别压上"）。</summary>
         private const float TableHandBandW = 2.4f;
@@ -1514,6 +1520,84 @@ namespace GameJam.Prototype
             names.Add("手牌那一排（远沿 z=" + handFarEdge.ToString("0.###") + "）");
             rects.Add(XZRect.FromCenter(new Vector3(0f, 0f, TableTurnLoop.HandZ),
                                         TableHandBandW, CardFactory.CardDepth));
+
+            // ④ 桌上那三件**立体物件**：蜡烛 / 量筒（得分板）/ 破壁机 —— 级联压上去就是穿模。
+            //
+            //  ★ 这一条是用户报「把卡牌和破壁机和计分板穿模的 bug 改一改」之后补的：
+            //    在此之前这份清单只装"桌面上画出来的框和字"（刀片卡、槽位框、槽名牌、手牌那一排），
+            //    桌子上的**立体物件一个都不在里面** —— 于是"级联那一列顶到破壁机""卡压在量筒上"
+            //    这类事，自检一声不吭（它根本不知道桌上有这两样东西）。
+            //
+            //  【为什么量的是渲染器的世界包围盒，而不是另写三个矩形】
+            //    蜡烛的摆位在 TableTitleRig.CandleAt、量筒跟着蜡烛自己走（ScoreCylinderRig）、
+            //    立绘的宽高由美术图按像素反算（BlenderArt）—— 在这里各抄一份，
+            //    等于埋三个迟早过期的数，而"抄的那份过期了"表现出来正是这一轮要修的那类问题。
+            //    量筒的包围盒**含左边那排刻度数字**（用户截图里压在蜡烛旁边的就是那几个数），
+            //    这也只有按渲染器量才拿得到。
+            if (setup != null)
+            {
+                AddPropObstacle(names, rects, "蜡烛", GameObject.Find(TableTitleRig.CandleName));
+
+                if (setup.juicer != null)
+                {
+                    AddPropObstacle(names, rects, "量筒（得分板）",
+                                    setup.juicer.scoreBoard != null ? setup.juicer.scoreBoard.gameObject : null);
+                    AddPropObstacle(names, rects, "破壁机（立绘+机身）", setup.juicer.gameObject);
+                }
+            }
+
+            // ⑤ 牌组卡排 / 关卡卡排（只在选择环节存在）—— 那一排铺得很宽，也当障碍。
+            //
+            //  ★ 用户新截图报的就是它：牌组选择界面上**蜡烛从第一张卡中间穿出来**、
+            //    破壁机立绘压在第 4/5 张上。让那一排自己避让物件的逻辑在
+            //    TableChoiceRig.PropChannel（它会缩排 / 换行，排不进去当场报警）；
+            //    这里把它也列进来，管的是另一件事：**万一它还在桌上**，
+            //    级联那一列不许压到它（"状态没清干净"那类问题同样会长成穿模的样子）。
+            if (loop != null && loop.choiceRig != null)
+            {
+                Bounds big;
+                if (loop.choiceRig.RowWorldBounds(out big))
+                {
+                    names.Add("牌组/关卡卡排（" + loop.choiceRig.BigCardCount + " 张、" + loop.choiceRig.LastLayoutRows
+                              + " 行，世界 x " + big.min.x.ToString("0.000") + "~" + big.max.x.ToString("0.000")
+                              + "，z " + big.min.z.ToString("0.000") + "~" + big.max.z.ToString("0.000") + "）");
+                    rects.Add(XZRect.FromCenter(new Vector3(big.center.x, 0f, big.center.z),
+                                                big.size.x, big.size.z));
+                }
+            }
+        }
+
+        /// <summary>
+        /// 把一个**桌面物件**（含子物体）的世界包围盒当成障碍加进清单。
+        ///
+        /// 【只算活着的渲染器】挂了美术立绘时程序化机身是整组关掉的（见
+        ///   JuicerRig.HideProceduralMachineWhenArtPresent）—— 那部分不占地，不该算进来。
+        /// 【拿不到就静默跳过】物体不存在、或者一个活着的渲染器都没有时直接返回：
+        ///   这份清单是"多一道保险"，不该因为某个物件这一局没建出来就让整条自检失败。
+        /// </summary>
+        private static void AddPropObstacle(List<string> names, List<XZRect> rects, string label, GameObject root)
+        {
+            if (root == null) return;
+
+            Renderer[] rs = root.GetComponentsInChildren<Renderer>();
+            bool any = false;
+            Bounds b = new Bounds();
+
+            for (int i = 0; i < rs.Length; i++)
+            {
+                Renderer r = rs[i];
+                if (r == null || !r.enabled) continue;
+                if (!r.gameObject.activeInHierarchy) continue;
+
+                if (!any) { b = r.bounds; any = true; }
+                else b.Encapsulate(r.bounds);
+            }
+
+            if (!any) return;
+
+            names.Add(label + "（世界 x " + b.min.x.ToString("0.000") + "~" + b.max.x.ToString("0.000")
+                      + "，z " + b.min.z.ToString("0.000") + "~" + b.max.z.ToString("0.000") + "）");
+            rects.Add(XZRect.FromCenter(new Vector3(b.center.x, 0f, b.center.z), b.size.x, b.size.z));
         }
 
         /// <summary>

@@ -352,23 +352,27 @@ namespace GameJam.Prototype
             {
                 int per = (n + rows - 1) / rows;
 
-                float pitch = CardD * RowPitchK;
-                float totalZ = (rows - 1) * pitch;
-                float zFront = Mathf.Clamp(RowZ - totalZ * 0.5f, view.nearZ, view.farZ);
-
-                // ★ 取这一排**近缘**的宽度：透视下近处最窄，用远处宽度算出来的尺寸会偏大
-                //   （第一版就是取成远缘了，实测右边出去 18.6 像素）。
-                float x0, x1;
-                view.XRangeAt(zFront - CardD * 0.5f, out x0, out x1);
-                float availX = Mathf.Max(0.2f, (x1 - x0) * 0.94f);
-
-                float sX = availX / ((per - 1) * Spacing + CardW);
                 float sZ = rows > 1
                     ? Mathf.Max(0.2f, (view.farZ - view.nearZ) * 0.92f)
                       / ((rows - 1) * RowPitchK * CardD + CardD)
                     : 1f;
 
-                float s = Mathf.Min(1f, Mathf.Min(sX, sZ));
+                // ★ 缩放要**估到自洽**：块越深 → 越容易被夹到最前面 → 可用宽度越小。
+                //   拿 scale = 1 估一次就下结论会严重低估（实测：6 副牌组本该"一行 6 张、原尺寸"，
+                //   却被估成 3 行 2 张、缩到 0.48）。所以从"深度允许的最大缩放"起步，
+                //   **只减不增**地迭代到 s ≤ PlaceRow 给出的可用宽度为止 —— 单调收缩，必然收敛。
+                float s = Mathf.Min(1f, sZ);
+                for (int pass = 0; pass < 4; pass++)
+                {
+                    RowBox box = PlaceRow(rows, s, view);
+                    float sX = Mathf.Max(0.2f, (box.x1 - box.x0) * 0.94f)
+                               / ((per - 1) * Spacing + CardW);
+
+                    float next = Mathf.Min(s, Mathf.Min(1f, sX));
+                    if (next >= s - 0.005f) break;
+                    s = next;
+                }
+
                 if (s > bestScale) { bestScale = s; bestRows = rows; }
                 if (s >= MinCardScale) break;
             }
@@ -383,21 +387,322 @@ namespace GameJam.Prototype
             for (int pass = 0; pass < 4; pass++)
             {
                 float bx0, by0, bx1, by1;
-                if (!ProjectRowBounds(spots, out bx0, out by0, out bx1, out by1)) break;
-                if (bx0 >= edge && bx1 <= Screen.width - edge &&
-                    by0 >= edge && by1 <= Screen.height - edge) break;
+                bool measured = ProjectRowBounds(spots, out bx0, out by0, out bx1, out by1);
+                bool onScreen = measured && bx0 >= edge && bx1 <= Screen.width - edge &&
+                                           by0 >= edge && by1 <= Screen.height - edge;
+
+                // ★ 还要"不穿模"：这一排的卡一个都不许压在挡路的东西上，
+                //   也不许有立着的东西站在它前面把它盖住
+                //   （用户截图：蜡烛从第一张牌组卡中间穿出来、机器压在第 4/5 张上）。
+                //   量的是**真的卡**（spots 的世界矩形），不是估算 —— 和屏幕边距同一个口径。
+                bool clearOfProps = !RowHitsProp(spots, bestScale) && !RowOccludedByProp(spots, bestScale);
+                if (!measured || (onScreen && clearOfProps)) break;
 
                 float shrink = Mathf.Min(
                     (Screen.width  - edge * 2f) / Mathf.Max(1f, bx1 - bx0),
                     (Screen.height - edge * 2f) / Mathf.Max(1f, by1 - by0));
 
-                bestScale = Mathf.Clamp(bestScale * Mathf.Clamp(shrink, 0.5f, 0.98f), 0.30f, 1f);
+                // 两者都不满足时，缩得动就缩（缩了之后 PlaceRow 会重挑 z / 通道，通常就够了）
+                bestScale = Mathf.Clamp(bestScale * Mathf.Clamp(Mathf.Min(shrink, 0.98f), 0.5f, 0.98f), 0.30f, 1f);
                 spots = BuildSpots(n, bestRows, bestScale, view);
             }
 
+            if (RowHitsProp(spots, bestScale) || RowOccludedByProp(spots, bestScale))
+                Debug.LogWarning("[V21][牌组排] ★ 这一排大卡和桌上的东西还有关系"
+                                 + (RowOccludedByProp(spots, bestScale) ? "（有立着的东西站在它前面、会盖住卡面）" : "（世界矩形相交）")
+                                 + " —— " + n + " 张、" + bestRows + " 行、缩放 " + bestScale.ToString("0.00")
+                                 + "；挡路的：" + PropChannelText() + "。排不进去就该加行数或改 RowZ（见 PlaceRow）。");
+
             LastLayoutRows  = bestRows;
             LastLayoutScale = bestScale;
+
+            // 一行日志把"这一排最后排成什么样、让开了什么"钉在日志里：
+            //   用户报的那一幕（蜡烛插穿第一张卡 / 机器压在第 4、5 张上）修没修好，
+            //   判据是"这张卡和那件东西的世界矩形还有没有交集"，不是"我看着还行"。
+            float lx0, ly0, lx1, ly1;
+            if (ProjectRowBounds(spots, out lx0, out ly0, out lx1, out ly1))
+                Debug.Log("[V21][牌组排] " + n + " 张大卡：" + bestRows + " 行、缩放 " + bestScale.ToString("0.00")
+                          + "｜屏幕 x " + lx0.ToString("0") + "~" + lx1.ToString("0")
+                          + "，y " + ly0.ToString("0") + "~" + ly1.ToString("0")
+                          + "（屏幕 " + Screen.width + "×" + Screen.height + "）"
+                          + "｜让开的东西：" + PropChannelText()
+                          + (RowHitsProp(spots, bestScale) || RowOccludedByProp(spots, bestScale)
+                             ? "　★ 仍有交集/遮挡" : "　✓ 一个都不相交、也没被挡住"));
+
             return spots;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  这一排大卡的"通道"：给蜡烛、量筒、破壁机让开
+        //
+        //  【它修的是用户这张截图】牌组选择界面（6 副）：**蜡烛从第一张卡中间穿出来**、
+        //    破壁机立绘压在第 4/5 张卡上。
+        //
+        //  【为什么会这样】这一排大卡是按"屏幕里能放多大"自适应的（见 LayoutCards 的 ①②③），
+        //    而它**完全不知道桌上有那三件立着的东西**：6 副牌组、宽窗口下会摆成一行铺满整屏，
+        //    那一行正好从蜡烛和机器身上穿过去。
+        //
+        //  【为什么是"卡让开"而不是挪机位 / 挪机器】机位是桌面视角（按内容拟合，另一位在修
+        //    手牌出画）、机器摆位是用户明确要过的（与桌边平行）。这两样都不该为了"一排卡"动。
+        //    卡这一排本来就是自适应的 —— 让**行数**承担这件事最自然：排不进通道就换行。
+        //
+        //  【通道怎么算】按三件物件**活着的渲染器的世界包围盒**（和 TableRulesV21 的布局自检
+        //    同一个口径，不另抄坐标）：中心在左边的（蜡烛 / 量筒）顶左边界、在右边的（破壁机）
+        //    顶右边界，各留 PropGap。只有**这一排的 z 范围和它的 z 范围真的重叠**时才让 ——
+        //    整排都在它前面（更靠玩家）时不必为它缩窄。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>一排大卡与物件之间至少留的余量（世界单位）。5 厘米 = 卡边到物件还有一条缝。</summary>
+        private const float PropGap = 0.05f;
+
+        /// <summary>
+        /// 比这个高度还高的东西算"**立着的**、会挡住卡片"（蜡烛 / 量筒 / 破壁机：0.20~0.81 高）。
+        /// 桌面上平躺的文字（槽名牌，厚度 ≈ 0）不算 —— 它盖不住卡面，只是"被卡压住就看不见了"，
+        /// 那一条由"世界 XZ 不许相交"管（见 RowHitsProp）。
+        /// </summary>
+        private const float FlatKeepOutY = 0.05f;
+
+        /// <summary>
+        /// 这一排摆在哪：**z 基准 + 可用 x 范围**（把桌上挡路的东西都让开之后）。
+        ///
+        /// 【为什么不是"一个算式"而是"试几个候选再挑"】让开这件事有两个自由度（往前往后、往左往右），
+        ///   而它们互相牵制：整排退到蜡烛前面（z）就不用让 x 了、但可能压到「附 魔 位」那两行字；
+        ///   留在原处（z 不动）就得在 x 上挤那条不到 1 个单位宽的窄缝、一行 6 张立刻排不下。
+        ///   硬写成一条公式必然顾此失彼，所以这里把候选摊开、按**可用宽度**挑最好的那个：
+        ///     · 候选①＝历史位置（RowZ 居中）；
+        ///     · 候选②～＝整排退到某件挡路东西的近缘前面（z 上完全错开）。
+        ///   宽度相同就选离 RowZ 近的（少动摆位）。挑完的结果 ① 估算和 ② 摆位**共用**（同一个函数），
+        ///   所以不会出现"估算说放得下、摆出来顶到蜡烛"。
+        /// </summary>
+        private RowBox PlaceRow(int rows, float scale, TableView view)
+        {
+            const float margin = 0.04f;
+
+            RowBox r = new RowBox();
+            r.totalZ = (rows - 1) * CardD * scale * RowPitchK;
+            r.halfD  = CardD * scale * 0.5f;
+
+            float zMinView = view.nearZ + margin + r.halfD;
+            float zMaxView = Mathf.Max(zMinView, view.farZ - margin - r.halfD - r.totalZ);
+
+            CollectKeepOuts();
+
+            r.z0 = Mathf.Clamp(RowZ - r.totalZ * 0.5f, zMinView, zMaxView);
+            ChannelX(r, view, out r.x0, out r.x1);
+
+            // 候选②③：整排**退到某件东西前面**（远缘在它的近缘外侧留 PropGap）/
+            //          **挪到某件东西后面**（近缘在它的远缘里侧留 PropGap）。
+            //   ★ 方向不能随便选：相机在近端，**立着的东西一旦比卡片更靠玩家，就会盖住卡面** ——
+            //     用户截图里"榨汁机压在第 4/5 张牌组卡上"正是这一种（两者的世界矩形其实错开，
+            //     只是机器站在卡片前面把卡片挡住了）。所以：
+            //       · 立着的（蜡烛 / 量筒 / 破壁机）→ **只能待在它前面**（它必须留在卡片后面）；
+            //       · 平躺在桌面上的（「附 魔 位」那两行字）→ 前后都行（它盖不住卡面）。
+            for (int i = 0; i < keepOuts.Count; i++)
+            {
+                TryRowZ(ref r, view, zMinView, zMaxView,
+                        keepOuts[i].min.z - PropGap - r.halfD - r.totalZ);      // 前面
+
+                if (keepOuts[i].size.y <= FlatKeepOutY)
+                    TryRowZ(ref r, view, zMinView, zMaxView,
+                            keepOuts[i].max.z + PropGap + r.halfD);             // 后面（只有平的才允许）
+            }
+
+            r.channeled = true;
+            return r;
+        }
+
+        /// <summary>
+        /// 试一个候选 z：**可用宽度更宽的那一档赢**（宽度 = 这一排能排多大，是这个界面最缺的东西）；
+        /// 一样宽就选离 RowZ 近的（少动摆位）。
+        /// </summary>
+        private void TryRowZ(ref RowBox r, TableView view, float zMinView, float zMaxView, float z)
+        {
+            z = Mathf.Clamp(z, zMinView, zMaxView);
+
+            float keepZ = r.z0;
+            float cx0, cx1;
+            r.z0 = z;
+            ChannelX(r, view, out cx0, out cx1);
+            r.z0 = keepZ;
+
+            float w = cx1 - cx0;
+            float bestW = r.x1 - r.x0;
+
+            if (w > bestW + 1e-4f ||
+                (Mathf.Abs(w - bestW) <= 1e-4f && Mathf.Abs(z - RowZ) < Mathf.Abs(r.z0 - RowZ)))
+            {
+                r.z0 = z; r.x0 = cx0; r.x1 = cx1;
+            }
+        }
+
+        /// <summary>
+        /// 把"这一排的 z 范围 + 视锥可见范围"夹出可用 x 范围 —— 与**挡路东西**（keepOuts）
+        /// 的 x 边各留 PropGap。z 上和它错开的那些不参与（整排都在它前面 / 后面就互不相干）。
+        /// </summary>
+        private void ChannelX(RowBox r, TableView view, out float x0, out float x1)
+        {
+            view.XRangeAt(r.z0 - r.halfD, out x0, out x1);
+            if (x1 < x0) { float t = x0; x0 = x1; x1 = t; }
+
+            float zNear = r.z0 - r.halfD;
+            float zFar  = r.z0 + r.totalZ + r.halfD;
+
+            for (int i = 0; i < keepOuts.Count; i++)
+            {
+                Bounds b = keepOuts[i];
+
+                if (b.max.z + PropGap <= zNear || b.min.z - PropGap >= zFar) continue;
+
+                // 中心在左半边就顶左边界、右半边顶右边界（正中间的东西两边都顶 ——
+                // 那是"这个 z 上排不进去"，交给候选挑选 / 行数去解决，不在这里兜圈子）
+                if (b.center.x < 0f) x0 = Mathf.Max(x0, b.max.x + PropGap);
+                else                 x1 = Mathf.Min(x1, b.min.x - PropGap);
+            }
+        }
+
+        /// <summary>PlaceRow 的结果：z 基准、块深、半深、可用 x 范围。</summary>
+        private struct RowBox
+        {
+            public float z0, totalZ, halfD;
+            public float x0, x1;
+            public bool  channeled;
+        }
+
+        /// <summary>这一排大卡"挡路的东西"的世界包围盒（CollectKeepOuts 填）。</summary>
+        private readonly List<Bounds> keepOuts = new List<Bounds>();
+
+        /// <summary>
+        /// 这一排大卡**不许压上去**的东西：三件立着的物件（蜡烛 / 量筒 / 破壁机）+
+        /// 两块槽名牌（「附　魔 位」「上　桌 位」那两行字就刻在桌面上，被卡压住就看不见了）。
+        ///
+        /// 【为什么槽位框（那两个 L 形角标）不在里面】它们是**拿起牌才淡入**的提示框，
+        ///   平时 alpha = 0（见 TableSetup.BuildSlots），卡压上去屏幕上什么都看不到 ——
+        ///   把它算进来只会让这一排平白缩一圈。
+        ///
+        /// 【为什么按渲染器量】蜡烛的摆位在 TableTitleRig.CandleAt、量筒跟着蜡烛自己走、
+        ///   立绘的宽高由美术图按像素反算、槽名牌的尺寸由字号决定 —— 在这里各抄一份坐标，
+        ///   等于埋四个会过期的数。只算**活着的**渲染器：挂了立绘时程序化机身整组是关的，那部分不占地。
+        /// </summary>
+        private void CollectKeepOuts()
+        {
+            keepOuts.Clear();
+            if (setup == null) return;
+
+            AddPropBox(GameObject.Find(TableTitleRig.CandleName));
+
+            if (setup.juicer != null)
+            {
+                if (setup.juicer.scoreBoard != null) AddPropBox(setup.juicer.scoreBoard.gameObject);
+                AddPropBox(setup.juicer.gameObject);
+            }
+
+            // 两块槽名牌（名字见 TableSetup.BuildSlotLabels：SlotLabel0 / SlotLabel1）
+            AddPropBox(GameObject.Find("SlotLabel0"));
+            AddPropBox(GameObject.Find("SlotLabel1"));
+        }
+
+        private void AddPropBox(GameObject root)
+        {
+            if (root == null) return;
+
+            Renderer[] rs = root.GetComponentsInChildren<Renderer>();
+            bool any = false;
+            Bounds b = new Bounds();
+
+            for (int i = 0; i < rs.Length; i++)
+            {
+                Renderer r = rs[i];
+                if (r == null || !r.enabled) continue;
+                if (!r.gameObject.activeInHierarchy) continue;
+
+                if (!any) { b = r.bounds; any = true; }
+                else b.Encapsulate(r.bounds);
+            }
+
+            if (any) keepOuts.Add(b);
+        }
+
+        /// <summary>
+        /// 这一排卡（按 spots 的真实矩形）有没有压在**挡路的东西**上。
+        /// 判据是**世界 XZ 矩形相交** —— 和 TableRulesV21 的布局自检一套口径。
+        /// </summary>
+        private bool RowHitsProp(List<CardSpot> spots, float scale)
+        {
+            if (spots == null || spots.Count == 0) return false;
+
+            CollectKeepOuts();
+            if (keepOuts.Count == 0) return false;
+
+            float hx = CardW * 0.5f * scale;
+            float hz = CardD * 0.5f * scale;
+
+            for (int i = 0; i < spots.Count; i++)
+            {
+                float x0 = spots[i].x - hx, x1 = spots[i].x + hx;
+                float z0 = spots[i].z - hz, z1 = spots[i].z + hz;
+
+                for (int k = 0; k < keepOuts.Count; k++)
+                {
+                    Bounds b = keepOuts[k];
+                    if (x0 < b.max.x && x1 > b.min.x && z0 < b.max.z && z1 > b.min.z) return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 有没有**立着的东西站在这一排前面**（会把它盖住）。
+        ///
+        /// 【为什么"世界矩形不相交"还不够】相机在近端：一件东西只要比卡片更靠玩家、又比卡片高，
+        ///   它的剪影就会直接盖在卡面上 —— 用户截图里"榨汁机立绘压在第 4/5 张牌组卡上"
+        ///   正是这一种（两者的世界 XZ 其实是错开的）。判据：立着的东西**整个**都在某张卡前面
+        ///   （它的远缘还在卡的近缘外侧），而且 x 上有重叠 → 这张卡会被它挡住。
+        /// </summary>
+        private bool RowOccludedByProp(List<CardSpot> spots, float scale)
+        {
+            if (spots == null || spots.Count == 0) return false;
+
+            CollectKeepOuts();
+            if (keepOuts.Count == 0) return false;
+
+            float hx = CardW * 0.5f * scale;
+            float hz = CardD * 0.5f * scale;
+
+            for (int i = 0; i < spots.Count; i++)
+            {
+                float x0 = spots[i].x - hx, x1 = spots[i].x + hx;
+                float z0 = spots[i].z - hz;
+
+                for (int k = 0; k < keepOuts.Count; k++)
+                {
+                    Bounds b = keepOuts[k];
+                    if (b.size.y <= FlatKeepOutY) continue;               // 平的不挡卡面
+
+                    bool xHit = x0 < b.max.x + PropGap && x1 > b.min.x - PropGap;
+                    bool inFrontOfCard = b.max.z + PropGap <= z0;         // 它整个在卡的近侧（更靠玩家）
+
+                    if (xHit && inFrontOfCard) return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>挡路东西的数字版描述（报警时附上，好一眼看出被谁夹住了）。</summary>
+        private string PropChannelText()
+        {
+            if (keepOuts.Count == 0) return "（桌上没有挡路的东西）";
+
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            for (int i = 0; i < keepOuts.Count; i++)
+            {
+                Bounds b = keepOuts[i];
+                if (sb.Length > 0) sb.Append("；");
+                sb.Append("x ").Append(b.min.x.ToString("0.000")).Append("~").Append(b.max.x.ToString("0.000"))
+                  .Append(" z ").Append(b.min.z.ToString("0.000")).Append("~").Append(b.max.z.ToString("0.000"));
+            }
+            return sb.ToString();
         }
 
         /// <summary>
@@ -412,24 +717,29 @@ namespace GameJam.Prototype
             const float margin = 0.04f;
 
             int perRow = (n + rows - 1) / rows;
+
+            // ── 纵向 + 横向：走和估算**同一个** PlaceRow（z 基准 / 块深 / 可用 x 一次算出来）──
+            RowBox box = PlaceRow(rows, scale, view);
+
+            float totalZ = box.totalZ;
+            float halfD  = box.halfD;
+            float z0     = box.z0;
             float pitchZ = CardD * scale * RowPitchK;
 
-            // ── 横向：能保持原来"左偏 0.14"就保持，放不下就自动回正 ──
             float rowHalfW = ((perRow - 1) * Spacing + CardW) * scale * 0.5f;
-            float halfD    = CardD * scale * 0.5f;
+            float cx0 = box.x0, cx1 = box.x1;
 
-            float cx0, cx1;
-            view.XRangeAt(RowZ - ((rows - 1) * pitchZ) * 0.5f - halfD, out cx0, out cx1);
-
-            float cx = Mathf.Clamp((cx0 + cx1) * 0.5f + RowXOff,
-                                   Mathf.Min(cx0 + margin + rowHalfW, cx1 - margin - rowHalfW),
-                                   cx1 - margin - rowHalfW);
-
-            // ── 纵向：几行以 RowZ 为中心摊开，夹在可视范围里 ──
-            float totalZ = (rows - 1) * pitchZ;
-            float zMin = view.nearZ + margin + halfD;
-            float zMax = Mathf.Max(zMin, view.farZ - margin - halfD - totalZ);
-            float z0 = Mathf.Clamp(RowZ - totalZ * 0.5f, zMin, zMax);
+            float cx;
+            if (cx1 - cx0 >= rowHalfW * 2f)
+            {
+                cx = Mathf.Clamp((cx0 + cx1) * 0.5f + RowXOff,
+                                 Mathf.Min(cx0 + margin + rowHalfW, cx1 - margin - rowHalfW),
+                                 cx1 - margin - rowHalfW);
+            }
+            else
+            {
+                cx = (cx0 + cx1) * 0.5f;      // 通道比这一排还窄：居中，由 LayoutCards 去缩/报警
+            }
 
             for (int i = 0; i < n; i++)
             {
@@ -495,6 +805,31 @@ namespace GameJam.Prototype
         /// <summary>这一批卡是按几行摆的 / 缩到多大（建完卡之后可读，日志和探针用）。</summary>
         public int LastLayoutRows { get; private set; }
         public float LastLayoutScale { get; private set; }
+
+        /// <summary>
+        /// 这一排大卡（牌组 / 关卡）在**世界里**的包围盒 —— 布局自检
+        /// （TableRulesV21.CollectLayoutObstacles）拿它当障碍，探针也拿它两两求交。
+        /// 一张卡都没有（v2.1 的关卡界面、回合里）时返回 false。
+        ///
+        /// 【为什么量卡身就够】卡身的 footprint 就是这一排的占地（卡面同尺寸、文字在卡面内），
+        ///   量它和量整张卡对"谁压在谁的地盘上"是同一个答案，还省掉一堆文字网格。
+        /// </summary>
+        public bool RowWorldBounds(out Bounds b)
+        {
+            b = new Bounds();
+            bool any = false;
+
+            for (int i = 0; i < deckCards.Count; i++)
+            {
+                Renderer r = deckCards[i].body;
+                if (r == null) continue;
+
+                if (!any) { b = r.bounds; any = true; }
+                else b.Encapsulate(r.bounds);
+            }
+
+            return any;
+        }
 
         /// <summary>
         /// 这一批卡在屏幕上的包围盒（像素，左上原点）—— 验收"有没有跑出屏幕"用。

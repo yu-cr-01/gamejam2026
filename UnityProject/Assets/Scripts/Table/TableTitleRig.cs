@@ -124,6 +124,33 @@ namespace GameJam.Prototype
 
             BuildCandle();
             BuildJuicerTrigger();
+
+            // ★ 最后把机位切到**开场那一屏自己的**那一条（TableSetup.TitleView）。
+            //
+            // 【为什么要在开场 rig 里切，而不是在回合循环的阶段机里】
+            //   进开场有两条路（Begin 和 ReturnToTitle），两条都会调这个方法；
+            //   而"离开开场"只有一条路（Clear，由 ConfirmTitleStart 调）。
+            //   收在这两个方法里，机位就**跟着开场走**：开场在，就是开场那一屏的构图；
+            //   开场一撤，立刻回桌面视角。以后再加一条进开场的路径也不会漏。
+            //
+            // 【为什么要在这里重申一次，而不是只靠 Awake 里那次 SnapTo】
+            //   桌面视角的机位是**算出来的**，而进开场之前往往刚打过一关 ——
+            //   那台机位已经被拟合到别处去了（见 TableSetup.ReframeBoardView）。
+            //   不切回来的话，第二次开的"开场"就是上一关那个取景。
+            ApplyTitleView("进开场");
+        }
+
+        /// <summary>
+        /// 把机位切到开场那一屏（<see cref="TableSetup.TitleView"/>）—— 那组坐标是写死的常量
+        /// （TableSetup.TitleEye），和 755313c 起「桌面视角」用的那组一模一样。
+        /// </summary>
+        private void ApplyTitleView(string why)
+        {
+            if (setup == null || setup.rig == null) return;
+
+            setup.rig.SnapTo(TableSetup.TitleView);
+            Debug.Log("[开场] " + why + "：机位切到「" + TableSetup.TitleView + "」"
+                      + "（历史坐标 (0, 1.05, −1.02) → (0, 0, 0.10)，与 755313c 起「桌面视角」那组一致）");
         }
 
         public void Clear()
@@ -143,6 +170,20 @@ namespace GameJam.Prototype
             flame = null;
             candleLight = null;
             startingAt = -1f;
+
+            // ★ 离开开场 = 把机位还回**桌面视角**。
+            //
+            // 【为什么必须还】桌面视角那台机位是按桌上内容拟合的（手牌那一排必须整个在画面里，
+            //   见 TableSetup.ReframeBoardView）；开场这一屏停的是另一条写死的机位。
+            //   不还的话，"点了新游戏"之后玩家会一直用开场那台机位看牌桌 ——
+            //   手牌那一排就又沉到视口下边缘外面去了（那正是另一位在修的那条）。
+            //   ★ 只在**当前真停着开场机位**时才还：Build() 开头也会调 Clear()，
+            //     那一下不该去动玩家正在看的镜头。
+            if (setup != null && setup.rig != null && setup.rig.CurrentView == TableSetup.TitleView)
+            {
+                setup.rig.SnapTo(TableSetup.BoardView);
+                Debug.Log("[开场] 离开开场：机位还回「" + TableSetup.BoardView + "」（桌面视角，按桌上内容拟合）");
+            }
         }
 
         // ── 榨汁机：点它启动 ─────────────────────────────────────────
@@ -274,6 +315,14 @@ namespace GameJam.Prototype
 
         // ── 蜡烛 ─────────────────────────────────────────────────────
 
+        /// <summary>
+        /// 蜡烛的根节点名。**摆位（<see cref="CandleAt"/>）和这个名字都只在这里写一次**：
+        /// 量筒得分板（ScoreCylinderRig）靠名字找到蜡烛、跟着它摆；
+        /// 桌面素材级联的布局自检（TableRulesV21.CollectLayoutObstacles）也靠它把蜡烛算成障碍。
+        /// 各抄一份的后果是"蜡烛搬走了、量筒和自检还盯着旧坐标"，而那看起来只是"没对齐"。
+        /// </summary>
+        public const string CandleName = "TitleCandle";
+
         /// <summary>当前那根蜡烛的根节点（整局只有一根，见 BuildCandle 里的说明）。</summary>
         private GameObject candleRoot;
 
@@ -291,7 +340,7 @@ namespace GameJam.Prototype
             CardFactory.DestroySafe(candleRoot);
             candleRoot = null;
 
-            GameObject go = NewRoot("TitleCandle", CandleAt);
+            GameObject go = NewRoot(CandleName, CandleAt);
             candleRoot = go;
 
             // 蜡身

@@ -89,27 +89,36 @@ namespace GameJam.Prototype
         private const float LabelGap = 0.008f;
 
         // ── 摆位 ──────────────────────────────────────────────────────
-        /// <summary>蜡烛的物体名（TableTitleRig.BuildCandle → NewRoot("TitleCandle", CandleAt)）。</summary>
-        private const string CandleObjectName = "TitleCandle";
+        /// <summary>
+        /// 蜡烛的物体名 —— 走 TableTitleRig 那一个常量（见那里的说明：名字只写一次）。
+        /// </summary>
+        private const string CandleObjectName = TableTitleRig.CandleName;
 
         /// <summary>
         /// 相对蜡烛的水平偏移（桌面空间）。这两个数是**照着屏幕量出来的**，不是随手填的：
         ///
-        /// · z 给 −0.24：桌面视角下"往近端让 1 个单位 ≈ 屏幕上往下 490 像素"，
-        ///   让 0.24 之后筒口那圈落在蜡烛底下方一点点（"贴着蜡烛底"），
-        ///   但筒身整体还是**偏左**的 —— 在这个机位上，画面左边竖着的东西都是斜的
-        ///   （蜡烛自己也是斜的），量筒越高越往左，所以它不会真的盖住蜡烛。
-        ///   让少了（第一版给 0.10）屏幕上只低 49 像素，整支量筒糊在蜡烛身上；
-        ///   让多了（0.28 以上）它就跟蜡烛脱开、变成桌面上另一个孤零零的瓶子。
+        /// · z 给 −0.38：桌面视角下"往近端让 1 个单位 ≈ 屏幕上往下 470 像素"，
+        ///   让多少 = "筒口那圈要落在蜡烛底下方多远"。
+        ///
+        ///   ★ 这个数改过一次，改的原因写在下面（用户报的"穿模"）：
+        ///     旧值 −0.24 是照"两支的**底**在屏幕上对齐"调的，算下来筒口那圈
+        ///     **正好落在蜡烛底座上**（实拍：筒口顶在蜡烛底 ±4 像素内）——
+        ///     于是屏幕上那六个数（1000/800/600/400/200/0）就贴着蜡烛底座排成一串，
+        ///     用户的原话是「量筒与蜡烛几乎叠在一起……数字就压在蜡烛底座旁」。
+        ///     （注意：这两样在**世界**里从来没相交 —— 量筒在 z ≈ +0.10、蜡烛在 z ≈ +0.34，
+        ///       隔了 24 厘米；用户看到的是**屏幕**上前后投影叠在一起。所以修法只能是
+        ///       "把其中一个在屏幕上挪开"，而不是"解决深度打架"。）
+        ///     现在 −0.38：筒口那圈落到蜡烛底下方约 66 像素（同一机位、同一窗口尺寸实测），
+        ///     既明确分开、又还是"挂在蜡烛下面"的读法。再大就脱开成一瓶孤零零的管子了。
         ///
         /// · x 给 +0.062：**透视会让"往下"的物件同时往画面外侧跑** ——
         ///   同一个世界 x，越靠近相机投影出来越靠左（蜡烛自己也是这样，它是斜的）。
         ///   不补这一点，量筒的底会落在蜡烛左边 70 像素处，看着是"左下方另一根管子"；
         ///   补上之后两支的**底**在屏幕上基本对齐，一眼就是"蜡烛下面那支量筒"。
-        ///   再往右一点就会压到前排关卡卡在屏幕上的左边缘（那排卡铺得很宽）。
+        ///   往右再加就会压到前排素材级联在屏幕上的左边缘（那一列铺得很宽）。
         /// </summary>
         private const float CandleOffsetX = 0.062f;
-        private const float CandleOffsetZ = -0.24f;
+        private const float CandleOffsetZ = -0.38f;
 
         /// <summary>
         /// 找不到蜡烛时的兜底坐标 —— 和 TableTitleRig.CandleAt 同一个值。
@@ -484,6 +493,7 @@ namespace GameJam.Prototype
         private void Update()
         {
             PlaceUnderCandle();
+            VerifyCandleSeparation();
 
             // 液面平滑追赶目标值 —— 得分是"掉"下来的，一跳到位看不出来涨了多少
             if (Mathf.Abs(shownLevel - wantLevel) > 0.0005f)
@@ -492,6 +502,129 @@ namespace GameJam.Prototype
                 ApplyLevel();
                 RefreshTickHighlight();
             }
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  自检：量筒和蜡烛**在屏幕上**不许贴到一起
+        //
+        //  【为什么这条非要有】用户报的那一幕「量筒与蜡烛几乎叠在一起，数字就压在蜡烛底座旁」
+        //    是**屏幕空间**的事：这两样在世界里隔了 24 厘米（量筒 z ≈ +0.10、蜡烛 z ≈ +0.34），
+        //    任何"世界包围盒相交"的自检都判它们没问题 —— 而玩家看到的确实是一坨。
+        //    所以判据必须是"把它们投到屏幕上、量两块屏幕包围盒之间还剩多少像素"。
+        //
+        //  【为什么只在"有东西变了"的时候量】这个东西的位置 / 相机机位 / 窗口分辨率
+        //    任何一个变了，屏幕间距都会变（自由转头转到某个角度也可能把它们叠起来）——
+        //    但每帧都打日志就是刷屏。所以：每 15 帧看一次、四个输入都没变就直接跳过，
+        //    而且只在**结论翻转**时说话（正常一局日志里最多两行：开局 ✓、哪天坏了 ★）。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>结论翻转时最多打几行（防"玩家一直转视角"把日志刷满）。</summary>
+        private const int SepLineCap = 6;
+
+        /// <summary>上次量的时候"结论是什么"：−1 = 还没量过、0 = 分开、1 = 叠影。</summary>
+        private int sepState = -1;
+        private int sepLines;
+
+        private Camera    sepCam;
+        private Vector3   sepLastPos    = new Vector3(9999f, 9999f, 9999f);
+        private Vector3   sepLastCamPos = new Vector3(9999f, 9999f, 9999f);
+        private Quaternion sepLastCamRot;
+        private int       sepLastW, sepLastH;
+
+        private void VerifyCandleSeparation()
+        {
+            if (candle == null) return;                     // 蜡烛还没建出来/还没找到，量不了
+            if (Time.frameCount % 15 != 0) return;
+
+            if (sepCam == null)
+            {
+                sepCam = Camera.main;
+                if (sepCam == null) sepCam = FindObjectOfType<Camera>();
+                if (sepCam == null) return;
+            }
+
+            // 四个输入（自己的位置 / 相机位姿 / 窗口分辨率）都没变 → 结论不可能变，跳过
+            bool moved = (transform.position - sepLastPos).sqrMagnitude > 1e-8f
+                      || (sepCam.transform.position - sepLastCamPos).sqrMagnitude > 1e-8f
+                      || Quaternion.Angle(sepCam.transform.rotation, sepLastCamRot) > 0.05f
+                      || Screen.width != sepLastW || Screen.height != sepLastH;
+            if (!moved) return;
+
+            sepLastPos    = transform.position;
+            sepLastCamPos = sepCam.transform.position;
+            sepLastCamRot = sepCam.transform.rotation;
+            sepLastW      = Screen.width;
+            sepLastH      = Screen.height;
+
+            float ax0, ay0, ax1, ay1, bx0, by0, bx1, by1;
+            if (!ScreenBox(transform, sepCam, out ax0, out ay0, out ax1, out ay1)) return;
+            if (!ScreenBox(candle,    sepCam, out bx0, out by0, out bx1, out by1)) return;
+
+            // 两个屏幕盒在上下 / 左右两个方向上各自的间隙：任一方向有正间隙 = 画面上不重叠
+            float gapX = Mathf.Max(bx0 - ax1, ax0 - bx1);
+            float gapY = Mathf.Max(by0 - ay1, ay0 - by1);
+            bool  apart = gapX > 0f || gapY > 0f;
+            float nearest = Mathf.Max(gapX, gapY);          // 真正"离多远"取两者里大的那个
+
+            int state = apart ? 0 : 1;
+            if (state == sepState) return;
+            sepState = state;
+
+            if (sepLines >= SepLineCap) return;
+            sepLines++;
+
+            string text = "[V21][得分板] 量筒与蜡烛的屏幕包围盒：量筒 x " + ax0.ToString("0") + "~" + ax1.ToString("0")
+                        + "、y " + ay0.ToString("0") + "~" + ay1.ToString("0")
+                        + "｜蜡烛 x " + bx0.ToString("0") + "~" + bx1.ToString("0")
+                        + "、y " + by0.ToString("0") + "~" + by1.ToString("0")
+                        + "　（屏幕 " + Screen.width + "×" + Screen.height + "）";
+
+            if (apart)
+                Debug.Log(text + "　→ ✓ 分开 " + nearest.ToString("0") + " px");
+            else
+                Debug.LogWarning(text + "　→ ★ 叠影 " + (-gapX).ToString("0") + " × " + (-gapY).ToString("0")
+                                 + " px —— 量筒的刻度数字会压在蜡烛身上（改 CandleOffsetX / CandleOffsetZ）");
+        }
+
+        /// <summary>
+        /// 一个物体（含子物体，只算活着的渲染器）在屏幕上的包围盒（左上原点）。
+        /// 有角落在相机背后就返回 false —— 那时候屏幕盒没有意义。
+        /// </summary>
+        private static bool ScreenBox(Transform root, Camera cam,
+                                      out float x0, out float y0, out float x1, out float y1)
+        {
+            x0 = float.MaxValue; y0 = float.MaxValue;
+            x1 = float.MinValue; y1 = float.MinValue;
+
+            Renderer[] rs = root.GetComponentsInChildren<Renderer>();
+            bool any = false;
+
+            for (int i = 0; i < rs.Length; i++)
+            {
+                Renderer r = rs[i];
+                if (r == null || !r.enabled) continue;
+                if (!r.gameObject.activeInHierarchy) continue;
+
+                Bounds b = r.bounds;
+                any = true;
+
+                for (int c = 0; c < 8; c++)
+                {
+                    Vector3 corner = new Vector3((c & 1) == 0 ? b.min.x : b.max.x,
+                                                 (c & 2) == 0 ? b.min.y : b.max.y,
+                                                 (c & 4) == 0 ? b.min.z : b.max.z);
+                    Vector3 s = cam.WorldToScreenPoint(corner);
+                    if (s.z <= 0f) return false;
+
+                    float sy = Screen.height - s.y;
+                    if (s.x < x0) x0 = s.x;
+                    if (s.x > x1) x1 = s.x;
+                    if (sy  < y0) y0 = sy;
+                    if (sy  > y1) y1 = sy;
+                }
+            }
+
+            return any;
         }
     }
 }

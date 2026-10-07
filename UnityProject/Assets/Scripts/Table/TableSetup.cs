@@ -44,13 +44,54 @@ namespace GameJam.Prototype
         /// <summary>视角名，供 HUD 和快捷键使用。最后两个是自由转头和榨汁机特写。</summary>
         public static readonly string[] ViewNames =
         {
-            "board", "hand", "top", "juicer", CameraRig.FreeView
+            BoardView, "hand", "top", "juicer", CameraRig.FreeView
         };
 
         public static readonly string[] ViewLabels =
         {
             "桌面视角", "手牌特写", "俯视", "榨汁机特写", "自由视角"
         };
+
+        /// <summary>
+        /// 「桌面视角」的机位名。**它的机位不是写死的坐标，是算出来的**（见 <see cref="ReframeBoardView"/>）——
+        /// 所以这里给它一个常量名，免得"算出来的机位"和 HUD / 快捷键里那个字符串哪天对不上。
+        /// </summary>
+        public const string BoardView = "board";
+
+        /// <summary>
+        /// 「开场界面」那一屏的机位名（**故意不在 <see cref="ViewNames"/> 里** ——
+        /// 玩家能选的视角还是那五个，这一条只是开场自己停的地方）。
+        ///
+        /// 【为什么要有它】用户原话：「不是，你怎么换摄像头视角了？换回来」——配图是开场那一屏。
+        ///   根因是「桌面视角」被改成了**按桌上内容拟合**（那是为了修"手牌被视口下边缘切掉"，
+        ///   是用户要的改动 ✓），而开场界面用的**就是**桌面视角这台机位
+        ///   （TableSetup.Awake 里 BuildCamera 之后 SnapTo 它，之后进开场再没有别人动机位）——
+        ///   于是"修手牌取景"顺手把开场那一屏也重新构图了（这是副作用 ✗）。
+        ///   修法是把两件事拆开：开场停在**原来那组写死的坐标**上（见 <see cref="TitleEye"/>），
+        ///   桌面视角继续按内容拟合。取景回到"和以前一样"，手牌修复一点没退。
+        ///
+        /// 【它是怎么被套用的】进开场（<see cref="TableTitleRig.Build"/>）时切过来，
+        ///   离开开场（<see cref="TableTitleRig.Clear"/>）时切回桌面视角 ——
+        ///   两处都在开场 rig 自己身上，不改回合循环的阶段机。
+        /// </summary>
+        public const string TitleView = "title";
+
+        /// <summary>
+        /// 开场那一屏的机位 —— **就是从 755313c（"回合循环搬到 3D 桌面上跑"）起
+        /// BuildCamera 里一直写死的那一组坐标**，一个数都没动过：
+        ///   相机 (0, 1.05, −1.02)、注视 (0, 0, 0.10)（fov 还是 <see cref="BuildCamera"/> 里的 42°）。
+        ///
+        /// 【为什么不直接让开场也用 BoardView】因为 BoardView 现在**不是坐标、是拟合结果**
+        ///   （见 <see cref="ReframeBoardView"/>）：它按"手牌那一排也在画面里"往外退，
+        ///   算出来比这组坐标远 ~25%、还往右挪了 ~0.17。开场那一屏上只有书 / 木牌 / 蜡烛 /
+        ///   破壁机，没有任何必须装下的手牌 —— 那就没有任何理由改它的构图。
+        ///
+        /// 【为什么两个常量写在一起还留着 BoardView 那次注册】那次注册现在是**兜底**：
+        ///   拟合万一算不出来（点集空着），画面至少还有相机可用。两者同源（同一个 pose），
+        ///   所以"兜底"和"开场"永远是一台机位，不会各写一份。
+        /// </summary>
+        private static readonly Vector3 TitleEye  = new Vector3(0f, 1.05f, -1.02f);
+        private static readonly Vector3 TitleLook = new Vector3(0f, 0f, 0.10f);
 
         /// <summary>
         /// 桌面材质里那个"还没贴木纹之前"的染色。
@@ -94,6 +135,11 @@ namespace GameJam.Prototype
             BuildChoiceRig();     // 牌组 / 刀片的桌面表现
             BuildTitleRig();      // 开场界面
 
+            // ★ 桌面视角的机位**放到这里才算**：它要按"桌上有什么"（两个槽位框、槽名牌、
+            //   刀片位、级联列、破壁机）拟合，这些上面几步才建出来。
+            //   BuildCamera 里那次注册只是兜底机位（算不出来时画面不至于没有相机）。
+            ReframeBoardView(true);
+
             // ★ 最后才开始。Begin 会先停在开场界面，
             //   那时候桌面、HUD、交互、开场 rig 必须都已经就位 ——
             //   以前是在 BuildTurnLoop 里就 Begin 的，顺序一旦动过就会踩空。
@@ -103,6 +149,28 @@ namespace GameJam.Prototype
             // 环境变量 DSH_AUTOSTART=1 时替玩家把"点书 → 进第 1 关 → 确认牌组 → 确认刀片"
             // 按一遍，直接停在"第 1 回合、什么都没动"的桌面上 —— 和编辑器探针同一起点。
             if (TableSettings.AutoStart) turnLoop.AutoStartFirstLevel();
+        }
+
+        /// <summary>上一次算「桌面视角」时的宽高比（−1 = 还没算过）。</summary>
+        private float boardAspect = -1f;
+
+        /// <summary>
+        /// 宽高比一变就重算「桌面视角」。
+        ///
+        /// 【为什么必须每帧看着它】"装得下"这件事**随比例变**：水平半角 = 垂直半角 × aspect。
+        ///   编辑器里拖一下 Game 视图面板的大小、打包版被玩家拉窗口，比例都会变；
+        ///   只在启动时算一次的话，比例一变手牌就又被下边缘切掉了（这正是用户报的那一幕）。
+        ///   每帧只做一次比值比较，真的变了才重算。
+        /// </summary>
+        void Update()
+        {
+            if (cam == null) return;
+            if (Mathf.Approximately(cam.aspect, boardAspect)) return;
+
+            // 正看着桌面视角就立刻套用新机位（否则玩家会看到"手牌还在画面外"的那一帧）；
+            // 在别的视角 / 自由转头里只更新机位，不动玩家当前的镜头。
+            bool active = rig != null && rig.CurrentView == BoardView;
+            ReframeBoardView(active);
         }
 
         // ── 开场界面 ──────────────────────────────────────────────────
@@ -177,10 +245,11 @@ namespace GameJam.Prototype
         /// 【为什么是 (0.72, 0, 0.20)】
         ///   · x = 0.72：仍然在桌子右侧（原来 0.74，位置几乎没动），
         ///     同时让开中间的卡位（x ∈ [−0.45, 0.45]）与刀片（桌面中心）。
-        ///     ★ 这是"再往右就出画"的边界值附近：桌面视角的水平可视半宽约 ±1.0 世界单位
-        ///     （相机 (0, 1.05, −1.02)、fov 42°、宽高比 ≈1.8），立绘宽 0.52、剪影右缘再往外 0.22，
-        ///     所以 x 过了 0.8 就会把进料斗那一块切在屏幕右沿外。
-        ///     想更贴右边，得先动 <see cref="BuildCamera"/> 里 "board" 那个机位。
+        ///     ★ 这个值当年是"再往右就出画"的边界：那时桌面视角是个写死的机位，
+        ///     水平可视半宽只有 ±1.0 世界单位（相机 (0, 1.05, −1.02)、fov 42°、宽高比 ≈1.8）。
+        ///     现在桌面视角是**按内容拟合**出来的（见 <see cref="ReframeBoardView"/>），
+        ///     机器整个被算进"必须装下的点集"里，所以右边还有余量 ——
+        ///     想更贴右，先看那边拟合出来的边距，而不是先改这个坐标。
         ///   · z = 0.20：比桌面中心（0.06）稍靠远端，机器站在"卡位后面一排"，
         ///     与 z = −0.20 的两个槽位、z = −0.58 的手牌完全错开，不压卡牌落点。
         ///   · 整机**不旋转**（见下面 localRotation）—— 机器与桌子的两条边都平行。
@@ -238,8 +307,18 @@ namespace GameJam.Prototype
             rig = go.AddComponent<CameraRig>();
             rig.cam = cam;
 
-            // 三个固定机位
-            rig.Register("board", new Vector3(0f, 1.05f, -1.02f), new Vector3(0f, 0f, 0.10f));
+            // 三个固定机位。
+            // ★ 「桌面视角」这里给的只是**兜底机位**（按"4 张手牌那会儿"的旧坐标）：
+            //   真正的机位由 ReframeBoardView 按"桌上有什么 + 当前宽高比"拟合出来，
+            //   而那一刻（Awake 里 BuildCamera 这一段）槽位框、破壁机都还不存在。
+            //   留这一份的意义是"拟合万一算不出来（比如点集空着），画面也还有相机可用"，
+            //   不是"这就是桌面视角"。
+            //
+            // ★★ 开场那一屏的机位（TitleView）**就是这同一组坐标**（见 TitleEye）★★
+            //   它必须是**独立的**一条：桌面视角会被 ReframeBoardView 按内容重算，
+            //   而开场那一屏的构图要和以前一模一样 —— 两条名字分开，"改一条不会顺手改另一条"。
+            rig.Register(TitleView, TitleEye, TitleLook);
+            rig.Register(BoardView, TitleEye, TitleLook);
             rig.Register("hand",  new Vector3(0f, 0.52f, -1.00f), new Vector3(0f, 0f, -0.56f));
             rig.Register("top",   new Vector3(0f, 1.55f, 0.02f),  new Vector3(0f, 0f, 0.02f));
 
@@ -256,7 +335,9 @@ namespace GameJam.Prototype
             rig.Register(CameraRig.FreeView,
                          new Vector3(0f, 1.16f, -1.28f), new Vector3(0f, 0f, 0.04f));
 
-            rig.SnapTo("board");
+            // ★ 开局停在**开场那一屏的机位**上（不是桌面视角）：Awake 走完就是开场界面，
+            //   而桌面视角的机位此刻还没拟合出来（ReframeBoardView 在 Awake 末尾才跑）。
+            rig.SnapTo(TitleView);
         }
 
         // ── 灯光 ──────────────────────────────────────────────────────
@@ -292,6 +373,10 @@ namespace GameJam.Prototype
             table.transform.SetParent(transform, false);
             table.transform.localScale = new Vector3(2.7f, 0.10f, 1.85f);
             table.transform.localPosition = new Vector3(0f, -0.05f, 0.06f);   // 顶面落在 y = 0
+
+            // 量一次桌子的占地：取景要拿"远沿"当"画面别把桌子切一半"的那条线（见 CollectBoardFitPoints）。
+            // 立方体网格是 1×1×1、又没转过，所以 position ± localScale/2 就是它的世界包围盒。
+            tableBounds = new Bounds(table.transform.position, table.transform.localScale);
 
             Renderer r = table.GetComponent<Renderer>();
             if (r != null)
@@ -663,6 +748,14 @@ namespace GameJam.Prototype
         /// </summary>
         public void ReframeHandView()
         {
+            // ★ 桌面视角那台机位也得跟着重算：它要装下的东西里就有手牌那一排，
+            //   张数一变（发牌 / 出牌 / 收回手牌 / 产出的卡进手牌）横向宽度就变了。
+            //   放在这个方法的**最前面**、也放在"手牌为空就返回"之前 ——
+            //   空手牌时取景按"至少 5 张"算（见 CollectBoardFitPoints），不该被这一句跳过。
+            //   applyNow = true：玩家正看着桌面视角时立刻套用。5 张以内算出来的机位是同一个，
+            //   所以出牌那一刻镜头并不会动 —— 只有真的超过 5 张（画面要装不下了）才动。
+            ReframeBoardView(true);
+
             if (rig == null || cam == null || hand == null || hand.Count == 0) return;
 
             bool any = false;
@@ -690,6 +783,284 @@ namespace GameJam.Prototype
 
             box.Expand(new Vector3(0.07f, 0f, 0.07f));      // 边上留一圈空，别贴着画面边
             rig.FrameTableBounds("hand", box, HandViewTiltDeg, 1.06f);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  「桌面视角」的取景
+        //
+        //  用户报的那一幕：v2.1 的第 1 回合里，手牌最下面那张卡**只露出上半截** ——
+        //  它挂在画面最底部、「附 魔 位 / 上 桌 位」两行字的下方，被视口下边缘切掉。
+        //
+        //  【根因】桌面视角原来是个写死的机位 (0, 1.05, −1.02) → (0, 0, 0.10)。
+        //    它的下边缘在桌面高度上只到 z ≈ −0.51，而手牌那一排在 z = −0.58 ± 卡深一半
+        //    （−0.7475 ~ −0.4125）—— 也就是说**手牌那一排天生就在画面外**，
+        //    只有最远的那 3 厘米探进画面里。在 fov 42° 的固定垂直视角下，
+        //    这一点和宽高比无关：16:9 切、竖屏也切。
+        //
+        //  【为什么不去挪手牌那一排】它后面 3.7 厘米就是「附 魔 位 / 上 桌 位」两块槽名牌
+        //    （z = −0.41），再往前是槽位框（近沿 z = −0.375）。往回挪会顶到槽位框，
+        //    往玩家这边挪只会掉得更低 —— 那两样都是明令不许动的几何。
+        //    所以能动的只有**取景**：让相机退到"手牌那一排也在画面里"的距离上。
+        //
+        //  【为什么不是一个更远的写死坐标】可视范围随**宽高比**变（水平半角 =
+        //    垂直半角 × aspect）。写死的坐标只能对一个比例成立 —— 编辑器 Free Aspect
+        //    和打包版 1600×900 就会有一个是错的。这里每次按当前 cam.aspect 拟合。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 「桌面视角」的俯角 —— 和原来那个写死机位的角度一样（atan2(1.05, 1.12) ≈ 43.2°）。
+        /// 取景改的是"退多远、画面中心对着哪"，**看桌子的角度一个字没改**。
+        /// </summary>
+        private const float BoardViewTiltDeg = 43.2f;
+
+        /// <summary>
+        /// 「桌面视角」边上至少留多少：1.10 = 每个方向至少留 1/1.1 半屏（约 4.5%）。
+        /// 用户点名的是"手牌不能贴边被切"，留这一圈就是"别贴边"的余量 ——
+        /// 顺带也把 HUD 那几行字压过来的高度让开了。
+        /// </summary>
+        private const float BoardViewMargin = 1.10f;
+
+        /// <summary>
+        /// 手牌那一排**至少按几张算**取景：正文 §2.6 的初始手牌是 4 素材 + 1 法术。
+        ///
+        /// 【为什么要有这个下限】取景要是跟着当前张数走，出掉一张牌镜头就往回缩一点 ——
+        /// 玩家每出一张牌画面都动一下，比"多留一张的位置"难看得多。
+        /// 所以张数少时按 5 张算（机位稳定），真的超过 5 张（产出的卡进手牌）才跟着放大。
+        /// </summary>
+        private const int BoardFitHandCards = 5;
+
+        /// <summary>取景拟合用的点集（复用同一个 List：每次发牌 / 出牌都会重算一遍）。</summary>
+        private readonly List<Vector3> boardFitPoints = new List<Vector3>();
+
+        /// <summary>其中"手牌那一排"的那几个点 —— 自检要单独量它（用户点名的是它）。</summary>
+        private readonly List<Vector3> handFitPoints = new List<Vector3>();
+
+        /// <summary>这次取景按几张手牌算的（日志里要写清楚"量的是几张"）。</summary>
+        private int boardFitHandCount;
+
+        /// <summary>
+        /// 重算「桌面视角」的机位。
+        ///
+        /// 【什么东西必须装得下】见 <see cref="CollectBoardFitPoints"/> 的清单 ——
+        ///   原则是"玩家要看、要点的东西一个都不切"：手牌那一排、两个槽位框与槽名牌、
+        ///   刀片卡、素材级联那一列、破壁机。
+        ///
+        /// 【为什么 applyNow 单独一个参数】比例变了 / 手牌变了的时候，如果玩家正看着
+        ///   桌面视角，就该**立刻**套用（不然会出现"手牌还在画面外"的那一帧）；
+        ///   而玩家在别的视角或自由转头里时，只更新机位、不动他当前的镜头。
+        ///   发牌途中抢镜头很跳，所以调用点只在"比例变了"和"手牌重排"这两处传 true。
+        /// </summary>
+        public void ReframeBoardView(bool applyNow)
+        {
+            if (rig == null || cam == null) return;
+
+            CollectBoardFitPoints(boardFitPoints, handFitPoints);
+            if (boardFitPoints.Count == 0) return;
+
+            if (!rig.FramePoints(BoardView, boardFitPoints, BoardViewTiltDeg, BoardViewMargin, false))
+            {
+                // 拟合算不出来（点集异常）时保留旧机位，但必须留痕 ——
+                // 静默保留会表现成"取景改了但画面没变"，最难查的那种。
+                Debug.LogWarning("[V21][取景] 桌面视角拟合失败（点 " + boardFitPoints.Count
+                                 + " 个），保留原机位。");
+                return;
+            }
+
+            boardAspect = cam.aspect;
+
+            if (applyNow && rig.CurrentView == BoardView && !rig.IsFreeLook) rig.SnapTo(BoardView);
+
+            VerifyBoardFraming();
+        }
+
+        /// <summary>
+        /// 「桌面视角」必须装下的点集。
+        ///
+        /// 【为什么是点集，而不是一个包围盒】见 <see cref="CameraRig.FramePoints"/>：
+        ///   包围盒把不同深度的东西当成同一层，而手牌那一排正是离相机最近的一层 ——
+        ///   按盒估出来的距离偏小，牌照样会被切。
+        ///
+        /// 【为什么每一项都从游戏自己那份几何里读】槽位框走 board.SlotPosition + SlotSize*、
+        ///   槽名牌走 SlotLabelPosition、级联列走 TableRulesV21 的公开常量、手牌走
+        ///   TableTurnLoop.HandSlot —— 这里一个坐标都不另抄。抄一份的后果是
+        ///   "那边挪了、取景还按旧位置算"，也就是这一轮要修的那类问题。
+        ///   ★ 桌面素材的级联排布、槽位框几何、刀片位**一个都没动**，这里只是把它们读出来。
+        /// </summary>
+        private void CollectBoardFitPoints(List<Vector3> all, List<Vector3> handPts)
+        {
+            all.Clear();
+            handPts.Clear();
+
+            // ① 手牌那一排：按"至少 5 张、实际更多就按实际"算每张卡的四个角。
+            //    卡的角按偏航算（扇形是张开的），最外侧那一点就在角上。
+            int live = 0;
+            if (hand != null)
+                for (int i = 0; i < hand.Count; i++)
+                    if (hand[i] != null && hand[i].slotIndex < 0) live++;
+
+            int n = Mathf.Max(BoardFitHandCards, live);
+            for (int i = 0; i < n; i++)
+            {
+                Vector3 pos, euler;
+                TableTurnLoop.HandSlot(i, n, out pos, out euler);
+                AddCorners(handPts, pos, CardFactory.CardWidth, CardFactory.CardDepth, euler.y);
+            }
+            all.AddRange(handPts);
+
+            // ② 两个槽位框 + 两块槽名牌（玩家要照着它们拖牌；字必须看得见）
+            if (board != null)
+            {
+                for (int i = 0; i < board.SlotCount; i++)
+                {
+                    AddCorners(all, board.SlotPosition(i), SlotSizeX, SlotSizeZ, 0f);
+
+                    // 名牌的尺寸走 TableRulesV21 那份（布局自检把它当障碍量，是同一个矩形）
+                    AddCorners(all, SlotLabelPosition(i),
+                               TableRulesV21.SlotLabelHalfW * 2f, TableRulesV21.SlotLabelHalfD * 2f, 0f);
+                }
+            }
+
+            // ③ 刀片卡（桌心，正文不许动）+ 桌面素材的级联列（一列，放不下会镜像到左边）
+            AddCorners(all, TableChoiceRig.BladeSpot, CardFactory.CardWidth, CardFactory.CardDepth, 0f);
+
+            float cascadeZ0 = TableRulesV21.TableCascadeNearLimitZ - CardFactory.CardDepth * 0.5f;
+            float cascadeZ1 = TableRulesV21.TableCascadeFirstZ     + CardFactory.CardDepth * 0.5f;
+            AddCorners(all, new Vector3( TableRulesV21.TableCascadeX, 0f, (cascadeZ0 + cascadeZ1) * 0.5f),
+                       CardFactory.CardWidth, cascadeZ1 - cascadeZ0, 0f);
+            AddCorners(all, new Vector3(-TableRulesV21.TableCascadeX, 0f, (cascadeZ0 + cascadeZ1) * 0.5f),
+                       CardFactory.CardWidth, cascadeZ1 - cascadeZ0, 0f);
+
+            // ④ 破壁机：玩家要点它启动，整机得在画面里
+            AddBoxCorners(all, JuicerFootprint());
+
+            // ⑤ 桌子远沿 —— 只要一个点：它的作用是"画面别只装下玩法内容、把桌子切一半"，
+            //    而桌面是块平板，两个桌角出画不丢任何玩法信息（真要装下 ±1.35 的桌角，
+            //    在竖屏比例下得多退 10%，换来的只是两块空木板）。
+            all.Add(new Vector3(0f, 0f, tableBounds.max.z));
+
+            boardFitHandCount = n;
+        }
+
+        /// <summary>
+        /// 破壁机的世界占地（取景拟合的输入之一）。
+        ///
+        /// 【为什么尺寸由立绘自己报】立绘的宽高是按像素反算的（见 BlenderArt.Setup：
+        ///   机身 0.70 米对应立绘上 93~671 像素，整机再套 0.75 的缩放）。
+        ///   在这里抄一份 0.52 × 0.61，美术换一张立绘取景就过期了 ——
+        ///   而"机器被切掉一半"正是这一轮要修的那类问题。
+        ///   拿不到立绘（美术没挂上 / 退回程序化机身）时按设计尺寸估：机身 0.70 × 0.75 ≈ 0.53 高、0.50 宽。
+        /// </summary>
+        private Bounds JuicerFootprint()
+        {
+            float w = 0.50f, h = 0.53f;
+
+            BlenderArt art = juicer != null ? juicer.GetComponentInChildren<BlenderArt>() : null;
+            if (art != null)
+            {
+                Vector2 ws = art.WorldSize;
+                if (ws.x > 0.05f && ws.y > 0.05f) { w = ws.x; h = ws.y; }
+            }
+
+            // 立绘沿 +Z 推了 zOffset（见 BlenderArt.Place），这里按 0.25 的厚度把它罩住 ——
+            // 取景关心的是"宽高装不装得下"，前后这点厚度对边距没有可见影响。
+            Vector3 center = JuicerAt + new Vector3(0f, h * 0.5f, 0.10f);
+            return new Bounds(center, new Vector3(w, h, 0.25f));
+        }
+
+        /// <summary>
+        /// 把一个**平躺的矩形**（卡 / 槽位框 / 槽名牌）的四个角加进点集。
+        /// yawDeg 是它绕 Y 的偏航：要按旋转后的半宽半深算角点 ——
+        /// 扇形张开时最外侧那一点正好在角上，只加卡心会把它漏掉
+        /// （和 ReframeHandView 量手牌占地是同一个口径）。
+        /// </summary>
+        private static void AddCorners(List<Vector3> pts, Vector3 center, float width, float depth, float yawDeg)
+        {
+            float yaw = yawDeg * Mathf.Deg2Rad;
+            float c = Mathf.Cos(yaw), s = Mathf.Sin(yaw);
+
+            for (int sx = -1; sx <= 1; sx += 2)
+            {
+                for (int sz = -1; sz <= 1; sz += 2)
+                {
+                    float lx = sx * width * 0.5f;
+                    float lz = sz * depth * 0.5f;
+                    pts.Add(center + new Vector3(lx * c + lz * s, 0f, -lx * s + lz * c));
+                }
+            }
+        }
+
+        /// <summary>把一个世界包围盒的八个角加进点集。</summary>
+        private static void AddBoxCorners(List<Vector3> pts, Bounds b)
+        {
+            for (int i = 0; i < 8; i++)
+            {
+                pts.Add(new Vector3((i & 1) == 0 ? b.min.x : b.max.x,
+                                    (i & 2) == 0 ? b.min.y : b.max.y,
+                                    (i & 4) == 0 ? b.min.z : b.max.z));
+            }
+        }
+
+        /// <summary>
+        /// 桌子的世界包围盒 —— 取景只要它的远沿那一个点（近沿在玩家身后，本来就不该进画面）。
+        /// 在 BuildTable 里量一次，免得"桌子挪了 / 放大了"这里还按旧尺寸算。
+        /// </summary>
+        private Bounds tableBounds;
+
+        /// <summary>
+        /// 「取景」自检：把点集按**桌面视角那个机位**投一遍，量出离画面边最近的余量。
+        ///
+        /// 【为什么必须打日志、还要报警】取景是算出来的，算错了不会有任何报错 ——
+        ///   只会切掉一张牌，而"切掉一点点"在缩略图上看不出来。
+        ///   所以每次重算机位都把**手牌那一排**的上下左右余量量成数字写进日志；
+        ///   真的出画就打警告（和素材级联的 [V21][布局] 是同一个套路）。
+        /// </summary>
+        private void VerifyBoardFraming()
+        {
+            Vector2 lo, hi;
+            if (!rig.ViewNdcRange(BoardView, boardFitPoints, out lo, out hi))
+            {
+                Debug.LogWarning("[V21][取景] 桌面视角的点集投不出来（有点落在相机背后），"
+                                 + "这次没法自检取景。");
+                return;
+            }
+
+            // NDC → 像素：画面高的一半就是 1（宽那一半按宽高比换算，这里只报手牌的下边缘余量，
+            // 它永远落在垂直方向上 —— 手牌是画面里最靠下的一排）。
+            float aspect = Mathf.Max(0.2f, cam.aspect);
+            float halfHPx = Screen.height * 0.5f;
+
+            Vector2 hlo, hhi;
+            bool handOk = rig.ViewNdcRange(BoardView, handFitPoints, out hlo, out hhi);
+
+            string handText = handOk
+                ? ("手牌那一排 " + boardFitHandCount + " 张：上下余量 "
+                   + ((1f - hhi.y) * halfHPx).ToString("0") + " / " + ((1f + hlo.y) * halfHPx).ToString("0")
+                   + " px，左右余量 "
+                   + ((1f - hhi.x) * halfHPx * aspect).ToString("0") + " / "
+                   + ((1f + hlo.x) * halfHPx * aspect).ToString("0") + " px")
+                : "手牌那一排：投影异常";
+
+            string allText = "全部 " + boardFitPoints.Count + " 个点：上下余量 "
+                + ((1f - hi.y) * halfHPx).ToString("0") + " / " + ((1f + lo.y) * halfHPx).ToString("0")
+                + " px，左右余量 "
+                + ((1f - hi.x) * halfHPx * aspect).ToString("0") + " / "
+                + ((1f + lo.x) * halfHPx * aspect).ToString("0") + " px";
+
+            Debug.Log("[V21][取景] 桌面视角 " + Screen.width + "×" + Screen.height
+                      + "（宽高比 " + aspect.ToString("0.00") + "）：" + handText + "；" + allText);
+
+            // 越界才报警（正常的一局里一次都不该出现）
+            bool handOut = !handOk || hlo.x < -1f || hlo.y < -1f || hhi.x > 1f || hhi.y > 1f;
+            bool anyOut  = lo.x < -1f || lo.y < -1f || hi.x > 1f || hi.y > 1f;
+
+            if (handOut)
+                Debug.LogWarning("[V21][取景] ★ 手牌那一排出画了（NDC x ∈ [" + hlo.x.ToString("0.00")
+                                 + ", " + hhi.x.ToString("0.00") + "]，y ∈ [" + hlo.y.ToString("0.00")
+                                 + ", " + hhi.y.ToString("0.00") + "]）—— 取景拟合没生效？");
+            else if (anyOut)
+                Debug.LogWarning("[V21][取景] 有该看见的东西出画了（NDC x ∈ [" + lo.x.ToString("0.00")
+                                 + ", " + hi.x.ToString("0.00") + "]，y ∈ [" + lo.y.ToString("0.00")
+                                 + ", " + hi.y.ToString("0.00") + "]）");
         }
 
         // ── 交互层 ────────────────────────────────────────────────────

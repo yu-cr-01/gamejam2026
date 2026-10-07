@@ -107,6 +107,153 @@ namespace GameJam.Prototype
             if (go) GoTo(name);
         }
 
+        /// <summary>
+        /// 按**必须看见的点集**算机位：先把点集在画面里居中，再沿视线退到刚好全部装下。
+        ///
+        /// 【为什么不能再用 FrameTableBounds】
+        ///   那个算式把整个包围盒当成"在同一个深度上"，而手牌那一排恰恰是**离相机最近**
+        ///   的那一层：按盒心深度估出来的距离偏小，牌就贴到（甚至切出）画面下边缘 ——
+        ///   用户拍到的"手牌最下面那张只露上半截"就是这么来的。
+        ///   这里改成**用同一套投影量到合格为止**（先翻倍找上界、再二分），
+        ///   摆位和量尺不会各算各的。
+        ///
+        /// 【为什么必须每次按当前宽高比重算】
+        ///   可视范围随**宽高比**变：水平半角 = 垂直半角 × aspect。
+        ///   同一个机位在 16:9 装得下，竖屏窗口里横向就装不下（这正是"编辑器 Free Aspect
+        ///   能出图、打包版 1600×900 也能出图"必须成立的那一条）。所以这个方法算的是
+        ///   "当前 cam.aspect 下"的机位，比例变了要再算一次 —— 调用点在 TableSetup.Update。
+        ///
+        /// 【为什么"居中"这一条不能省】
+        ///   只退后不居中 = 让画面中心继续对着桌子中段那块空地，手牌仍然沉在下边缘以外，
+        ///   要把它拉进来就得多退一大截（实测多退 46%）。居中只挪画面的中心，
+        ///   一个世界坐标都不动。
+        ///
+        /// margin 的语义和 <see cref="FrameTableBounds"/> 一致：1.1 = 每个方向至少留 1/1.1 半屏。
+        /// go = true 时顺带切过去（重建机位一般不切，见调用点的说明）。
+        /// </summary>
+        public bool FramePoints(string name, IList<Vector3> points, float tiltDeg,
+                               float margin = 1.1f, bool go = false)
+        {
+            if (cam == null || points == null || points.Count == 0) return false;
+
+            float tilt  = Mathf.Clamp(tiltDeg, 10f, 85f) * Mathf.Deg2Rad;
+            float limit = 1f / Mathf.Max(1.01f, margin);
+
+            float halfV = Mathf.Tan(Mathf.Clamp(cam.fieldOfView, 5f, 120f) * 0.5f * Mathf.Deg2Rad);
+            float halfH = halfV * Mathf.Max(0.2f, cam.aspect);
+
+            // 视线方向由俯角唯一决定；相机上方 ⟂ 它，所以"沿 dir 挪"只改距离、不改上下和左右。
+            Vector3 dir = new Vector3(0f, Mathf.Sin(tilt), -Mathf.Cos(tilt));   // 注视点 → 相机
+            Vector3 up  = new Vector3(0f, Mathf.Cos(tilt), Mathf.Sin(tilt));    // 画面上方
+
+            // ① 居中：点集在"画面右 / 画面上"两个方向上的中值，就是相机在这两个方向上的坐标。
+            //    （dir 在 YZ 平面内，所以"画面右"永远是 +X —— 取景不需要跟着转头。）
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minU = float.MaxValue, maxU = float.MinValue;
+            for (int i = 0; i < points.Count; i++)
+            {
+                float x = points[i].x;
+                float u = Vector3.Dot(points[i], up);
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (u < minU) minU = u;
+                if (u > maxU) maxU = u;
+            }
+
+            // base 放在 z = 0 平面上，只要它在右 / 上两个方向上的分量对就行：
+            //   相机 = base + dir * dist（dir ⟂ up，所以 dist 一变，上下分量不动）。
+            Vector3 basePos = new Vector3((minX + maxX) * 0.5f, (minU + maxU) * 0.5f / up.y, 0f);
+
+            // ② 退后到全部装下：先翻倍找"一定装得下"的上界，再二分收紧
+            float lo = 0.05f, hi = 1f;
+            int guard = 0;
+            while (!PointsInside(points, basePos + dir * hi, dir, up, halfV, halfH, limit))
+            {
+                lo = hi;
+                hi *= 2f;
+                // 12 次翻倍 = 4096 米，正常内容（整张桌子）到不了；到得了就是参数给错了，
+                // 这时候宁可保留旧机位，也不要摆出一台"退到天边"的相机。
+                if (++guard > 12) return false;
+            }
+            for (int i = 0; i < 32; i++)
+            {
+                float mid = (lo + hi) * 0.5f;
+                if (PointsInside(points, basePos + dir * mid, dir, up, halfV, halfH, limit)) hi = mid;
+                else lo = mid;
+            }
+
+            Vector3 pos = basePos + dir * hi;
+
+            // 注视点取视线轴上的任一点 —— Register 只认方向，写在轴上（而不是内容中心）
+            // 是因为内容中心一般不在轴上，写它会连带把视线方向也改掉（变成"斜着看"）。
+            Register(name, pos, pos - dir);
+
+            if (go) GoTo(name);
+            return true;
+        }
+
+        /// <summary>
+        /// 某个机位下，这批点投到画面里的范围（NDC：−1..1 是画面内，0 是画面中心）。
+        ///
+        /// 【为什么自检要拿机位来量，而不是拿 cam 当前的投影】
+        ///   取景是"算出来的机位"在保证的事，而相机此刻可能正被玩家拖到别的角度上
+        ///   （自由转头）。要证明"桌面视角装得下"，就得量**那个机位**。
+        ///   这里和 <see cref="FramePoints"/> 共用同一套投影 —— 摆位和量尺不能各算各的。
+        ///
+        /// 机位不存在 / 点集为空 / 有点在相机背后（投影没有意义）时返回 false。
+        /// </summary>
+        public bool ViewNdcRange(string name, IList<Vector3> points, out Vector2 lo, out Vector2 hi)
+        {
+            lo = new Vector2(float.MaxValue, float.MaxValue);
+            hi = new Vector2(float.MinValue, float.MinValue);
+
+            View v;
+            if (cam == null || points == null || points.Count == 0) return false;
+            if (!views.TryGetValue(name, out v)) return false;
+
+            float halfV = Mathf.Tan(Mathf.Clamp(cam.fieldOfView, 5f, 120f) * 0.5f * Mathf.Deg2Rad);
+            float halfH = halfV * Mathf.Max(0.2f, cam.aspect);
+
+            Vector3 right = v.rotation * Vector3.right;
+            Vector3 up    = v.rotation * Vector3.up;
+            Vector3 fwd   = v.rotation * Vector3.forward;
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                Vector3 rel = points[i] - v.position;
+                float depth = Vector3.Dot(rel, fwd);
+                if (depth <= 1e-4f) return false;
+
+                Vector2 ndc = new Vector2(Vector3.Dot(rel, right) / (depth * halfH),
+                                          Vector3.Dot(rel, up)    / (depth * halfV));
+                lo = Vector2.Min(lo, ndc);
+                hi = Vector2.Max(hi, ndc);
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// 点集是不是**全部**落在 |ndc| ≤ limit 里（且都在相机前）。
+        ///
+        /// 【为什么不用解析解】闭式解当然写得出来，但那样就有两份投影公式要同步
+        ///   （一份算机位、一份给自检），而这两份一旦走岔，"日志说装得下、画面里切着"
+        ///   就会同时成立。二分只是把一个便宜的比较重复几十次 —— 重算机位是
+        ///   "比例变了 / 手牌变了"才发生的事，不在每帧路径上。
+        /// </summary>
+        private static bool PointsInside(IList<Vector3> pts, Vector3 pos, Vector3 dir, Vector3 up,
+                                         float halfV, float halfH, float limit)
+        {
+            for (int i = 0; i < pts.Count; i++)
+            {
+                Vector3 rel = pts[i] - pos;
+                float depth = Vector3.Dot(rel, -dir);        // dir 是"注视点 → 相机"，所以 −dir 才是前向
+                if (depth <= 1e-4f) return false;
+                if (Mathf.Abs(rel.x) > limit * halfH * depth) return false;
+                if (Mathf.Abs(Vector3.Dot(rel, up)) > limit * halfV * depth) return false;
+            }
+            return true;
+        }
+
         /// <summary>立刻切到某个机位（不做过渡）。</summary>
         public void SnapTo(string name)
         {

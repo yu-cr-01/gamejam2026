@@ -66,6 +66,14 @@ namespace GameJam.Prototype
         /// 换算：效果图 x/136-0.5 → ×卡宽 0.24；y 从上往下 (0.5-y/182) → ×卡深 0.335。
         /// </summary>
         public static readonly Vector3 NameOnPlate   = new Vector3(-0.058f, 0f, 0.136f);
+
+        /// <summary>
+        /// 数值牌**整块**的中心（97,95 那张 38×86 的牌的中心）—— 也就是中间那格（圆形）的中心，
+        /// 两者差不到 1 像素（比较 <see cref="StatSlots"/>[1]）。
+        ///
+        /// ★ 现在不再往这里画东西了：三属性从"一整块三行字"改成了"三个数字各进一格"，
+        ///   落点见 <see cref="StatSlots"/>。这个常量留着当版面基准（改版面时先看它对不对得上）。
+        /// </summary>
         public static readonly Vector3 StatsOnPlate  = new Vector3( 0.085f, 0f, -0.087f);
 
         /// <summary>有美术时名字要缩到牌子宽度以内（牌子只占卡宽 46%）。</summary>
@@ -85,6 +93,119 @@ namespace GameJam.Prototype
 
         /// <summary>牌子是暖棕色，字用深墨色（程序化卡面用的是白字，两套不能混）。</summary>
         public static readonly Color InkOnPlate = new Color(0.145f, 0.132f, 0.118f);
+
+        // ══════════════════════════════════════════════════════════════
+        //  数值牌上的三个装饰形状 —— H / D / V 的**数字**就画在它们正中间
+        //
+        //  【这三个形状是哪来的】不是新画的，也不用改美术原图：card_number_bg.png
+        //    （38×86，贴在效果图 (97,95)）这块数值牌上本来就摞着三个装饰形状，
+        //    从上到下依次是：
+        //        ⬥ 菱形（外接 30×31）   ● 圆形（外接 26×26）   ■ 方形（外接 27×27）
+        //    以前它们只是装饰：三行文字（"H 盐性 12"…）整块盖在牌上、还比牌宽；
+        //    现在把**数字**分别塞进这三个形状里，H/D/V 字样和盐性/汞性/硫性字样全去掉。
+        //
+        //  【量法】还是那套"在效果图里量"，和 IllustPos / NamePlatePos 同一套坐标：
+        //    对 card_number_bg.png 做连通域分析（alpha > 128 的像素），
+        //    三个形状各自的外接矩形中心见下面 centerPx（**已经加上 NumberPlatePos 的偏移**、
+        //    已经是"效果图从上往下"的口径 —— 贴图行序是从底边往上的，换算在 Blit() 里
+        //    做过一次，这里不要重复做）。
+        //
+        //  【内圈为什么比外接矩形小 2 像素】形状有一圈约 2 像素宽的深色描边，
+        //    数字压到描边上就是用户说的"压形状边框"。所以 halfW / halfH 给的是
+        //    **描边以内**的可用半尺寸，再乘 StatFitMargin 留最后一圈白。
+        //
+        //  【顺序 = H / D / V（上→下）】和 AttrCatalog.Defs 的顺序一致（Salt, Mercury, Sulfur），
+        //    CardFactory 就是按下标 0/1/2 取的。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>装饰形状的种类 —— 决定"数字最大能占多大"用哪一条算式。</summary>
+        public enum StatShape { Diamond, Circle, Square }
+
+        /// <summary>一个装饰形状：中心（效果图像素）+ 描边以内的半尺寸（效果图像素）。</summary>
+        public struct StatSlot
+        {
+            public StatShape shape;
+            public Vector2   centerPx;
+            /// <summary>菱形 = 水平半对角线；圆 = 半径；方 = 半边长。</summary>
+            public float     halfW;
+            /// <summary>菱形 = 垂直半对角线；圆 = 半径；方 = 半边长。</summary>
+            public float     halfH;
+        }
+
+        /// <summary>
+        /// 三个形状，顺序 = H（上）/ D（中）/ V（下）。
+        /// 中心是**外接矩形的中心**（含描边），因为"看起来居中"就是相对整个形状居中。
+        /// </summary>
+        public static readonly StatSlot[] StatSlots =
+        {
+            // 上 · H 盐性 · 菱形：外接 x[7..36] y[0..30] → 中心 (21.5, 15.0)，加牌偏移 (97,95)
+            new StatSlot { shape = StatShape.Diamond, centerPx = new Vector2(118.5f, 110.0f), halfW = 13.0f, halfH = 13.5f },
+            // 中 · D 汞性 · 圆形：外接 x[5..30] y[31..56] → 中心 (17.5, 43.5)
+            new StatSlot { shape = StatShape.Circle,  centerPx = new Vector2(114.5f, 138.5f), halfW = 11.0f, halfH = 11.0f },
+            // 下 · V 硫性 · 方形：外接 x[2..28] y[56..82] → 中心 (15.0, 69.0)
+            new StatSlot { shape = StatShape.Square,  centerPx = new Vector2(112.0f, 164.0f), halfW = 11.5f, halfH = 11.5f },
+        };
+
+        /// <summary>数字在形状内圈里再留一圈白 —— 乘在内圈尺寸上（0.90 = 再缩 10%）。</summary>
+        public const float StatFitMargin = 0.90f;
+
+        /// <summary>
+        /// 效果图像素 → 卡面局部坐标（和 <see cref="NameOnPlate"/> / <see cref="StatsOnPlate"/>
+        /// 用的是同一套换算：x/136−0.5 → ×卡宽；y 从上往下 (0.5−y/182) → ×卡深）。
+        /// 返回 x = 卡宽方向的偏移，y = 卡深方向的偏移（调用方把它放到 localZ）。
+        /// </summary>
+        public static Vector2 EffectPxToLocal(Vector2 px)
+        {
+            return new Vector2((px.x / RefW - 0.5f) * CardFactory.CardWidth,
+                               (0.5f - px.y / RefH) * CardFactory.CardDepth);
+        }
+
+        /// <summary>效果图像素长度 → 卡面局部的**纵向**长度（高度一律走这个）。</summary>
+        public static float EffectPxToWorld(float px)
+        {
+            return px / RefH * CardFactory.CardDepth;
+        }
+
+        /// <summary>
+        /// 第 <paramref name="index"/> 个形状里，一个"墨迹盒宽高比 = ratio"的数字
+        /// **最多能有多高**（效果图像素）。三个形状各一条解析解，都是"矩形装进形状"：
+        ///
+        ///   菱形 |u|/a + |v|/b ≤ m          →  h ≤ 2m / (ratio/a + 1/b)
+        ///   圆形 u² + v² ≤ (m·r)²           →  h ≤ 2mr / √(ratio² + 1)
+        ///   方形 |u| ≤ m·halfW、|v| ≤ m·halfH →  h ≤ 2m·min(halfH, halfW/ratio)
+        ///
+        /// 其中 u = h·ratio/2（半宽）、v = h/2（半高），m = <see cref="StatFitMargin"/>。
+        /// ★ 这一条就是"两位数也放得下"的实现：位数多了墨迹盒变宽（ratio 变大），
+        ///   算出来的最大高度自己就降下来了，不需要按位数查表。
+        /// </summary>
+        public static float StatMaxDigitHeightPx(int index, float ratio)
+        {
+            if (ratio <= 0.01f) ratio = FallbackDigitRatio;      // 量不到就按常见的数字宽高比算
+            StatSlot s = StatSlots[Mathf.Clamp(index, 0, StatSlots.Length - 1)];
+            float m = StatFitMargin;
+
+            switch (s.shape)
+            {
+                case StatShape.Diamond:
+                    return 2f * m / (ratio / s.halfW + 1f / s.halfH);
+
+                case StatShape.Circle:
+                    return 2f * m * s.halfW / Mathf.Sqrt(ratio * ratio + 1f);
+
+                default:   // Square
+                    return 2f * m * Mathf.Min(s.halfH, s.halfW / ratio);
+            }
+        }
+
+        /// <summary>
+        /// 兜底的"数字墨迹盒宽高比"（宽 ÷ 高）—— 只在**完全量不到**文字尺寸时用。
+        ///
+        /// 【正常情况下用不到它】CardFactory.FitStatNumbers 是从**三个数字串自己**反推的
+        ///   （n 位数的宽高比 ÷ n ≈ 一位数的宽高比，数字是等宽齐线字）。
+        ///   实测微软雅黑的一位数字约 0.55（"3" 的墨迹 7.8×14.1 效果图像素）；
+        ///   这里取 0.55 作为它缺席时的替身。
+        /// </summary>
+        public const float FallbackDigitRatio = 0.55f;
 
         private static readonly Dictionary<string, Texture2D> cache =
             new Dictionary<string, Texture2D>();

@@ -1384,61 +1384,193 @@ namespace GameJam.Prototype
         }
 
         // ── 左下角：操作提示 ──────────────────────────────────────────
+        //
+        // 【为什么这块不能再钉在屏幕左下角】手牌那一排就在画面底部（取景是按相机视锥拟合出来的，
+        //   见 TableSetup.ReframeBoardView），两者本来落在同一条带子上：实测 1470×1167 下
+        //   提示压住左边两三张牌、1600×900 下压住牌的上沿。用户拍板：**挪提示、不再退取景**。
+        //   所以现在改成：先把手牌那一排在屏幕上的上沿**量出来**，整块提示抬到它上面去。
+        //
+        // 【为什么是"量"而不是"抬到某个固定高度"】手牌在屏幕上的高度随窗口比例变
+        //   （手牌上沿：1470×1167 → 285px、1600×900 → 217px、竖屏 900×1600 → 601px），
+        //   写死任何一个数都只对一种比例成立 —— 换一种比例手牌又被压住。
         private void DrawHints()
         {
-            if (!TableSettings.ShowHints) return;
+            if (!TableSettings.ShowHints) { HintBlockScreenRect = new Rect(); return; }   // 设置里关掉 → 整块不画
 
-            const float w = 480f, h = 214f;
-            float y = Screen.height - h - 14f;
+            const float w = 480f;
 
             // v2.1 的操作方式完全不同（出牌不消耗行动、启动要点桌面素材、法术是点一下），
             // 提示必须跟着换 —— 写旧那一套会让玩家一直找不到"怎么启动"。
             if (turnLoop != null && turnLoop.V21)
             {
-                // v2.1 的提示比旧流程多两行（"点手牌 = 上桌"和 F1 那条），
-                // 所以这一块自己算高度（260）：直接用外面那个 214 的话，
-                // 第一行会顶到 y 上面去、和别的 HUD 叠在一起。
-                float yv = Screen.height - 260f - 14f;
-
-                GUI.Label(new Rect(16f, yv, w, 24f), "点手牌里的素材 = 直接上桌（拖到「上桌位」再点「上　桌」也行）", h1);
-                // 两个槽的名字必须和桌面上的牌子一字不差（「附　魔 位」在左、「上　桌 位」在右）——
-                // 这条原来写的是旧流程的"待上桌的卡"，而 v2.1 是落槽即生效，那句话在 v2.1 里没有对应物，
-                // 玩家照着做只会白拖一趟（用户报的"附魔位不能放卡片"就是从这种错位里来的）。
-                GUI.Label(new Rect(16f, yv + 28f, w, 22f), "拖「法术」到左边的「附　魔 位」= 直接附魔到刀片（不消耗行动机会）", dim);
-                GUI.Label(new Rect(16f, yv + 48f, w, 22f), "拖「素材」到右边的「上　桌 位」= 直接上桌（和点一下等价）", dim);
-                GUI.Label(new Rect(16f, yv + 68f, w, 22f), "点桌面上的素材 = 选它当「启动破壁机」的目标（会抬起来）", dim);
-                // 收回手牌这一行是用户拍板新加的功能，必须写在提示里 ——
-                // 不写的话玩家只会得出"上桌就再也拿不回来了"，而这正是他提的那条。
-                GUI.Label(new Rect(16f, yv + 88f, w, 22f), "把桌面上的素材往下拖到手牌那一片 = 收回手牌（只在本回合、还没启动过时能收）", dim);
-                GUI.Label(new Rect(16f, yv + 108f, w, 22f), "「启动破壁机」消耗 1 行动机会 + 1 点刀片 H", dim);
-                GUI.Label(new Rect(16f, yv + 128f, w, 22f), "每回合 5 次行动、每关 4 回合；本回合最后一次启动会献祭吞噬目标", dim);
-                GUI.Label(new Rect(16f, yv + 148f, w, 22f), "刀片 H 归零 = 爆刀，关卡结束、当前分数 ×2", dim);
-                GUI.Label(new Rect(16f, yv + 168f, w, 22f), "右键单击卡牌 → 查看完整数据　｜　右键拖动 → 转头", dim);
-                GUI.Label(new Rect(16f, yv + 188f, w, 22f), "F1 → 卡牌图鉴（素材 / 法术全在这）　｜　F2 → 卡牌规则解析报告　｜　F3 → 落点判定区（调试）", dim);
-                GUI.Label(new Rect(16f, yv + 208f, w, 22f), "Esc → 菜单（继续 / 设置 / 关卡 / 卡牌图鉴 / 退出关卡 / 退出游戏）", dim);
-
-                if (TableSettings.ShowDebugInfo)
-                    GUI.Label(new Rect(16f, yv + 230f, w, 22f),
-                              "物理：" + (interaction.PhysicsOn ? "开（受重力）" : "关（脚本控制）")
-                              + "　　视角：" + (setup != null && setup.rig != null && setup.rig.IsFreeLook
-                                                ? "自由转头中" : "固定机位"), dim);
+                DrawHintBlock(w, v21Hints);
                 return;
             }
 
-            GUI.Label(new Rect(16f, y, w, 24f), "拖动卡牌放到桌面中间的投放区", h1);
-            GUI.Label(new Rect(16f, y + 28f, w, 22f), "一次可以放多张 —— 确认时效果会叠加发动", dim);
-            GUI.Label(new Rect(16f, y + 48f, w, 22f), "放好后按「确认投放」或回车 —— 牌会被吸进罐子", dim);
-            GUI.Label(new Rect(16f, y + 68f, w, 22f), "拖回手牌 = 反悔，可以重新挑", dim);
-            GUI.Label(new Rect(16f, y + 88f, w, 22f), "右键单击卡牌 → 查看完整数据（Esc 关闭）", dim);
-            GUI.Label(new Rect(16f, y + 108f, w, 22f), "右键拖动 / 中键拖动 → 原地转头（活动范围 120° 锥）", dim);
-            GUI.Label(new Rect(16f, y + 128f, w, 22f), "1 / 2 / 3 固定视角　　4 自由视角　　G 开关物理", dim);
-            GUI.Label(new Rect(16f, y + 148f, w, 22f), "F1 → 卡牌图鉴　｜　Esc → 菜单（继续 / 设置 / 关卡 / 卡牌图鉴 / 返回开场 / 退出游戏）", dim);
+            DrawHintBlock(w, legacyHints);
+        }
+
+        /// <summary>
+        /// v2.1 的操作提示。**顺序就是重要性** —— 放不下时从后往前截（见 <see cref="DrawHintBlock"/>）。
+        /// </summary>
+        private static readonly string[] v21Hints =
+        {
+            "点手牌里的素材 = 直接上桌（拖到「上桌位」再点「上　桌」也行）",
+            // 两个槽的名字必须和桌面上的牌子一字不差（「附　魔 位」在左、「上　桌 位」在右）——
+            // 这条原来写的是旧流程的"待上桌的卡"，而 v2.1 是落槽即生效，那句话在 v2.1 里没有对应物，
+            // 玩家照着做只会白拖一趟（用户报的"附魔位不能放卡片"就是从这种错位里来的）。
+            "拖「法术」到左边的「附　魔 位」= 直接附魔到刀片（不消耗行动机会）",
+            "拖「素材」到右边的「上　桌 位」= 直接上桌（和点一下等价）",
+            "点桌面上的素材 = 选它当「启动破壁机」的目标（会抬起来）",
+            // 收回手牌这一行是用户拍板新加的功能，必须写在提示里 ——
+            // 不写的话玩家只会得出"上桌就再也拿不回来了"，而这正是他提的那条。
+            "把桌面上的素材往下拖到手牌那一片 = 收回手牌（只在本回合、还没启动过时能收）",
+            "「启动破壁机」消耗 1 行动机会 + 1 点刀片 H",
+            "每回合 5 次行动、每关 4 回合；本回合最后一次启动会献祭吞噬目标",
+            "刀片 H 归零 = 爆刀，关卡结束、当前分数 ×2",
+            "右键单击卡牌 → 查看完整数据　｜　右键拖动 → 转头",
+            "F1 → 卡牌图鉴（素材 / 法术全在这）　｜　F2 → 卡牌规则解析报告　｜　F3 → 落点判定区（调试）",
+            "Esc → 菜单（继续 / 设置 / 关卡 / 卡牌图鉴 / 退出关卡 / 退出游戏）",
+        };
+
+        /// <summary>
+        /// 旧流程（先摆好、再按确认那套）的操作提示。★ 旧流程那句话**一个字都没改**，
+        /// 只是摆法换成和 v2.1 共用同一个算式（旧流程的手牌也在画面底部，会撞上同一件事）。
+        /// </summary>
+        private static readonly string[] legacyHints =
+        {
+            "拖动卡牌放到桌面中间的投放区",
+            "一次可以放多张 —— 确认时效果会叠加发动",
+            "放好后按「确认投放」或回车 —— 牌会被吸进罐子",
+            "拖回手牌 = 反悔，可以重新挑",
+            "右键单击卡牌 → 查看完整数据（Esc 关闭）",
+            "右键拖动 / 中键拖动 → 原地转头（活动范围 120° 锥）",
+            "1 / 2 / 3 固定视角　　4 自由视角　　G 开关物理",
+            "F1 → 卡牌图鉴　｜　Esc → 菜单（继续 / 设置 / 关卡 / 卡牌图鉴 / 返回开场 / 退出游戏）",
+        };
+
+        /// <summary>提示块与手牌那一排之间留的空（像素）—— 别让字贴着牌的边。</summary>
+        private const float HintHandClearance = 12f;
+
+        /// <summary>提示块离屏幕上沿至少留这么多：窗口再矮，也别把字顶到屏幕外面去。</summary>
+        private const float HintTopKeep = 8f;
+
+        /// <summary>
+        /// 提示块这一帧**真正画在屏幕上的矩形**（左上原点）—— 探针用它量"有没有压到手牌"。
+        /// 宽或高为 0 = 这一帧没画（设置里关掉提示的时候）。
+        /// </summary>
+        public Rect HintBlockScreenRect { get; private set; }
+
+        /// <summary>v2.1 那几块面板这一帧的屏幕矩形（左上原点）—— 同上，给探针量"谁压住了手牌"。</summary>
+        public List<Rect> PanelScreenRects { get { return v21PanelRects; } }
+
+        /// <summary>检视窗口这一帧的屏幕矩形（左上原点）；没开着时是空矩形。同上，给探针量重叠。</summary>
+        public Rect InspectScreenRect
+        {
+            get
+            {
+                if (interaction == null || interaction.Inspected == null || interaction.Inspected.card == null)
+                    return new Rect();
+                return inspectRect;
+            }
+        }
+
+        /// <summary>
+        /// 画一整块操作提示：**底边落在手牌那一排的上沿之上**，一行都不许压在牌上。
+        ///
+        /// 【放不下怎么办】按行截断（列表本身按重要性排），最少留一行 ——
+        ///   "提示少几行"是小事，"牌被压住"是用户点名要修的事。
+        /// </summary>
+        private void DrawHintBlock(float w, string[] lines)
+        {
+            float bottomGap = HintBottomGap();                        // 底边离屏幕底多少像素
+            float topLimit  = HintTopLimit();                         // 上边界（屏幕 y，自上而下）
+            float room      = Screen.height - bottomGap - topLimit;   // 这一块能用多高
+
+            // 第一行高 24、之后每行间距 20 —— 整块高 = 20n + 30
+            int fit = Mathf.Clamp(Mathf.FloorToInt((room - 30f) / 20f), 1, lines.Length);
+            float y0 = Screen.height - bottomGap - (20f * fit + 30f);
+
+            // 记下这一帧画在哪（探针要拿它量"有没有压到手牌"）
+            HintBlockScreenRect = new Rect(16f, y0, w, 20f * fit + 30f);
+
+            GUI.Label(new Rect(16f, y0, w, 24f), lines[0], h1);
+            for (int i = 1; i < fit; i++)
+                GUI.Label(new Rect(16f, y0 + 28f + (i - 1) * 20f, w, 22f), lines[i], dim);
 
             if (TableSettings.ShowDebugInfo)
-                GUI.Label(new Rect(16f, y + 170f, w, 22f),
+                GUI.Label(new Rect(16f, y0 + 28f + (fit - 1) * 20f, w, 22f),
                           "物理：" + (interaction.PhysicsOn ? "开（受重力）" : "关（脚本控制）")
                           + "　　视角：" + (setup != null && setup.rig != null && setup.rig.IsFreeLook
                                             ? "自由转头中" : "固定机位"), dim);
+        }
+
+        /// <summary>
+        /// 提示块**底边**离屏幕底多少像素：手牌那一排在画面上就让到它上沿之上（+12px）；
+        /// 手上没牌就照旧贴底 14px（老行为一个字没变）。
+        /// </summary>
+        private float HintBottomGap()
+        {
+            float handTop;
+            if (!HandScreenTop(out handTop)) return 14f;
+
+            // 上限取屏幕一半：万一量出来的上沿离谱（比如那张牌正被拖到半空），
+            // 提示也不会被整块推出屏幕 —— 宁可少显示几行，也不让字跑到画面外。
+            return Mathf.Min(handTop + HintHandClearance, Screen.height * 0.5f);
+        }
+
+        /// <summary>
+        /// 提示块的**上边界**（屏幕 y，自上而下）：不许越过它。取"顶部回合面板的下沿 + 8"。
+        ///
+        /// 【为什么要躲回合面板】面板在顶部居中（宽 660）：竖屏 900 宽时它横跨 x 120~780，
+        ///   和左下角这块提示在横向上是重叠的 —— 抬得太高就会糊在面板下沿上。
+        ///   面板这一帧没画（lastRect 还是空矩形）时退回屏幕上沿 + 8。
+        /// </summary>
+        private float HintTopLimit()
+        {
+            Rect p = ScreenRect(turnPanelDrag.lastRect, turnPanelDrag.offset);
+            if (p.height <= 0f) return HintTopKeep;
+            return Mathf.Max(HintTopKeep, p.yMax + 8f);
+        }
+
+        /// <summary>
+        /// 手牌那一排在屏幕上的**上沿**（自下而上的 y，像素）。手上没牌 / 拿不到相机时返回 false。
+        ///
+        /// 【为什么取"最高的那张的上沿"】提示块要躲开的是**整排**：只要有一张牌的上沿高过
+        ///   提示块底边，那张牌就被压住 —— 所以取所有手牌里最高的那个上沿，不是平均、也不是最低。
+        ///
+        /// 【为什么用卡心 ± 半个占地】牌是平躺的、还带扇形偏航，屏幕上那个"上沿"就是远端那个角。
+        ///   按 ReframeHandView 量占地的**同一个口径**（|cos|·卡深 + |sin|·卡宽）算出世界半深，
+        ///   再投一次屏幕 —— 比投四个角便宜，这点误差对"文字躲开牌"没有意义。
+        /// </summary>
+        private bool HandScreenTop(out float top)
+        {
+            top = 0f;
+            if (setup == null || setup.cam == null || setup.hand == null) return false;
+
+            bool any = false;
+            float highest = float.MinValue;
+
+            for (int i = 0; i < setup.hand.Count; i++)
+            {
+                PlayCard c = setup.hand[i];
+                if (c == null || c.slotIndex >= 0) continue;      // 放进槽里的不算"手牌那一排"
+
+                float yaw = c.transform.eulerAngles.y * Mathf.Deg2Rad;
+                float halfZ = (Mathf.Abs(Mathf.Cos(yaw)) * CardFactory.CardDepth
+                             + Mathf.Abs(Mathf.Sin(yaw)) * CardFactory.CardWidth) * 0.5f;
+
+                Vector3 near = setup.cam.WorldToScreenPoint(c.transform.position - Vector3.forward * halfZ);
+                Vector3 far  = setup.cam.WorldToScreenPoint(c.transform.position + Vector3.forward * halfZ);
+                if (near.z <= 0f || far.z <= 0f) continue;        // 在相机背后，投影没有意义
+
+                float yTop = Mathf.Max(near.y, far.y);
+                if (!any || yTop > highest) { highest = yTop; any = true; }
+            }
+
+            if (!any) return false;
+            top = highest;
+            return true;
         }
 
         // ══════════════════════════════════════════════════════════════
