@@ -476,6 +476,20 @@ namespace GameJam.Prototype
             TickStamp();
         }
 
+        /// <summary>
+        /// 反应特效在破壁机这一侧的呼应：**机身亮一下 + 整机轻震**（见 <see cref="JuicerEcho"/>）。
+        ///
+        /// 【为什么和 PlayStamp 是两个入口】冲压是"启动"这个动作本身的反馈，每次启动都有；
+        ///   呼应只在**附魔规则真的命中、并且改变了素材**那一刻播（调用点见
+        ///   TableRulesV21.PlayReactionFx）。两者时间上重叠，但触发条件不同 ——
+        ///   合成一个入口就会变成"什么都没反应，机器也在抖"。
+        /// </summary>
+        public void PlayReactionEcho(Color tint, float power)
+        {
+            if (!isActiveAndEnabled) return;
+            JuicerEcho.Play(this, tint, power);
+        }
+
         private void TickStamp()
         {
             if (phase == Phase.Idle) return;

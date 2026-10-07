@@ -153,19 +153,43 @@ namespace GameJam.Prototype
         }
 
         // ── 榨汁机 + 液体罐 ───────────────────────────────────────────
+
+        /// <summary>
+        /// 破壁机在桌面上的落点（世界单位，桌面顶面 y = 0）。**挪机器只改这一个常量。**
+        ///
+        /// 【为什么是 (0.72, 0, 0.20)】
+        ///   · x = 0.72：仍然在桌子右侧（原来 0.74，位置几乎没动），
+        ///     同时让开中间的卡位（x ∈ [−0.45, 0.45]）与刀片（桌面中心）。
+        ///     ★ 这是"再往右就出画"的边界值附近：桌面视角的水平可视半宽约 ±1.0 世界单位
+        ///     （相机 (0, 1.05, −1.02)、fov 42°、宽高比 ≈1.8），立绘宽 0.52、剪影右缘再往外 0.22，
+        ///     所以 x 过了 0.8 就会把进料斗那一块切在屏幕右沿外。
+        ///     想更贴右边，得先动 <see cref="BuildCamera"/> 里 "board" 那个机位。
+        ///   · z = 0.20：比桌面中心（0.06）稍靠远端，机器站在"卡位后面一排"，
+        ///     与 z = −0.20 的两个槽位、z = −0.58 的手牌完全错开，不压卡牌落点。
+        ///   · 整机**不旋转**（见下面 localRotation）—— 机器与桌子的两条边都平行。
+        /// </summary>
+        private static readonly Vector3 JuicerAt = new Vector3(0.72f, 0f, 0.20f);
+
+        /// <summary>
+        /// 整机缩放。原始尺寸（高 0.70）在桌面上像个 70 厘米的机器、压过卡牌；
+        /// 缩完约 0.53 高，和 0.335 深的卡牌比例才对得上。
+        /// </summary>
+        private const float JuicerScale = 0.75f;
+
         private void BuildJuicer()
         {
             GameObject go = new GameObject("JuicerRig");
             go.transform.SetParent(transform, false);
 
-            // 放桌子右侧偏内。卡槽占 x ∈ [−0.45, 0.45]、手牌在 z=−0.58，
-            // 这里两边都不挡。
-            go.transform.localPosition = new Vector3(0.74f, 0f, 0.16f);
+            go.transform.localPosition = JuicerAt;
 
-            // 整体缩到 0.75。
-            // 原始尺寸（高 0.70）在桌面上像个 70 厘米的机器，压过卡牌；
-            // 缩完约 0.53 高，和 0.335 深的卡牌比例才对得上。
-            go.transform.localScale = Vector3.one * 0.75f;
+            // ★ 世界轴对齐、不转：这就是"与桌子平行"的那一半。
+            //   另一半在立绘自己身上（BlenderArt.yawDegrees = 0，平面与桌边平行、正面朝玩家）——
+            //   两者是父子，一起搬一起转，不会分家。
+            //   写出来（而不是靠默认值）是为了让"机器是正着摆的"这件事在代码里看得见。
+            go.transform.localRotation = Quaternion.identity;
+
+            go.transform.localScale = Vector3.one * JuicerScale;
 
             juicer = go.AddComponent<JuicerRig>();
             juicer.Build();
@@ -202,9 +226,13 @@ namespace GameJam.Prototype
             rig.Register("hand",  new Vector3(0f, 0.52f, -1.00f), new Vector3(0f, 0f, -0.56f));
             rig.Register("top",   new Vector3(0f, 1.55f, 0.02f),  new Vector3(0f, 0f, 0.02f));
 
-            // 榨汁机特写：从近侧斜上方看罐子和冲压腔
+            // 榨汁机特写：从近侧斜上方看机器。
+            // ★ 注视点**跟着 JuicerAt 走**（而不是写死一组坐标）：
+            //   机器一挪、特写还盯着旧坐标的话，"榨汁机特写"就变成拍空气 ——
+            //   摆位参数集中在 JuicerAt 一处，这条机位也得跟着它，否则"改一处即可"就不成立。
+            //   偏移量是按旧机位 (0.74, 0.20, 0.16) 反推的，所以机器没挪时构图与以前一模一样。
             rig.Register("juicer", new Vector3(0.30f, 0.46f, -0.42f),
-                                   new Vector3(0.74f, 0.20f, 0.16f));
+                                   JuicerAt + new Vector3(0.02f, 0.20f, -0.04f));
 
             // 自由转头的锚点：比"桌面视角"稍微退后一点，
             // 站定了能看全整张桌子，然后**原地转头**看细节（位置不再变）。

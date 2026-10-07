@@ -627,8 +627,59 @@ namespace GameJam.Prototype
             Debug.Log("[V21] 启动（" + (last ? "确定是本回合最后一次 → 结算后判定献祭吞噬" : "可能还有下一次") +
                       "）\n" + (r != null ? r.LogText() : "（引擎没返回结果）"));
 
+            // ★ 反应特效必须在这里播 —— **在 SyncVisualsAfterActivate 之前**：
+            //   那一步会把已经离场的素材交给 PlayCard.ConsumeInto（卡飞向罐口、0.55 秒后自毁）。
+            //   等它跑完再播，卡片位置已经空了、卡面辉光也没地方挂，
+            //   表现就是"特效漂在桌子中间，而卡早就没了"。
+            PlayReactionFx(r, target);
+
             SyncVisualsAfterActivate();
             return r;
+        }
+
+        /// <summary>
+        /// 「两者发生反应」那一刻的特效：目标素材卡位置迸发 + 扩散光环 + 卡面发光，
+        /// 破壁机同步亮一下、轻震一下。
+        ///
+        /// 【为什么要读日志，而不是让引擎多给字段】
+        ///   Assets/Scripts/Rules/** 是封版基线（210 项断言守着），表现层不许改它的签名。
+        ///   引擎已经把"命中了哪类附魔、哪条规则、结果是什么"都写进了中文日志，
+        ///   格式还是它自己的 Describe() 拼的（见 ReactionFx.TryReadFromLog 的说明）。
+        ///   这里只做三件事：把 TurnResult 交给解析器、认出"是哪张 3D 卡"、把颜色和力度传下去。
+        ///
+        /// 【为什么"目标卡的位置"要从 3D 卡上取】
+        ///   规则层的 MaterialState 只有名字和数值，没有坐标；
+        ///   桌面卡的位置在 tableCards 里那张 PlayCard 身上（它可能已经被摆到第二槽 / 往后错开过）。
+        ///   取不到卡（比如目标压根没建出 3D 卡）就用破壁机罐口兜底 ——
+        ///   宁可特效出现在机器那边，也不要什么都没有。
+        /// </summary>
+        private void PlayReactionFx(TurnResult r, MaterialState target)
+        {
+            ReactionFxKind kind;
+            string rule, outcome;
+            if (!ReactionFx.TryReadFromLog(r, out kind, out rule, out outcome)) return;
+
+            TableMaterialCard tc = FindTableCard(target);
+            PlayCard view = tc != null ? tc.view : null;
+
+            Vector3 at = view != null
+                ? view.transform.position
+                : (juicer != null ? juicer.MouthWorld : Vector3.zero);
+
+            ReactionFx fx = ReactionFx.Play(at, kind, view != null ? view.transform : null);
+
+            Color tint = ReactionFx.TintOf(kind);
+            float power = (kind == ReactionFxKind.Explode) ? ReactionFx.ExplodePower : 1f;
+
+            // 破壁机那一侧的呼应（机身亮一下 + 轻震）—— 和卡上的特效同一帧起
+            if (juicer != null) juicer.PlayReactionEcho(tint, power);
+
+            Debug.Log("[V21][反应特效] " + (target != null ? target.name : "?") +
+                      "｜" + outcome + "：" + rule +
+                      "｜颜色 " + ReactionFx.KindName(kind) +
+                      "｜时长 " + ReactionFx.Life + "s" +
+                      "｜位置 (" + at.x.ToString("0.00") + ", " + at.y.ToString("0.00") + ", " + at.z.ToString("0.00") + ")" +
+                      (view != null ? "｜卡面辉光挂在该卡上" : "｜（桌面卡找不到，用破壁机罐口兜底）"));
         }
 
         /// <summary>这一次启动之后行动机会归零 / 手牌空了 / 已达标 → 必然是本回合最后一次启动。</summary>

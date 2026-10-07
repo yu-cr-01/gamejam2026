@@ -26,6 +26,13 @@ namespace GameJam.EditorTools
     ///   DSH_EXTRA_HEAT=n   启动前给刀片补 n 层热（探针调味料，默认 0；见 ProbeActivateV21）
     ///                      v2.1 那条里还包含"打开 F2 规则报告 → 拍头部 → 滚到底 → 拍底部"，
     ///                      用来验报告面板有没有裁字（截图日志里带窗口尺寸）
+    ///   DSH_FXPROBE=1      反应特效探针（⑰⓪~⑱⑧）：破壁机摆位三张（桌面视角 / 俯视 / 榨汁机特写）
+    ///                      + 把时间放慢 5 倍后连拍三张"反应发生中" + 一张配色预览。默认 0 = 完全不介入。
+    ///   DSH_FX_TARGET=名   反应探针要打出去当目标的那张素材（默认"冰"；名字按包含匹配）
+    ///   DSH_FX_TARGET_INDEX=n  ★ 纯 ASCII 的替身：按手牌顺序数第 n 张素材当目标（≥0 时优先于名字）
+    ///   DSH_FX_LAYER=热/冷/酸/催化   启动前给刀片补哪一类附魔（默认"热"）
+    ///   DSH_FX_LAYER_INDEX=n  ★ 纯 ASCII 的替身：0=热 1=冷 2=酸 3=催化（≥0 时优先于名字）
+    ///   DSH_FX_LAYERS=n    补几层（默认 2 —— "遇热/遇冷"这类反应大多要求 ×2）
     ///
     /// 【★ 命令行怎么用：-executeMethod 必须指向一个**方法**】
     ///   Unity 的 -executeMethod 只认 `类.方法`，不能指向一个带 [InitializeOnLoad] 的静态类本身。
@@ -76,6 +83,7 @@ namespace GameJam.EditorTools
         private static bool   capture;
         private static bool   turnProbe;
         private static bool   slotProbe;
+        private static bool   fxProbe;
 
         static AutoPlayHarness()
         {
@@ -94,6 +102,12 @@ namespace GameJam.EditorTools
             //   单独一个开关、单独一条 stage 链：它会把这一局的手牌按那个顺序打出去，
             //   混进主探针里会让后面那些"验形态变化 / 验回合推进"的步骤失去前提。
             slotProbe = System.Environment.GetEnvironmentVariable("DSH_SLOTPROBE") == "1";
+
+            // ★ 反应特效探针（DSH_FXPROBE=1，见 ⑰⓪~ 那一段）：
+            //   破壁机摆位两张 + "附魔命中目标素材"那一瞬间连拍三张。
+            //   也单独一条链 —— 它会把时间放慢 5 倍来抓特效中间帧，
+            //   混进主链会让后面每一步的等待时间都失去意义。
+            fxProbe = System.Environment.GetEnvironmentVariable("DSH_FXPROBE") == "1";
 
             // ★ 每次域重载都要订阅，否则进 Play 之后就再也没人推进流程了
             EditorApplication.update += Tick;
@@ -417,8 +431,177 @@ namespace GameJam.EditorTools
                 case 59:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("v21_turn1.png")) return;
-                    Stage = slotProbe ? 120 : 110;      // ⑫⓪~ 槽位复现探针（DSH_SLOTPROBE=1）
+                    // 三条支线各走各的（都不设 = 原来的"只用点击"那条路，行为一个字没变）
+                    Stage = fxProbe ? 170 : (slotProbe ? 120 : 110);
                     stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ⑰⓪~⑰⑨ 反应特效探针（DSH_FXPROBE=1）
+                //
+                //  用户要的两件事各拍各的：
+                //    ① 破壁机"与桌边平行"的摆位 —— 桌面视角 + 俯视各一张，
+                //       并在日志里把**世界包围盒和屏幕包围盒**都打出来：
+                //       "有没有出画 / 有没有压到槽位与卡"不能靠眼睛看，要能对数字。
+                //    ② "两者发生反应"那一瞬间 —— 把时间放慢 5 倍再启动，
+                //       这样 ShotSettle（1.6 秒，防串帧）之后的连拍才落在特效中间，
+                //       而不是拍完一张特效已经没了（正常速度下特效只有 0.85 秒）。
+                //
+                //  ★ 放慢时间不影响判据：`Time.timeScale` 只缩放 Time.deltaTime，
+                //    规则结算是一次调用跑完的（引擎不看 dt），
+                //    所以"反应确实发生了""颜色是哪一类"这两件事和正常速度下一模一样。
+                // ══════════════════════════════════════════════════════
+
+                // ⑰⓪ 桌面视角：破壁机应该与桌边平行、立在桌子右侧
+                case 170:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    // ★ 先截图、后量：Shot 在"距上一张不到 ShotSettle"时会返回 false 让本阶段重试，
+                    //   把量测放在它前面会把同一份数据每帧打一遍（日志刷屏）
+                    if (!Shot("v21_fx_place_board.png")) return;
+                    LogJuicerPlacement("⑰⓪ 桌面视角");
+                    Stage = 171;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑰① 切俯视
+                case 171:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("top");
+                    Stage = 172;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑰② 俯视：这张看"是不是斜插"—— 与桌边平行时，立绘在俯视里是一条
+                //      与世界 X 轴平行的细线（板厚方向 = 世界 Z）
+                case 172:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("v21_fx_place_top.png")) return;
+                    LogJuicerPlacement("⑰② 俯视");
+                    Stage = 173;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑰③ 切回桌面视角（后面拍反应都在默认机位）
+                case 173:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("board");
+                    Stage = 174;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑰④ 把"要被反应的那张素材"点上桌
+                //     （默认冰；DSH_FX_TARGET=名字，或 DSH_FX_TARGET_INDEX=n 按手牌顺序选）
+                case 174:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeClickHandMaterialNamed(EnvText("DSH_FX_TARGET", "冰"), EnvInt("DSH_FX_TARGET_INDEX", -1));
+                    Stage = 175;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑰⑤ 放慢时间（见上面那段说明）
+                case 175:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeAddFxLayers();
+                    SetTimeScale(0.2f, "⑰⑤ 准备抓反应中间帧");
+                    Stage = 176;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑰⑥ 启动破壁机 —— 走玩家入口（HUD 上那个按钮的同一个 ActivateJuicer），
+                //      DSH_EXTRA_HEAT 负责把附魔层数调到"该触发规则"的状态（探针调味料）
+                case 176:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.5) return;
+                    ProbeActivateV21();
+                    Stage = 177;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑰⑦~⑰⑨ 连拍三张"反应发生中"（ShotSettle 会自然把它们隔开 1.6 秒）
+                //   ★ 第一张要先等 0.5 秒：启动那一帧特效才刚生成（光环半径还是 0、粒子还在卡心），
+                //     直接拍只会得到一张"牌还在、什么都看不出来"的图。
+                //     0.5 秒现实时间 × 0.2 倍速 = 特效时间 0.1 秒 —— 光环已经散到卡外、粒子刚呲出去。
+                case 177:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.5) return;
+                    if (!Shot("v21_fx_reaction_1.png")) return;
+                    // 特效还活着的时候数一遍碰撞体 —— "不挡卡牌拾取"这条要有数字证据
+                    Debug.Log("[AutoPlay/FX] 反应中：" + FxColliderCountText());
+                    Stage = 178;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 178:
+                    if (!Shot("v21_fx_reaction_2.png")) return;
+                    Stage = 179;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 179:
+                    if (!Shot("v21_fx_reaction_3.png")) return;
+                    Stage = 180;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑱⓪ 时间恢复：后面的等待和收尾都要按正常速度算
+                case 180:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetTimeScale(1f, "⑱⓪ 时间恢复");
+                    Stage = 181;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑱① 特效该收干净了（自动销毁，桌面不留渣）—— 先查一遍再拍对照图
+                case 181:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    Debug.Log("[AutoPlay/FX] 特效播完之后：" + ReactionFxCountText());
+                    if (!Shot("v21_fx_after.png")) return;
+                    Stage = 182;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 182:
+                    if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
+                    Stage = 185;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ⑱⑤~⑱⑦ **配色预览**（不是引擎触发的反应）
+                //
+                //  【为什么要这一屏】用户要的配色是五档（热=橙红、冷=青蓝、酸=黄绿、
+                //   催化=淡紫、爆炸=白闪 + 更猛），但引擎侧能真的触发的没这么多：
+                //   爆炸要求"粉末 + 易燃"，而当前卡表里**没有这种卡**（死规则）；
+                //   催化按正文只降阈值、不直接改素材。
+                //   想让策划一屏看全配色，只能直接调 ReactionFx.Play 摆出来。
+                //
+                //  ★ 它和"真的反应"必须分得清：真那条路在 TableRulesV21.PlayReactionFx，
+                //    日志里写 [V21][反应特效]；这里只写 [AutoPlay/FX] 预览。
+                // ══════════════════════════════════════════════════════
+
+                case 185:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.5) return;
+                    SetTimeScale(0.25f, "⑱⑤ 配色预览");
+                    ProbeFxVariantPreview();
+                    Stage = 186;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 186:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    if (!Shot("v21_fx_variants.png")) return;
+                    Stage = 187;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 187:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.5) return;
+                    SetTimeScale(1f, "⑱⑦ 收尾");
+                    Stage = 188;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 188:
+                    if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
+                    Finish();
                     return;
 
                 // ══════════════════════════════════════════════════════
@@ -1655,6 +1838,351 @@ namespace GameJam.EditorTools
 
             rig.GoTo("top");
             Debug.Log("[AutoPlay/V21] 视角切到「俯视」（当前视角 " + rig.CurrentView + "）—— 拍槽位名字");
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  反应特效探针（DSH_FXPROBE=1）用的动作 —— 见 ⑰⓪~⑱② 那一段
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 破壁机的**世界包围盒 + 屏幕包围盒 + 与槽位的关系**，一次全打进日志。
+        ///
+        /// 【为什么要量而不是看】"与桌边平行、不穿模、不挡卡与槽位"这三条，
+        ///   肉眼看截图只能得出"好像没挡"。量出来才是：
+        ///     立绘平面在 x/z 上的占地、底边是不是正好落在桌面（y=0）、
+        ///     有没有和两个槽位的矩形相交、投影到屏幕有没有出画。
+        ///   投影取的是包围盒的**八个角**（只投中心会漏掉边角，立体卡那边踩过同一个坑）。
+        ///
+        /// ★ 屏幕坐标统一成**左上原点**（和截图、和 HUD 的排版一致）：
+        ///   Camera.WorldToScreenPoint 给的是左下原点，这里翻一下再打。
+        /// </summary>
+        private static void LogJuicerPlacement(string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null || setup.juicer == null || setup.cam == null)
+            {
+                Debug.LogWarning("[AutoPlay/FX] " + what + "：找不到 TableSetup / juicer / 相机，摆位量不了。");
+                return;
+            }
+
+            // 只算**活着的**渲染器：挂上美术立绘时程序化机身是整组关掉的
+            Renderer[] rs = setup.juicer.GetComponentsInChildren<Renderer>();
+            bool any = false;
+            Bounds b = new Bounds();
+            for (int i = 0; i < rs.Length; i++)
+            {
+                if (rs[i] == null || !rs[i].enabled) continue;
+                if (!any) { b = rs[i].bounds; any = true; }
+                else b.Encapsulate(rs[i].bounds);
+            }
+            if (!any)
+            {
+                Debug.LogWarning("[AutoPlay/FX] " + what + "：破壁机一个渲染器都没有（立绘和程序化机身都没建出来？）。");
+                return;
+            }
+
+            float x0 = float.MaxValue, y0 = float.MaxValue, x1 = float.MinValue, y1 = float.MinValue;
+            for (int i = 0; i < 8; i++)
+            {
+                Vector3 c = new Vector3((i & 1) == 0 ? b.min.x : b.max.x,
+                                        (i & 2) == 0 ? b.min.y : b.max.y,
+                                        (i & 4) == 0 ? b.min.z : b.max.z);
+                Vector3 s = setup.cam.WorldToScreenPoint(c);
+                float sy = Screen.height - s.y;          // 左下原点 → 左上原点
+                if (s.x < x0) x0 = s.x;
+                if (s.x > x1) x1 = s.x;
+                if (sy < y0) y0 = sy;
+                if (sy > y1) y1 = sy;
+            }
+
+            Debug.Log("[AutoPlay/FX] " + what + " 破壁机世界包围盒："
+                      + "x " + b.min.x.ToString("0.000") + " ~ " + b.max.x.ToString("0.000")
+                      + "，y " + b.min.y.ToString("0.000") + " ~ " + b.max.y.ToString("0.000")
+                      + "，z " + b.min.z.ToString("0.000") + " ~ " + b.max.z.ToString("0.000")
+                      + "（宽 " + b.size.x.ToString("0.000") + "，高 " + b.size.y.ToString("0.000") + "，厚 " + b.size.z.ToString("0.000") + "）");
+
+            Debug.Log("[AutoPlay/FX] " + what + " 破壁机屏幕包围盒（左上原点）："
+                      + "x " + x0.ToString("0.0") + " ~ " + x1.ToString("0.0")
+                      + "，y " + y0.ToString("0.0") + " ~ " + y1.ToString("0.0")
+                      + "　｜　屏幕 " + Screen.width + "×" + Screen.height
+                      + "　｜　右边缘余量 " + (Screen.width - x1).ToString("0.0")
+                      + "，上边缘余量 " + y0.ToString("0.0")
+                      + (x1 <= Screen.width + 0.5f && x0 >= -0.5f && y1 <= Screen.height + 0.5f && y0 >= -0.5f
+                         ? "　✓ 完整在画面内" : "　★ 有部分出画"));
+
+            // 与两个槽位（含槽位指示块那一圈）的占地对照 —— "不挡卡与槽位"的数字版
+            if (setup.board != null)
+            {
+                float hx = setup.board.slotSizeX * 0.5f;
+                float hz = setup.board.slotSizeZ * 0.5f;
+
+                for (int i = 0; i < setup.board.SlotCount; i++)
+                {
+                    Vector3 p = setup.board.SlotPosition(i);
+                    bool hit = (b.min.x < p.x + hx) && (p.x - hx < b.max.x)
+                            && (b.min.z < p.z + hz) && (p.z - hz < b.max.z);
+
+                    Debug.Log("[AutoPlay/FX] " + what + " 槽位 " + i + " 占地 x "
+                              + (p.x - hx).ToString("0.000") + " ~ " + (p.x + hx).ToString("0.000")
+                              + "，z " + (p.z - hz).ToString("0.000") + " ~ " + (p.z + hz).ToString("0.000")
+                              + "　与破壁机占地（x " + b.min.x.ToString("0.000") + " ~ " + b.max.x.ToString("0.000")
+                              + "，z " + b.min.z.ToString("0.000") + " ~ " + b.max.z.ToString("0.000") + "）"
+                              + (hit ? "　★ 相交（会压到落点）" : "　✓ 不相交"));
+                }
+
+                // 桌面上的卡（规则侧认领的那些）逐张量一次：特效和摆位都不该压住它们
+                TableTurnLoop loop = Loop();
+                if (loop != null && loop.rulesV21 != null)
+                {
+                    PlayCard[] all = Object.FindObjectsOfType<PlayCard>();
+                    int cards = 0;
+                    for (int i = 0; i < all.Length; i++)
+                    {
+                        if (all[i] == null || loop.rulesV21.FindTable(all[i]) == null) continue;
+                        cards++;
+                        Vector3 p = all[i].transform.position;
+                        Debug.Log("[AutoPlay/FX] " + what + " 桌面卡「" + all[i].DisplayName + "」在 ("
+                                  + p.x.ToString("0.000") + ", " + p.z.ToString("0.000") + ")"
+                                  + "　与破壁机占地" + ((p.x > b.min.x && p.x < b.max.x && p.z > b.min.z && p.z < b.max.z)
+                                     ? "　★ 落在破壁机占地里" : "　✓ 不重叠"));
+                    }
+                    if (cards == 0)
+                        Debug.Log("[AutoPlay/FX] " + what + " 桌面上一张素材都还没有（这一步之前没出过牌）——"
+                                  + "落点按两个槽位的矩形算，见上面两行");
+                }
+
+                // 手牌也量一下：整排手牌在 z ≈ −0.58（机器在 +Z 那侧），这条把"不挡手牌"也钉住
+                if (setup.hand != null && setup.hand.Count > 0)
+                {
+                    float hx0 = float.MaxValue, hx1 = float.MinValue, hz0 = float.MaxValue, hz1 = float.MinValue;
+                    int n = 0;
+                    for (int i = 0; i < setup.hand.Count; i++)
+                    {
+                        if (setup.hand[i] == null) continue;
+                        Vector3 p = setup.hand[i].transform.position;
+                        if (p.x < hx0) hx0 = p.x;
+                        if (p.x > hx1) hx1 = p.x;
+                        if (p.z < hz0) hz0 = p.z;
+                        if (p.z > hz1) hz1 = p.z;
+                        n++;
+                    }
+
+                    if (n > 0)
+                    {
+                        bool hit = (b.min.x < hx1 && hx0 < b.max.x) && (b.min.z < hz1 && hz0 < b.max.z);
+                        Debug.Log("[AutoPlay/FX] " + what + " 手牌 " + n + " 张 占地 x " + hx0.ToString("0.000")
+                                  + " ~ " + hx1.ToString("0.000") + "，z " + hz0.ToString("0.000") + " ~ " + hz1.ToString("0.000")
+                                  + "　与破壁机占地" + (hit ? "　★ 相交" : "　✓ 不相交"));
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 点**指定的**手牌素材上桌 —— 走 TableInteraction.ClickCard，和玩家单击同一条路。
+        ///
+        /// 【为什么要能点名】默认那两条链点的是"手牌里第一张素材"，
+        ///   而"哪一类附魔对哪张卡有反应"是看卡面的：水牌组里冰（遇热）会变水，
+        ///   水蒸气（遇冷）对热毫无反应 —— 点错卡就拍不到任何反应，还以为是特效没做。
+        ///
+        /// 【为什么除了名字还留一个 index】名字是中文，而 .cmd 里写中文会被 cmd.exe
+        ///   按 OEM 码页解析、整份批处理可能直接解析失败（踩过：Unity 起来时一个环境变量都没有）。
+        ///   所以再给一条**纯 ASCII** 的路：`DSH_FX_TARGET_INDEX=n` 按手牌顺序数第 n 张素材。
+        ///   index ≥ 0 时优先用它。
+        /// </summary>
+        private static void ProbeClickHandMaterialNamed(string namePart, int index)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+
+            if (setup == null || it == null || loop == null || loop.rulesV21 == null)
+            {
+                Debug.LogWarning("[AutoPlay/FX] 找不到 TableSetup / TableInteraction，点名上桌跳过。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+
+            // 手牌里的素材（法术的 bindingMaterial 是空的，靠它区分）
+            System.Collections.Generic.List<PlayCard> mats = new System.Collections.Generic.List<PlayCard>();
+            for (int i = 0; i < setup.hand.Count; i++)
+            {
+                PlayCard c = setup.hand[i];
+                if (c != null && c.bindingMaterial != null) mats.Add(c);
+            }
+
+            PlayCard pick = null;
+
+            if (index >= 0 && index < mats.Count) pick = mats[index];
+
+            if (pick == null)
+            {
+                for (int i = 0; i < mats.Count; i++)
+                {
+                    if (string.IsNullOrEmpty(namePart)) { pick = mats[i]; break; }
+                    if (mats[i].DisplayName != null && mats[i].DisplayName.Contains(namePart)) { pick = mats[i]; break; }
+                }
+            }
+
+            if (pick == null)
+            {
+                Debug.LogWarning("[AutoPlay/FX] 手牌里没有「" + namePart + "」（index=" + index + "），点名上桌跳过。"
+                                 + "当前手牌：" + r.HandText());
+                return;
+            }
+
+            int before = r.LiveTableCount();
+            bool handled = it.ClickCard(pick);
+
+            Debug.Log("[AutoPlay/FX] ★点名上桌：「" + pick.DisplayName + "」｜被处理 " + handled
+                      + "｜桌面素材 " + before + " → " + r.LiveTableCount() + " 张"
+                      + "｜启动目标 " + (r.selected != null ? r.selected.name : "（无）")
+                      + "｜notice " + loop.notice);
+        }
+
+        /// <summary>
+        /// 放慢 / 恢复正常时间 —— 抓特效中间帧用。
+        ///
+        /// 【为什么敢动 timeScale】规则结算是一次调用跑完的（引擎不看 Time.deltaTime），
+        ///   放慢只影响"动画播多快"。所以"反应确实发生了""是什么颜色"这些判据
+        ///   和正常速度下完全一样，唯一的变化是 0.85 秒的特效在现实里变成好几秒，
+        ///   够 ShotSettle（1.6 秒防串帧）之后的连拍落在特效中间。
+        /// </summary>
+        private static void SetTimeScale(float scale, string what)
+        {
+            Time.timeScale = scale;
+
+            float real = scale > 0.0001f ? (ReactionFx.Life / scale) : 0f;
+            Debug.Log("[AutoPlay/FX] " + what + "：Time.timeScale = " + scale
+                      + "｜特效 " + ReactionFx.Life + " 秒 → 现实里约 " + real.ToString("0.0") + " 秒");
+        }
+
+        /// <summary>场上还剩几个特效对象（播完应当都是 0 —— 特效自己销毁，不给下一帧留垃圾）。</summary>
+        private static string ReactionFxCountText()
+        {
+            ReactionFx[] fx = Object.FindObjectsOfType<ReactionFx>();
+            JuicerEcho[] echo = Object.FindObjectsOfType<JuicerEcho>();
+
+            return "卡上特效残留 " + fx.Length + " 个、破壁机呼应残留 " + echo.Length + " 个（都应为 0）";
+        }
+
+        /// <summary>
+        /// 场上特效对象里**还启用着**的碰撞体数量 —— 启用数必须是 0。
+        ///
+        /// 【为什么值得为它单开一行日志】拾取走的是全场景 Physics.Raycast（TableInteraction
+        ///   那一句没有 LayerMask）。特效只要留一个启用的 Collider，反应那 0.85 秒里
+        ///   **鼠标点不到任何一张牌** —— 而且是"过一会儿又好了"的间歇性表现，
+        ///   事后靠眼睛看截图根本发现不了。所以这条要数字，不要"看起来没问题"。
+        /// </summary>
+        private static string FxColliderCountText()
+        {
+            int enabled = 0, total = 0;
+
+            Collider[] cols = Object.FindObjectsOfType<Collider>();
+            ReactionFx[] fx = Object.FindObjectsOfType<ReactionFx>();
+            JuicerEcho[] echo = Object.FindObjectsOfType<JuicerEcho>();
+
+            for (int i = 0; i < cols.Length; i++)
+            {
+                Collider c = cols[i];
+                if (c == null) continue;
+
+                bool underFx = false;
+                for (int k = 0; k < fx.Length && !underFx; k++)
+                    if (fx[k] != null && c.transform.IsChildOf(fx[k].transform)) underFx = true;
+                for (int k = 0; k < echo.Length && !underFx; k++)
+                    if (echo[k] != null && c.transform.IsChildOf(echo[k].transform)) underFx = true;
+
+                if (!underFx) continue;
+
+                total++;
+                if (c.enabled) enabled++;
+            }
+
+            return "特效范围内的碰撞体：启用 " + enabled + " 个 / 共 " + total + " 个"
+                 + (enabled == 0 ? "　✓ 不会挡住射线拾取" : "　★ 有启用的碰撞体，会挡住拾取");
+        }
+
+        /// <summary>
+        /// 按环境变量给刀片加附魔层数（DSH_FX_LAYER=热/冷/酸/催化、DSH_FX_LAYERS=n，默认 热×2）。
+        ///
+        /// 【为什么需要它】和 DSH_EXTRA_HEAT 是同一个理由：开局手里只有 1 张法术 = 对应附魔 ×1，
+        ///   而"遇热/遇冷"这类反应大多要求 ×2。要拍到某一种颜色的反应，
+        ///   就得能把刀片带到"规则该触发"的状态 —— 走的是 BladeState 的公开入口 Add，
+        ///   和自己打两张法术在规则上是同一件事，探针不碰任何规则代码。
+        /// </summary>
+        private static void ProbeAddFxLayers()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) return;
+
+            string name = EnvText("DSH_FX_LAYER", "热");
+            int n = EnvInt("DSH_FX_LAYERS", 2);
+            if (n <= 0) return;
+
+            GameJam.Rules.LayerKind kind = GameJam.Rules.LayerKind.Heat;
+            if (name == "冷") kind = GameJam.Rules.LayerKind.Cold;
+            else if (name == "酸") kind = GameJam.Rules.LayerKind.Acid;
+            else if (name == "催化") kind = GameJam.Rules.LayerKind.Catalyst;
+
+            // ★ 名字是中文、写不进 ASCII 的 .cmd（见 ProbeClickHandMaterialNamed 的说明），
+            //   所以再给一条数字路：0=热 1=冷 2=酸 3=催化。≥0 时优先。
+            int idx = EnvInt("DSH_FX_LAYER_INDEX", -1);
+            if (idx >= 0 && idx < GameJam.Rules.LayerLedger.KindCount)
+                kind = (GameJam.Rules.LayerKind)idx;
+
+            TableRulesV21 r = loop.rulesV21;
+            string before = r.blade.layers.Describe();
+            r.blade.layers.Add(kind, n);
+
+            Debug.Log("[AutoPlay/FX] 附魔调味：" + LayerKindName(kind) + "×" + n + "　"
+                      + before + " → " + r.blade.layers.Describe()
+                      + "（走 BladeState.layers.Add，和自己打法术在规则上是同一件事）");
+        }
+
+        private static string LayerKindName(GameJam.Rules.LayerKind k)
+        {
+            switch (k)
+            {
+                case GameJam.Rules.LayerKind.Cold:     return "冷";
+                case GameJam.Rules.LayerKind.Acid:     return "酸";
+                case GameJam.Rules.LayerKind.Catalyst: return "催化";
+            }
+            return "热";
+        }
+
+        /// <summary>
+        /// 五种配色一次摆全（见 ⑱⑤ 那段说明：**这不是引擎触发的反应**，是给策划看配色的）。
+        ///
+        /// 【为什么摆两排而不是一排】一个光环的直径上限是 0.6 世界单位、屏幕上约 530 像素，
+        ///   五个摆一排要 2600 像素，屏幕只有 1470 —— 必然左右两端被切掉。
+        ///   所以三前一后：第一排 z=0.05（离玩家近、不在 HUD 面板后面），
+        ///   第二排 z=0.38（再往后就被顶部那块回合面板盖住了，实测过）。
+        ///   两排的 x 错开半格，避免光环互相压。
+        /// </summary>
+        private static void ProbeFxVariantPreview()
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null) { Debug.LogWarning("[AutoPlay/FX] 找不到 TableSetup，配色预览跳过。"); return; }
+
+            ReactionFx.Play(new Vector3(-0.50f, 0f, 0.05f), ReactionFxKind.Heat,     null);
+            ReactionFx.Play(new Vector3( 0.00f, 0f, 0.05f), ReactionFxKind.Cold,     null);
+            ReactionFx.Play(new Vector3( 0.50f, 0f, 0.05f), ReactionFxKind.Acid,     null);
+            ReactionFx.Play(new Vector3(-0.25f, 0f, 0.38f), ReactionFxKind.Catalyst, null);
+            ReactionFx.Play(new Vector3( 0.25f, 0f, 0.38f), ReactionFxKind.Explode,  null);
+
+            Debug.Log("[AutoPlay/FX] 配色预览（★ 直接调 ReactionFx.Play，不是引擎触发的反应）："
+                      + "热=橙红 / 冷=青蓝 / 酸=黄绿 / 催化=淡紫 / 爆炸=白闪（力度 ×" + ReactionFx.ExplodePower + "）"
+                      + "｜时长 " + ReactionFx.Life + "s｜粒子 " + ReactionFx.SparkCount + " 颗/个"
+                      + "（爆炸 ×" + ReactionFx.ExplodePower + "）｜光环半径上限 " + ReactionFx.RingRadius);
+        }
+
+        /// <summary>读一个字符串环境变量，没设就用默认值（和 EnvInt 一对）。</summary>
+        private static string EnvText(string name, string fallback)
+        {
+            string v = System.Environment.GetEnvironmentVariable(name);
+            return string.IsNullOrEmpty(v) ? fallback : v;
         }
 
         /// <summary>把"状态几张 / 场景几张"的自检摘要打进日志（探针验收就看这几行）。</summary>
