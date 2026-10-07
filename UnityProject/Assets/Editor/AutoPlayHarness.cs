@@ -387,7 +387,73 @@ namespace GameJam.EditorTools
                 case 59:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("v21_turn1.png")) return;
-                    Stage = 60;
+                    Stage = 110;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ⑪⑩~⑪⑥ **只用点击**的路径（用户卡住的那条）
+                //
+                //  用户原话"点了怎么没用？"：他点的是还压在投放区的那张盐，
+                //  而旧链路必须"拖到投放区 → 按「放置到桌面」→ 再点桌上的牌选目标"。
+                //  这一段就是来验"点也能走通"的：
+                //    点手牌素材 → 上桌（⑪⓪）、点桌上素材 → 选目标（⑪②）、
+                //    点投放区里的卡 → 上桌并选中（⑪③）、启动破壁机（⑪⑤）。
+                //  走的是 TableInteraction.ClickCard —— 和玩家单击**同一条分派**，
+                //  探针不模拟鼠标，只把"从射线认出是哪张卡"换成"由探针指定哪张"。
+                // ══════════════════════════════════════════════════════
+
+                // ⑪⓪ 点手牌里的素材 = 直接上桌
+                case 110:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeClickHandMaterial();
+                    Stage = 111;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑪① 拍"点一下之后桌面上出现了那张卡"
+                case 111:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("v21_click_place.png")) return;
+                    Stage = 112;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑪② 点桌面上的素材 = 选为启动目标
+                case 112:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeClickTableCard();
+                    Stage = 113;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑪③ 点投放区里待放置的卡 = 上桌 + 选为目标（用户卡住的那一步）
+                case 113:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeClickStagedCard();
+                    Stage = 114;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 114:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("v21_click_staged.png")) return;
+                    Stage = 115;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑪⑤ 启动破壁机：日志里要出现"启动前/启动后"和引擎结算行
+                case 115:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeActivateV21();
+                    Stage = 116;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 116:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    if (!Shot("v21_click_activate.png")) return;
+                    Stage = 60;                       // 接着走原来那条"拖拽"路径，两条都过一遍
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -1369,6 +1435,127 @@ namespace GameJam.EditorTools
                 return c;
             }
             return null;
+        }
+
+        // ── "只用点击"那条路（⑪⑩~⑪⑥）────────────────────────────────
+        // 三个探针都走 TableInteraction.ClickCard：和玩家单击同一个分派，
+        // 不另开一条捷径 —— 否则测的就不是玩家那条路。
+
+        /// <summary>点手牌里的素材 = 直接上桌（等价于拖到投放区 + 按「放置到桌面」）。</summary>
+        private static void ProbeClickHandMaterial()
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+
+            if (setup == null || it == null || loop == null || loop.rulesV21 == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] 找不到 TableSetup / TableInteraction，单击上桌探针跳过。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+            PlayCard card = FirstHandMaterial(setup);
+            if (card == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] 手牌里没有素材（3D 手牌 " + setup.hand.Count + " 张），单击上桌探针跳过。");
+                return;
+            }
+
+            // 点之前先把"投放区压着什么"写出来：点一下会把**所有**待放置的一起送上桌
+            // （这就是「放置到桌面」的语义），日志里得能看出这一下到底送了几张、为什么。
+            Debug.Log("[AutoPlay/V21] 点之前：桌面素材 " + r.LiveTableCount() + " 张"
+                      + "｜待放置 " + loop.StagedCount + " 张（" + loop.StagedText + "）"
+                      + "｜手牌 " + r.HandText());
+
+            int before = r.LiveTableCount();
+            bool handled = it.ClickCard(card);
+
+            Debug.Log("[AutoPlay/V21] ★点手牌素材：" + card.DisplayName + "｜被处理 " + handled
+                      + "｜桌面素材 " + before + " → " + r.LiveTableCount() + " 张"
+                      + "｜启动目标 " + (r.selected != null ? r.selected.name : "（无）")
+                      + "｜notice " + loop.notice);
+        }
+        /// <summary>点桌面上的素材 = 选为启动目标（原来就有，这里顺带验一遍）。</summary>
+        private static void ProbeClickTableCard()
+        {
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+            if (it == null || loop == null || loop.rulesV21 == null) return;
+
+            TableRulesV21 r = loop.rulesV21;
+
+            // 桌面上的 3D 卡：用规则层的 FindTable 认（不靠名字，名字会随 D 变）
+            PlayCard target = null;
+            PlayCard[] all = Object.FindObjectsOfType<PlayCard>();
+            for (int i = 0; i < all.Length; i++)
+            {
+                if (all[i] == null) continue;
+                if (r.FindTable(all[i]) == null) continue;
+                target = all[i];
+                break;
+            }
+
+            if (target == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] 桌面上一张素材都没有，点选目标探针跳过。");
+                return;
+            }
+
+            bool handled = it.ClickCard(target);
+
+            Debug.Log("[AutoPlay/V21] ★点桌面素材：" + target.DisplayName + "｜被处理 " + handled
+                      + "｜启动目标 " + (r.selected != null ? r.selected.name : "（无）")
+                      + "｜notice " + loop.notice);
+        }
+
+        /// <summary>
+        /// 点**投放区里待放置**的卡 = 上桌 + 选为启动目标（用户卡住的那一步）。
+        ///
+        /// 先用游戏自己的公开入口把一张手牌摆进投放区（`board.Place` + `SnapTo` + `Stage`，
+        /// 和玩家拖进去的效果一样），再"点"它 —— 这样验的才是"压在投放区那张点得动"。
+        /// </summary>
+        private static void ProbeClickStagedCard()
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+
+            if (setup == null || it == null || loop == null || loop.rulesV21 == null || setup.board == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] 找不到 TableSetup / TableInteraction / board，点投放区探针跳过。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+            PlayCard card = FirstHandMaterial(setup);
+            if (card == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] 手牌里没有素材了，点投放区探针跳过。");
+                return;
+            }
+
+            int slot = TableTurnLoop.SlotMaterial;
+            if (!setup.board.Place(slot, card))
+            {
+                Debug.LogWarning("[AutoPlay/V21] " + slot + " 号素材槽放不下 " + card.DisplayName + "，探针跳过。");
+                return;
+            }
+
+            card.SnapTo(setup.board.SlotPosition(slot));
+            loop.Stage(card);
+
+            int before = r.LiveTableCount();
+            Debug.Log("[AutoPlay/V21] 先把 " + card.DisplayName + " 摆进投放区（待放置 "
+                      + loop.StagedCount + " 张、桌面素材 " + before + " 张）→ 现在点它一下");
+
+            bool handled = it.ClickCard(card);
+
+            Debug.Log("[AutoPlay/V21] ★点投放区里的卡：" + card.DisplayName + "｜被处理 " + handled
+                      + "｜桌面素材 " + before + " → " + r.LiveTableCount() + " 张"
+                      + "｜待放置 " + loop.StagedCount + " 张"
+                      + "｜启动目标 " + (r.selected != null ? r.selected.name : "（无）")
+                      + "｜notice " + loop.notice);
         }
 
         private static void OpenInspect()

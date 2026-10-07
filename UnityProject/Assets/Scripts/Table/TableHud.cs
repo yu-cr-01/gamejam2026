@@ -1349,18 +1349,24 @@ namespace GameJam.Prototype
             // 提示必须跟着换 —— 写旧那一套会让玩家一直找不到"怎么启动"。
             if (turnLoop != null && turnLoop.V21)
             {
-                GUI.Label(new Rect(16f, y, w, 24f), "把素材拖到桌面中间的投放区 → 按「放置到桌面」", h1);
-                GUI.Label(new Rect(16f, y + 28f, w, 22f), "点桌面上的素材 = 选它当「启动破壁机」的目标（会抬起来）", dim);
-                GUI.Label(new Rect(16f, y + 48f, w, 22f), "点手牌里的法术 = 直接附魔到刀片（不消耗行动机会）", dim);
-                GUI.Label(new Rect(16f, y + 68f, w, 22f), "「启动破壁机」消耗 1 行动机会 + 1 点刀片 H", dim);
-                GUI.Label(new Rect(16f, y + 88f, w, 22f), "每回合 5 次行动、每关 4 回合；本回合最后一次启动会献祭吞噬目标", dim);
-                GUI.Label(new Rect(16f, y + 108f, w, 22f), "刀片 H 归零 = 爆刀，关卡结束、当前分数 ×2", dim);
-                GUI.Label(new Rect(16f, y + 128f, w, 22f), "右键单击卡牌 → 查看完整数据　｜　右键拖动 → 转头", dim);
-                GUI.Label(new Rect(16f, y + 148f, w, 22f), "F1 → 卡牌图鉴（素材 / 法术全在这）　｜　F2 → 卡牌规则解析报告", dim);
-                GUI.Label(new Rect(16f, y + 168f, w, 22f), "Esc → 菜单（继续 / 设置 / 关卡 / 卡牌图鉴 / 退出关卡 / 退出游戏）", dim);
+                // v2.1 的提示比旧流程多两行（"点手牌 = 上桌"和 F1 那条），
+                // 所以这一块自己算高度（240）：直接用外面那个 214 的话，
+                // 第一行会顶到 y 上面去、和别的 HUD 叠在一起。
+                float yv = Screen.height - 240f - 14f;
+
+                GUI.Label(new Rect(16f, yv, w, 24f), "把素材拖到桌面中间的投放区 → 按「放置到桌面」", h1);
+                GUI.Label(new Rect(16f, yv + 28f, w, 22f), "点手牌里的素材 = 直接上桌（点投放区里的卡 = 上桌并选为目标）", dim);
+                GUI.Label(new Rect(16f, yv + 48f, w, 22f), "点桌面上的素材 = 选它当「启动破壁机」的目标（会抬起来）", dim);
+                GUI.Label(new Rect(16f, yv + 68f, w, 22f), "点手牌里的法术 = 直接附魔到刀片（不消耗行动机会）", dim);
+                GUI.Label(new Rect(16f, yv + 88f, w, 22f), "「启动破壁机」消耗 1 行动机会 + 1 点刀片 H", dim);
+                GUI.Label(new Rect(16f, yv + 108f, w, 22f), "每回合 5 次行动、每关 4 回合；本回合最后一次启动会献祭吞噬目标", dim);
+                GUI.Label(new Rect(16f, yv + 128f, w, 22f), "刀片 H 归零 = 爆刀，关卡结束、当前分数 ×2", dim);
+                GUI.Label(new Rect(16f, yv + 148f, w, 22f), "右键单击卡牌 → 查看完整数据　｜　右键拖动 → 转头", dim);
+                GUI.Label(new Rect(16f, yv + 168f, w, 22f), "F1 → 卡牌图鉴（素材 / 法术全在这）　｜　F2 → 卡牌规则解析报告", dim);
+                GUI.Label(new Rect(16f, yv + 188f, w, 22f), "Esc → 菜单（继续 / 设置 / 关卡 / 卡牌图鉴 / 退出关卡 / 退出游戏）", dim);
 
                 if (TableSettings.ShowDebugInfo)
-                    GUI.Label(new Rect(16f, y + 190f, w, 22f),
+                    GUI.Label(new Rect(16f, yv + 210f, w, 22f),
                               "物理：" + (interaction.PhysicsOn ? "开（受重力）" : "关（脚本控制）")
                               + "　　视角：" + (setup != null && setup.rig != null && setup.rig.IsFreeLook
                                                 ? "自由转头中" : "固定机位"), dim);
@@ -1536,12 +1542,13 @@ namespace GameJam.Prototype
 
             bool canActivate = r.CanActivate && r.selected != null && !r.selected.removed;
 
-            // 不能启动的原因直接写出来 —— 按钮灰着却不解释，玩家只会以为是 bug
+            // 不能启动的原因直接写出来 —— 按钮灰着却不解释，玩家只会以为是 bug。
+            // ★ 但"原因"必须指向**玩家现在真做得到**的那件事：见 V21BlockHint。
             if (!canActivate)
             {
                 Color prev = GUI.color;
                 GUI.color = new Color(1f, 0.62f, 0.42f);
-                GUILayout.Label("⚠ " + r.BlockReason, dimPanel);
+                GUILayout.Label(V21BlockHint(r), dimPanel);
                 GUI.color = prev;
             }
 
@@ -1613,6 +1620,42 @@ namespace GameJam.Prototype
             if (turnLoop != null && (turnLoop.settingsOpen || turnLoop.paused)) return true;
             if (interaction != null && interaction.Inspected != null) return true;
             return false;
+        }
+
+        /// <summary>
+        /// 不能启动时该做什么 —— 提示必须指向**玩家现在真做得到**的那件事。
+        ///
+        /// 【为什么不能直接用规则层的 BlockReason】它只说"为什么不能启动"，
+        ///   不知道场上实况。用户卡住那局的原话是「先在桌面上点一张素材当启动目标」，
+        ///   而那时桌面素材 0 张、他点的那张盐还压在投放区 ——
+        ///   提示在指挥一件做不到的事，玩家的感受就是"点了怎么没用"。
+        ///   规则层（TableRulesV21）不归这里改，所以在 HUD 这一层按
+        ///   "启动前提 / 投放区 / 桌面 / 手牌"四段实况给话。
+        ///
+        /// 【顺序不能反】先看 CanActivate：行动机会用完、爆刀、关卡结束这三种，
+        ///   玩家再怎么摆牌也启动不了，说别的都是误导。
+        /// </summary>
+        private string V21BlockHint(TableRulesV21 r)
+        {
+            // ① 启动的硬前提不满足（行动机会 / 刀片 / 关卡状态）→ 照规则层说
+            if (!r.CanActivate) return "⚠ " + r.BlockReason;
+
+            // ② 选了目标却仍不能启动（目标被吞了 / D 耗尽…）→ 也照规则层说
+            if (r.selected != null) return "⚠ " + r.BlockReason;
+
+            int table = r.LiveTableCount();
+
+            // ③ 投放区压着牌、桌上却空着：先把那张放上去（这正是用户卡住的那一步）
+            if (table <= 0 && turnLoop.StagedCount > 0)
+                return "⚠ 投放区还压着 " + turnLoop.StagedCount + " 张没上桌："
+                       + "点它一下（或点「放置到桌面」）就上桌，上桌后自动选为启动目标";
+
+            // ④ 桌上空、投放区也空：告诉玩家"点手牌"这条更省事的路
+            if (table <= 0)
+                return "⚠ 桌面还没有素材：点手牌里的素材直接上桌（也可以拖到投放区再点「放置到桌面」）";
+
+            // ⑤ 桌上有牌但没选目标
+            return "⚠ 桌面上有 " + table + " 张素材，但还没选目标：点其中一张把它选为启动目标";
         }
 
         /// <summary>
