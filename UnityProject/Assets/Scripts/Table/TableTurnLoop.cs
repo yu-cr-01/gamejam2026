@@ -253,6 +253,72 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
+        /// 直接开一关 —— **只有 <see cref="TableSettings.AutoStart"/> 为真时才会被调用**（`DSH_AUTOSTART=1`）。
+        ///
+        /// 【为什么需要有这个后门】用户连着两次报的都是**打包版**里的操作问题，
+        ///   而在打包版里点菜单进一关要经过开场 → 关卡 → 牌组 → 刀片四个环节，
+        ///   复现一次又慢又容易点歪（自动化点菜单还得跟 IMGUI 抢焦点）。
+        ///   这里替玩家把这四下点击按一遍，停在"第 1 回合、什么都没动"的桌面上 ——
+        ///   和编辑器探针的起点完全一致，于是**打包版也能被逐帧复现**。
+        ///
+        /// 【它一行规则都不碰】走的全是玩家那条路上的公开入口：
+        ///   ConfirmTitleStart → 选关 → ConfirmLevelSelect → 选牌组 → ConfirmDeckPick
+        ///   → 点一张核心（SwapBladeWith）→ ConfirmBladePick。
+        ///   任何一步没走成都会如实打日志，绝不静默。
+        /// </summary>
+        public void AutoStartFirstLevel()
+        {
+            if (phase != TablePhase.Title)
+            {
+                Debug.LogWarning("[AutoStart] 当前不是开场阶段（" + phase + "），自动开局跳过。");
+                return;
+            }
+
+            ConfirmTitleStart();
+            if (phase != TablePhase.LevelSelect)
+            {
+                Debug.LogWarning("[AutoStart] 点「新游戏」之后没进选关界面（阶段 " + phase + "），自动开局停在这里。");
+                return;
+            }
+
+            if (choiceRig != null) choiceRig.SelectDeck(levelIndex);      // 当前那一关
+            ConfirmLevelSelect();
+            if (phase != TablePhase.DeckPick)
+            {
+                Debug.LogWarning("[AutoStart] 确认关卡之后没进牌组界面（阶段 " + phase + "），自动开局停在这里。");
+                return;
+            }
+
+            if (choiceRig != null) choiceRig.SelectDeck(TableSettings.AutoStartDeck);
+            ConfirmDeckPick();
+            if (phase != TablePhase.BladePick)
+            {
+                Debug.LogWarning("[AutoStart] 确认牌组之后没进刀片界面（阶段 " + phase + "），自动开局停在这里。");
+                return;
+            }
+
+            // 选一张 H>0 的素材当核心（判据和 CoreCandidate 一致：H=0 一进关卡就爆刀）
+            if (setup != null && setup.hand != null)
+            {
+                for (int i = 0; i < setup.hand.Count; i++)
+                {
+                    PlayCard c = setup.hand[i];
+                    if (c == null || c.bindingMaterial == null) continue;
+                    if (c.bindingMaterial.H <= 0) continue;
+                    SwapBladeWith(c);
+                    break;
+                }
+            }
+
+            ConfirmBladePick();
+
+            Debug.Log("[AutoStart] 已直接开一关（DSH_AUTOSTART=1）：阶段 " + phase
+                      + "｜刀片 " + (rulesV21 != null ? rulesV21.blade.Describe() : "?")
+                      + "｜手牌 " + (rulesV21 != null ? rulesV21.HandText() : "?")
+                      + "｜本回合行动 " + (rulesV21 != null ? rulesV21.actionPoints : 0));
+        }
+
+        /// <summary>
         /// 打开关卡界面：桌上一排关卡卡。
         ///
         /// 关卡列表从配置读（GameConfig.Levels），加一关只是配置里多写一条。
@@ -867,6 +933,88 @@ namespace GameJam.Prototype
                     bool intoTable = CanStageInto(SlotMaterial, handMaterial);
                     if (!intoTable) ok = false;
                     sb.Append("｜素材「").Append(OneLine(handMaterial.DisplayName)).Append("」进上桌位=").Append(intoTable ? "收" : "★被拒");
+                }
+
+                // ④ ★ 落点区域 vs 牌子位置 —— 用户第二次报的就是这一条：
+                //    语义全对，可是"照着牌子上的字去放"落到了判定区外面
+                //    （牌子刻在框外面 + 拖动抬卡带来的透视差，两条叠在一起）。
+                //    所以每个槽量两件事：
+                //      · 牌子中心能不能被判到它自己的槽（不能 = 玩家照牌子放必然失败）
+                //      · 判定区近端离手牌那一排还剩多少厘米
+                //        （≤0 = 判定区压到手牌上，"拖回手牌反悔"会变成"又出了一张牌"）
+                if (setup.board == null)
+                {
+                    ok = false;
+                    sb.Append("｜落点区域：没有卡槽，量不了");
+                }
+                else if (setup.interaction == null)
+                {
+                    sb.Append("｜落点区域：没有 TableInteraction（余量在它身上），这一步量不了");
+                }
+                else
+                {
+                    TableInteraction it = setup.interaction;
+                    for (int i = 0; i < setup.board.SlotCount && i < 2; i++)
+                    {
+                        Vector3 label = setup.SlotLabelPosition(i);
+                        int hit = setup.board.FindDropTarget(label, it.snapSlackX,
+                                                             it.snapSlackZ + it.snapSlackNearZ);
+                        if (hit != i) ok = false;
+
+                        // 判定区近端上限（朝玩家那一侧）= 牌子中心 + 牌子离框的距离 − 两个 z 余量
+                        float nearLimit = label.z + TableSetup.SlotLabelGap
+                                        - it.snapSlackZ - it.snapSlackNearZ;
+                        float labelMargin = (label.z - nearLimit) * 100f;          // >0 = 牌子在区里
+                        float handMargin  = (nearLimit - TableTurnLoop.HandZ) * 100f;  // >0 = 没压到手牌
+
+                        sb.Append("｜槽 ").Append(i).Append(" 牌子 z=").Append(label.z.ToString("0.###"))
+                          .Append(" → 牌子中心判到 ").Append(hit).Append(hit == i ? " ✓" : " ★")
+                          .Append("，牌子离判定区近端 ").Append(labelMargin.ToString("0.#")).Append(" 厘米")
+                          .Append("，判定区离手牌 ").Append(handMargin.ToString("0.#")).Append(" 厘米");
+
+                        if (labelMargin <= 0f) { ok = false; sb.Append("（★ 牌子掉到判定区外）"); }
+                        if (handMargin <= 0f)  { ok = false; sb.Append("（★ 判定区压到手牌上）"); }
+
+                        // ⑤ ★★ 真正的那条防线：模拟"玩家把卡**看着压在牌子**上"再松手。
+                        //   玩家是照着自己看到的那张卡放的，而拖动时卡被抬起 DragLift，
+                        //   "看到的位置"和"鼠标在地面的位置"差着一段透视差（相机斜看桌面）。
+                        //   这里先反解出"卡看着压在牌子中心时，鼠标落在地面的哪一点"，
+                        //   再喂给**判决用的那个函数**（JudgeDropPoint），看它判到哪个槽。
+                        //   用户第二次报的"照着牌子放却放不上去"就是这一步判不到槽 ——
+                        //   ②③④ 全绿也照样复现，所以缺了 ⑤ 就等于没防住。
+                        if (setup.cam == null)
+                        {
+                            sb.Append("｜（没有相机，「压牌子」这一步量不了）");
+                        }
+                        else
+                        {
+                            float dragY = 0.022f + PlayCard.DragLift;           // 拖动时卡中心的高度
+                            Vector3 c = setup.cam.transform.position;
+                            float t = (dragY - c.y) / (0f - c.y);               // 反解：地面点 → 抬高后的位置
+                            Vector3 mouseGround = new Vector3(
+                                c.x + t * (label.x - c.x), dragY, c.z + t * (label.z - c.z));
+
+                            Vector3 judged = it.JudgeDropPoint(mouseGround);
+                            int aimHit = setup.board.FindDropTarget(judged, it.snapSlackX,
+                                                                    it.snapSlackZ + it.snapSlackNearZ);
+                            float aimMargin = (judged.z - nearLimit) * 100f;
+
+                            sb.Append("｜压牌子松手 → 判决落点 z=").Append(judged.z.ToString("0.###"))
+                              .Append(" 判到 ").Append(aimHit).Append(aimHit == i ? " ✓" : " ★判不到")
+                              .Append("（离判定区近端 ").Append(aimMargin.ToString("0.#")).Append(" 厘米）");
+
+                            if (aimHit != i) ok = false;
+                            // ★ 余量太小也要报警：用户第二次报的"照着牌子放却放不上去"，
+                            //   改前那版在这一步实测只剩 **1.8 厘米** —— 判据本身"能过"，
+                            //   但玩家把手往下一压就出区。只看"过不过"的检查会放它过去，
+                            //   所以这里连"太薄"一起管（阈值 5 厘米）。
+                            else if (aimMargin < 5f)
+                            {
+                                ok = false;
+                                sb.Append("（★ 余量太小：玩家手一抖就出区）");
+                            }
+                        }
+                    }
                 }
             }
 

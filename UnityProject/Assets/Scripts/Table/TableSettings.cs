@@ -44,7 +44,30 @@ namespace GameJam.Prototype
             string env = System.Environment.GetEnvironmentVariable("DSH_RULES_V21");
             if (env == "0") UseRulesV21 = false;
             else if (env == "1") UseRulesV21 = true;
+
+            // ★ 打包版的自动开局后门（`DSH_AUTOSTART=1`，默认关）。
+            //   【为什么必须有】用户连着两次报的都是**打包版**里的操作问题
+            //   （"附魔位放不上去"），而在打包版里点菜单点进一关要经过
+            //   开场 → 关卡 → 牌组 → 刀片四个环节，复现一次成本极高、还容易点歪。
+            //   有了它，`DSH_AUTOSTART=1` 一跑就停在"第 1 回合、什么都没动"的桌面上，
+            //   和编辑器探针的起点完全一致 —— 打包版也能被逐帧复现。
+            //   AutoStartDeck 是选第几副牌组（默认 0 = 配置里第一副）。
+            AutoStart     = System.Environment.GetEnvironmentVariable("DSH_AUTOSTART") == "1";
+            string deckEnv = System.Environment.GetEnvironmentVariable("DSH_AUTOSTART_DECK");
+            int deckIdx;
+            if (!string.IsNullOrEmpty(deckEnv) && int.TryParse(deckEnv, out deckIdx) && deckIdx >= 0)
+                AutoStartDeck = deckIdx;
         }
+
+        /// <summary>
+        /// 启动后直接进第 1 回合（跳过开场 / 关卡 / 牌组 / 刀片四个环节）。
+        /// **默认关**，只有 `DSH_AUTOSTART=1` 时才为真 —— 它不改任何规则，
+        /// 只是替玩家把那四下点击按了一遍（走的还是那几个公开入口）。
+        /// </summary>
+        public static bool AutoStart;
+
+        /// <summary>自动开局选第几副牌组（`DSH_AUTOSTART_DECK=n`，默认 0）。</summary>
+        public static int AutoStartDeck;
 
         /// <summary>
         /// 卡表里还没写数值时用的**占位数值口径**。

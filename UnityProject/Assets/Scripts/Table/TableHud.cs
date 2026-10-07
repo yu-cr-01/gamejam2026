@@ -1375,7 +1375,7 @@ namespace GameJam.Prototype
                 GUI.Label(new Rect(16f, yv + 128f, w, 22f), "每回合 5 次行动、每关 4 回合；本回合最后一次启动会献祭吞噬目标", dim);
                 GUI.Label(new Rect(16f, yv + 148f, w, 22f), "刀片 H 归零 = 爆刀，关卡结束、当前分数 ×2", dim);
                 GUI.Label(new Rect(16f, yv + 168f, w, 22f), "右键单击卡牌 → 查看完整数据　｜　右键拖动 → 转头", dim);
-                GUI.Label(new Rect(16f, yv + 188f, w, 22f), "F1 → 卡牌图鉴（素材 / 法术全在这）　｜　F2 → 卡牌规则解析报告", dim);
+                GUI.Label(new Rect(16f, yv + 188f, w, 22f), "F1 → 卡牌图鉴（素材 / 法术全在这）　｜　F2 → 卡牌规则解析报告　｜　F3 → 落点判定区（调试）", dim);
                 GUI.Label(new Rect(16f, yv + 208f, w, 22f), "Esc → 菜单（继续 / 设置 / 关卡 / 卡牌图鉴 / 退出关卡 / 退出游戏）", dim);
 
                 if (TableSettings.ShowDebugInfo)

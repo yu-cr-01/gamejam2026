@@ -41,13 +41,35 @@ namespace GameJam.Prototype
         /// 余量按轴给，才能保证"横着差一点"和"竖着差一点"被同样宽容地对待 ——
         /// 用一个圆半径去套长方形，长边方向永远比短边难命中。
         ///
-        /// 取值让相邻卡槽的判定区刚好连成一片（x 方向半间距 0.15 < 可达 0.228，
-        /// z 方向半间距 0.20 < 可达 0.305），于是**整片格子区没有死区**，
-        /// 往那片区域随便一丢就能吸上。手牌区在 z=−0.58，离最近的可达边界
-        /// 还有 0.24，所以放回手牌不会误吸。
+        /// 取值让相邻卡槽的判定区刚好连成一片（x 方向半间距 0.15 &lt; 可达 0.228，
+        /// z 方向半间距 0.20 &lt; 可达 0.305），于是**整片格子区没有死区**，
+        /// 往那片区域随便一丢就能吸上。
         /// </summary>
         public float snapSlackX = 0.100f;
         public float snapSlackZ = 0.130f;
+
+        /// <summary>
+        /// **朝玩家那一侧**的额外余量（在 snapSlackZ 之外再放宽这么多）。
+        ///
+        /// 【为什么只放宽这一侧，而且必须放宽】用户第二次报"附魔位放不上去"就是这一条：
+        ///   槽的虚线框是 z ∈ [−0.375, −0.025]，而**槽名牌**（「附　魔 位」）刻在框外面
+        ///   z = −0.43 那一带 —— 玩家是**照着牌子上的字**去放的（牌子才是可读的提示）。
+        ///   再叠上另一件事：拖动时卡被抬起来 8 厘米（PlayCard.LiftDrag），
+        ///   而"看到的位置"和"鼠标落在地面上的位置"之间有一段透视差（约 8~9 厘米），
+        ///   两件事方向相同、一起把实际落点推到判定区的边缘之外 ——
+        ///   表现就是"照着牌子放，牌弹回手里，什么都没发生"（而且窗口尺寸一变就更玄）。
+        ///   所以这里给"玩家这一侧"多留 12 厘米，让**牌子整块、以及牌子上下一带**
+        ///   都稳稳落在判定区里；远端（桌子里面那侧）保持原样，免得把"拖到桌子里侧"也算成进槽。
+        ///
+        /// 【为什么不能干脆全方向放宽到很大】再往玩家那一侧就是手牌那一排（z = −0.58）：
+        ///   把判定区铺到手牌上，"拖回手牌 = 反悔"这个手势就会变成"又出了一张牌"。
+        ///   近端上限 = 框近边(−0.375) − snapSlackZ − 这个值 = −0.555（取 0.04 时），
+        ///   离手牌那一排还有 2.5 厘米 —— 这个数字是"牌子够宽"和"别吃掉手牌"之间挤出来的，
+        ///   再往上加就会压到手牌上（TableTurnLoop.SlotSemanticReport 每次开一关都会量这一条，
+        ///   第一版取 0.09 时它当场报 ★ 判定区压到手牌上）。
+        /// </summary>
+        public float snapSlackNearZ = 0.040f;
+
 
         public PlayCard Hovered   { get; private set; }
         public PlayCard Dragging  { get; private set; }
@@ -92,6 +114,15 @@ namespace GameJam.Prototype
         public static readonly Color MarkerHot  = new Color(0.35f, 0.95f, 0.60f);
 
         /// <summary>
+        /// 拖着的牌**放不进**这个槽时的角标色（暗红）。
+        ///
+        /// 【为什么不是"不亮"】不亮和"鼠标还没拖到任何槽上"分不清；
+        ///   给一个明确的"这里不行"，玩家才知道是**槽不对**（换另一个槽就好），
+        ///   而不是"我还没放对位置"（那样他会一直在同一个槽上试）。
+        /// </summary>
+        public static readonly Color MarkerReject = new Color(0.90f, 0.36f, 0.30f);
+
+        /// <summary>
         /// "手牌区"的分界线（世界 z）。桌面素材被拖到 z 小于它就 = 往玩家自己这边收回来。
         ///
         /// 【为什么是一条 z 线，而不是"手牌卡的包围盒"】
@@ -109,6 +140,217 @@ namespace GameJam.Prototype
         /// <summary>这个落点算不算"玩家想把它收回手牌"。</summary>
         public static bool InHandZone(Vector3 world) { return world.z <= HandZoneZ; }
 
+        /// <summary>
+        /// F3：把两个槽的**落点判定区**画在桌面上（调试用，默认关，不参与玩法）。
+        ///
+        /// 【为什么要这个东西】用户连着两次报"附魔位放不上去"，根因都不在规则、
+        ///   而在"看到的框"和"判定的框"不一致 —— 这种问题拿截图争论永远说不清。
+        ///   这里用**判定用的同一组常量**把判定区画出来（贴图和槽位角标是同一张 L 形角标贴图，
+        ///   所以桌面上会同时出现两个框：里面那个是槽位框、外面那个是判定区），
+        ///   打开时同时把"牌子中心 / 判定区近端"的**世界坐标和屏幕像素**打进日志 ——
+        ///   牌子在不在区里、差多少厘米 / 多少像素，一眼对得出来。
+        /// </summary>
+        public bool ShowDropZones { get; private set; }
+
+        /// <summary>判定区那两个框（F3 开关的对象，懒建）。</summary>
+        private readonly System.Collections.Generic.List<GameObject> dropZoneFrames =
+            new System.Collections.Generic.List<GameObject>();
+        private bool dropZonesBuilt;
+
+        private void HandleDropZoneToggle()
+        {
+            if (!Input.GetKeyDown(KeyCode.F3)) return;
+
+            ShowDropZones = !ShowDropZones;
+            BuildDropZoneFrames();
+
+            for (int i = 0; i < dropZoneFrames.Count; i++)
+                if (dropZoneFrames[i] != null) dropZoneFrames[i].SetActive(ShowDropZones);
+
+            if (ShowDropZones) LogDropZoneGeometry();
+            else               Debug.Log("[Slot] 落点判定区已隐藏（F3 开关）");
+        }
+
+        /// <summary>
+        /// 懒建两个判定区框。位置/尺寸**完全按 FindDropTarget 用的那几个常量算**：
+        ///   z 方向：框的近边再往玩家这一侧多给 snapSlackNearZ，远端多给 snapSlackZ
+        ///   x 方向：两侧各多给 snapSlackX
+        /// 所以"画出来的矩形"就是"能被判进这个槽的范围"，不是示意。
+        /// </summary>
+        private void BuildDropZoneFrames()
+        {
+            if (dropZonesBuilt || board == null) return;
+            dropZonesBuilt = true;
+
+            for (int i = 0; i < board.SlotCount; i++)
+            {
+                GameObject go = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                go.name = "DropZone" + i;
+                go.transform.SetParent(transform, false);
+
+                Collider c = go.GetComponent<Collider>();
+                if (c != null) c.enabled = false;        // 绝不能被射线打到（拾取是全场景 Raycast）
+
+                Vector3 slot = board.SlotPosition(i);
+                float sizeX = board.slotSizeX + snapSlackX * 2f;
+
+                // ★ 尺寸必须和 FindDropTarget 里的算法**逐字对应**：
+                //   那边是 reachX = half + slackX、reachZ = half + (slackZ + slackNearZ)，
+                //   所以判定区在 z 上是"两侧各 slackZ、再加玩家这侧一份 slackNearZ"：
+                //     z ∈ [slot.z − half − slackZ − slackNearZ, slot.z + half + slackZ]
+                //   第一版这里少加了一份 slackZ（近端画在 −0.415，实际判到 −0.545），
+                //   于是"画出来的框"比"真正认的范围"小 13 厘米 —— 调试图一旦和判据不一致，
+                //   它就没有任何意义了（这本身就是用户报障的同一类问题）。日志里那两行同样按这个算。
+                float sizeZ = board.slotSizeZ + snapSlackZ * 2f + snapSlackNearZ;
+                float centerZ = slot.z + (snapSlackZ - snapSlackNearZ) * 0.5f;
+
+                go.transform.position = new Vector3(slot.x, 0.0045f, centerZ);   // 抬 4.5 毫米，别和桌面打架
+                go.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+                go.transform.localScale = new Vector3(sizeX, sizeZ, 1f);
+
+                Renderer r = go.GetComponent<Renderer>();
+                if (r != null)
+                {
+                    r.material = CardFactory.MakeUnlit(ProceduralArt.SlotFrame());
+                    r.material.color = new Color(1f, 0.85f, 0.25f, 0.85f);       // 琥珀色：和槽位角标（蓝）分开
+                    r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                    r.receiveShadows = false;
+                }
+
+                dropZoneFrames.Add(go);
+            }
+        }
+
+        /// <summary>
+        /// 把"牌子在哪、判定区在哪、差多少"打成一行（世界坐标 + 屏幕像素都打）。
+        ///
+        /// 【为什么连屏幕像素一起打】"差几厘米"要换算成"差几个像素"才有说服力 ——
+        ///   用户是照着屏幕上的牌子放的，判定区和牌子的像素关系才是他看到的那个关系。
+        ///   屏幕坐标统一成**左上原点**（和截图一致），方便直接对着图核对。
+        /// </summary>
+        private void LogDropZoneGeometry()
+        {
+            TableSetup setup = turnLoop != null ? turnLoop.setup : null;
+            if (board == null) return;
+
+            for (int i = 0; i < board.SlotCount; i++)
+            {
+                Vector3 slot = board.SlotPosition(i);
+                float nearEdge = slot.z - board.slotSizeZ * 0.5f - snapSlackZ - snapSlackNearZ;   // 判定区近端（朝玩家）
+                float farEdge  = slot.z + board.slotSizeZ * 0.5f + snapSlackZ;                   // 判定区远端
+                float leftEdge = slot.x - board.slotSizeX * 0.5f - snapSlackX;
+                float rightEdge= slot.x + board.slotSizeX * 0.5f + snapSlackX;
+
+                Vector3 label = setup != null ? setup.SlotLabelPosition(i) : Vector3.zero;
+                float marginCm = (label.z - nearEdge) * 100f;      // 正数 = 牌子在判定区里
+
+                string px = "（没有相机，量不了像素）";
+                if (cam != null)
+                {
+                    px = "屏幕像素（左上原点）：判定区近端 " + Pixel(cam, new Vector3(slot.x, 0f, nearEdge))
+                       + "，远端 " + Pixel(cam, new Vector3(slot.x, 0f, farEdge))
+                       + "，牌子中心 " + Pixel(cam, label)
+                       + "　→ 牌子在区里 " + (label.z >= nearEdge ? "✓" : "★不在");
+                }
+
+                Debug.Log("[Slot] 槽 " + i + " 落点判定区（按判定常量画出来的）："
+                          + "x " + leftEdge.ToString("0.###") + " ~ " + rightEdge.ToString("0.###")
+                          + "，z " + nearEdge.ToString("0.###") + " ~ " + farEdge.ToString("0.###")
+                          + "（近端 = 框近边 − snapSlackNearZ " + snapSlackNearZ + "，远端 = 框远边 + snapSlackZ " + snapSlackZ + "）"
+                          + "｜槽位框 z " + (slot.z - board.slotSizeZ * 0.5f).ToString("0.###")
+                          + " ~ " + (slot.z + board.slotSizeZ * 0.5f).ToString("0.###")
+                          + "｜牌子中心 z=" + label.z.ToString("0.###")
+                          + "，牌子在判定区里 " + marginCm.ToString("0.#") + " 厘米（正数=在区里）"
+                          + "｜手牌那一排 z=" + TableTurnLoop.HandZ
+                          + "，离判定区近端 " + ((nearEdge - TableTurnLoop.HandZ) * 100f).ToString("0.#") + " 厘米"
+                          + "\n   " + px);
+            }
+        }
+
+        /// <summary>世界点 → 屏幕像素（左上原点，和截图对齐）。</summary>
+        private static string Pixel(Camera cam, Vector3 world)
+        {
+            Vector3 s = cam.WorldToScreenPoint(world);
+            float y = Screen.height - s.y;                 // 左下原点 → 左上原点
+            return "(" + s.x.ToString("0") + ", " + y.ToString("0") + ")";
+        }
+
+        /// <summary>
+        /// **判决用的落点**：给"卡现在在世界上的位置"，回一个"算作落在桌面哪儿"的点。
+        ///
+        /// 【为什么单独开一个方法】它现在是"看到的卡的位置"（见 <see cref="SeenOnTable"/>），
+        ///   而"看到的"和"卡自己的 transform"差着一段透视差 —— 这段差**正是**
+        ///   用户第二次报障（"照着牌子放却放不上去"）的根因。
+        ///   判决路径（<see cref="DropCard"/>）和自检（TableTurnLoop.SlotSemanticReport）
+        ///   都必须走这一个函数：自检要是自己另算一套，就永远测不出判决这条路的问题。
+        /// </summary>
+        public Vector3 JudgeDropPoint(Vector3 cardPos) { return SeenOnTable(cardPos); }
+
+        /// <summary>
+        /// 把"这个物体被画在桌面的哪一点上"算出来 —— 也就是玩家**看到**它落在地面的位置。
+        ///
+        /// 【为什么需要它】拖动时卡被抬起来（<see cref="PlayCard"/> 的 LiftDrag = 8 厘米），
+        ///   相机又是 43° 斜看桌面，于是"卡被画在哪儿"和"鼠标落在地面哪儿"之间
+        ///   差了约 8~9 厘米（抬得越高、差得越多）。玩家判断"我放没放进那个框"
+        ///   用的是**看到的那张卡**，不是鼠标坐标 —— 判决点必须跟着玩家的眼睛走，
+        ///   否则就会出现用户报的"明明压在牌子上/框上，牌却弹回手里"。
+        ///
+        /// 做法：从相机往卡的中心（带抬起高度）打一条射线，取它和桌面（y=0）的交点。
+        /// 相机取不到（理论上不会）就退回原来的平面坐标，行为与老版本一致。
+        /// </summary>
+        public Vector3 SeenOnTable(Vector3 cardPos)
+        {
+            if (cam == null) return cardPos;
+
+            Vector3 origin = cam.transform.position;
+            Vector3 dir = cardPos - origin;
+            if (Mathf.Abs(dir.y) < 0.0001f) return cardPos;      // 视线与桌面平行：算不出交点
+
+            float t = (0f - origin.y) / dir.y;                   // 打到 y = 0（桌面顶面）
+            if (t <= 0f) return cardPos;                         // 交点在相机背后
+
+            Vector3 hit = origin + dir * t;
+            hit.y = 0f;
+            return hit;
+        }
+
+        /// <summary>
+        /// "差一点就进框"要说一声（落在框外、但离得很近时）。
+        ///
+        /// 【为什么必须有】用户第二次报的是"拖法术到附魔位牌子上，什么都没发生"——
+        ///   牌自己弹回手里、日志和提示里一个字都没有，玩家只能得出"这个槽坏了"。
+        ///   只在**离框 12 厘米内**才说话：拖到桌子另一头去当然不该弹提示。
+        /// </summary>
+        private void NearMissNotice(PlayCard card, Vector3 dropAt)
+        {
+            if (board == null || turnLoop == null || card == null) return;
+            if (!TableSettings.UseRulesV21 || !turnLoop.V21) return;
+
+            const float near = 0.12f;          // "差一点"的半径（世界单位）
+            int nearSlot = -1;
+            float best = float.MaxValue;
+
+            for (int i = 0; i < board.SlotCount; i++)
+            {
+                Vector3 s = board.SlotPosition(i);
+                float dx = Mathf.Abs(dropAt.x - s.x) - board.slotSizeX * 0.5f;
+                float dz = Mathf.Abs(dropAt.z - s.z) - board.slotSizeZ * 0.5f;
+                if (dx > near || dz > near) continue;
+
+                float d = Mathf.Max(Mathf.Max(dx, 0f), Mathf.Max(dz, 0f));
+                if (d < best) { best = d; nearSlot = i; }
+            }
+
+            if (nearSlot < 0) return;          // 离得远：那就是普通的"拖到空地反悔"，不打扰
+
+            bool can = turnLoop.CanStageInto(nearSlot, card);
+            string name = (nearSlot == TableTurnLoop.SlotMaterial) ? "「上　桌 位」" : "「附　魔 位」";
+
+            turnLoop.notice = "差一点没进 " + name + " 的框（差 " + (best * 100f).ToString("0") +
+                              " 厘米）—— 把卡拖到虚线框里再松手" +
+                              (can ? "" : "；而且这个框不收这张牌");
+        }
+
         // ─────────────────────────────────────────────────────────────
 
         void Update()
@@ -116,6 +358,7 @@ namespace GameJam.Prototype
             if (cam == null || board == null) return;
 
             HandlePhysicsToggle();
+            HandleDropZoneToggle();
 
             // ★ 鼠标压在 v2.1 面板（半透明、可拖动的那种）上时，别让点击穿透到桌面。
             //   拾取走的是 Physics.Raycast，它看不见 IMGUI 面板 —— 不挡的话，
@@ -447,8 +690,14 @@ namespace GameJam.Prototype
         {
             if (card == null) return false;
 
+            // ★ 判据用"玩家眼里那张卡落在桌面的哪一点"，不是卡自己的 transform。
+            //   拖动时卡被抬起来 8 厘米（PlayCard.DragLift），透视会让"看到的位置"和
+            //   "鼠标在地面上的位置"差 8~9 厘米 —— 玩家是照着看到的卡去放的，
+            //   所以先把这点透视差补掉（见 JudgeDropPoint / SeenOnTable 的推导），再算落点。
+            Vector3 dropAt = JudgeDropPoint(card.transform.position);
+
             int slot = (board != null)
-                ? board.FindDropTarget(card.transform.position, snapSlackX, snapSlackZ)
+                ? board.FindDropTarget(dropAt, snapSlackX, snapSlackZ + snapSlackNearZ)
                 : -1;
 
             // ══ v2.1：点 / 落槽 = 出牌 ══════════════════════════════════
@@ -495,8 +744,11 @@ namespace GameJam.Prototype
                 }
 
                 // 拖到空地上 = 反悔，回手牌原位
+                // ★ 但"差一点就进框"要说话：用户报的"放不上去"十有八九就是这一下 ——
+                //   牌弹回手里、日志里什么都没有，玩家只会以为这个槽坏了。
                 card.ReturnHome();
                 turnLoop.Release(card);
+                NearMissNotice(card, dropAt);
                 return true;
             }
 
@@ -557,14 +809,23 @@ namespace GameJam.Prototype
         {
             if (slotMarkers == null || slotMarkers.Length == 0) return;
 
-            int want = (Dragging != null)
-                ? board.FindDropTarget(Dragging.transform.position, snapSlackX, snapSlackZ)
+            // ★ 高亮要分"收不收"两种颜色。
+            //   用户第一张截图就是这一条：他拖着**素材**往左边的**附魔位**去，
+            //   那个框照样亮成绿色（原来的语义是"可用"）—— 玩家当然会以为放得进去，
+            //   松手却被拒。所以：
+            //     能收 → 绿（MarkerHot）
+            //     不收 → 暗红（MarkerReject，新增："这里不行"）
+            bool hasCard = Dragging != null;
+            Vector3 dropAt = hasCard ? JudgeDropPoint(Dragging.transform.position) : Vector3.zero;
+
+            int want = hasCard
+                ? board.FindDropTarget(dropAt, snapSlackX, snapSlackZ + snapSlackNearZ)
                 : -1;
 
             // ★ 角标平时整体隐形，只有拿起牌要放的时候才淡入。
             //   每个槽是 4 个 L 形角标，8 个槽就是 32 个 —— 常亮的话整张桌子全是碎线，
             //   比原来那种色块还吵。拖动时才出现，桌面平时是干净的。
-            float targetAlpha = (Dragging != null) ? 0.95f : 0f;
+            float targetAlpha = hasCard ? 0.95f : 0f;
             float k = 1f - Mathf.Exp(-14f * Time.deltaTime);
             markerAlpha = Mathf.Lerp(markerAlpha, targetAlpha, k);
 
@@ -586,7 +847,12 @@ namespace GameJam.Prototype
                 //   alpha 被直接忽略。开关渲染器就没这个问题。
                 r.enabled = markerAlpha > 0.02f;
 
-                Color c = (i == hotSlot) ? MarkerHot : MarkerIdle;
+                // 这个槽收不收正在拖的这张牌（拖的是素材还是法术，只有规则侧说了算）
+                bool accepts = hasCard && turnLoop != null && turnLoop.CanStageInto(i, Dragging);
+
+                Color c = (i == hotSlot)
+                    ? (accepts ? MarkerHot : MarkerReject)
+                    : MarkerIdle;
                 c.a = markerAlpha;          // shader 支持透明的话还能顺便有个淡入
                 r.material.color = c;
             }

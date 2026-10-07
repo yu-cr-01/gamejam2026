@@ -92,6 +92,11 @@ namespace GameJam.Prototype
             //   那时候桌面、HUD、交互、开场 rig 必须都已经就位 ——
             //   以前是在 BuildTurnLoop 里就 Begin 的，顺序一旦动过就会踩空。
             turnLoop.Begin();
+
+            // 打包版复现用的后门（默认关，见 TableSettings.AutoStart）：
+            // 环境变量 DSH_AUTOSTART=1 时替玩家把"点书 → 进第 1 关 → 确认牌组 → 确认刀片"
+            // 按一遍，直接停在"第 1 回合、什么都没动"的桌面上 —— 和编辑器探针同一起点。
+            if (TableSettings.AutoStart) turnLoop.AutoStartFirstLevel();
         }
 
         // ── 开场界面 ──────────────────────────────────────────────────
@@ -448,6 +453,33 @@ namespace GameJam.Prototype
         public static readonly string[] LegacySlotNames = { "法　术 槽", "素　材 槽" };
 
         /// <summary>
+        /// 槽名牌刻在**框外面多远**（世界单位，朝玩家这一侧）。
+        ///
+        /// ★ 这个数不是随便定的：框的近边在 z = −0.375，牌子中心 = −0.375 − 这个值。
+        ///   它是"牌子要看得清"和"牌子必须落在吸附判定区里"之间挤出来的 ——
+        ///   判定区的近端上限 ≈ −0.595（见 TableInteraction.snapSlackNearZ 那段推导），
+        ///   取 0.035 之后牌子中心在 −0.41，离近端上限还有 0.185，
+        ///   连"照着牌子的下半截放"也还落在判定区里。
+        ///   原来取 0.055（牌子中心 −0.43），叠上拖动抬卡带来的透视差就顶在边上 ——
+        ///   用户第二次报的"照着牌子放却放不上去"就是这两条叠出来的。
+        ///
+        /// ★ 改这个数必须同时看 TableInteraction.snapSlackNearZ，
+        ///   并且 TableTurnLoop.SlotSemanticReport() 会把"牌子在不在判定区里、余量多少厘米"
+        ///   每次开一关量一遍（那是这一条的常驻防线）。
+        /// </summary>
+        public const float SlotLabelGap = 0.035f;
+
+        /// <summary>
+        /// 第 i 个槽的**牌子中心**世界坐标 —— 渲染和自检共用这一个算式，
+        /// 免得"牌子挪了、判定区没跟着挪"或者反过来。
+        /// </summary>
+        public Vector3 SlotLabelPosition(int i)
+        {
+            if (board == null || !board.IsValidSlot(i)) return Vector3.zero;
+            return board.SlotPosition(i) + new Vector3(0f, 0f, -(SlotSizeZ * 0.5f + SlotLabelGap));
+        }
+
+        /// <summary>
         /// 按**当前规则模式**重写两个槽的名字。
         ///
         /// 【v2.1 为什么必须换字样】这两个槽在 v2.1 里已经不是"待投放区"了 ——
@@ -475,8 +507,8 @@ namespace GameJam.Prototype
 
             for (int i = 0; i < board.SlotCount && i < names.Length; i++)
             {
-                Vector3 at = board.SlotPosition(i)
-                           + new Vector3(0f, 0f, -(SlotSizeZ * 0.5f + 0.055f));
+                // 位置走 SlotLabelPosition（渲染和自检共用同一个算式，见那里的说明）
+                Vector3 at = SlotLabelPosition(i);
 
                 GameObject go = new GameObject("SlotLabel" + i);
                 go.transform.SetParent(slotLabelsParent, false);

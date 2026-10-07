@@ -99,7 +99,20 @@ namespace GameJam.Prototype
         private float      followSpeed = 16f;
 
         private const float LiftHover = 0.030f;   // 悬停抬高
-        private const float LiftDrag  = 0.080f;   // 拖动抬高
+
+        /// <summary>
+        /// 拖动抬高（世界单位）。
+        ///
+        /// ★ public 是有原因的：**落点判定必须知道这个数**。
+        ///   卡被抬起来之后，"卡被画在哪儿"和"鼠标落在地面哪儿"差着一段透视差
+        ///   （相机 43° 斜看桌面，8 厘米的抬高等于 8~9 厘米的地面偏移）——
+        ///   玩家是按"看到的那张卡"去放的，所以 TableInteraction.DropCard 要把这段差补掉，
+        ///   TableTurnLoop.SlotSemanticReport 也要用它模拟"玩家把卡压在槽名牌上"那一下
+        ///   （用户报的"照着牌子放却放不上去"就是这条没接上）。
+        ///   这个数只有一份，谁都不许再抄一个 0.08。
+        /// </summary>
+        public const float DragLift = 0.080f;
+
         private const float TiltDragX = 16f;      // 拖动时朝相机前倾的角度
 
         // ── 初始化 ────────────────────────────────────────────────────
@@ -275,7 +288,7 @@ namespace GameJam.Prototype
             }
 
             Vector3 want = targetPos;
-            if (IsDragging)     want.y += LiftDrag;
+            if (IsDragging)     want.y += DragLift;
             else if (IsHovered) want.y += LiftHover;
 
             float k = 1f - Mathf.Exp(-followSpeed * Time.deltaTime);   // 帧率无关的指数逼近
