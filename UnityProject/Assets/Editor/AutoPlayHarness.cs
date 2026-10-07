@@ -636,6 +636,75 @@ namespace GameJam.EditorTools
                     if (!Shot("bp_01_turn1.png")) return;
                     ProbeLogSync("⑲⓪ 第 1 回合（什么都没动）");
                     ProbeTableLook("⑲⓪ 第 1 回合（什么都没动）");
+                    Stage = 226;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㉕①~㉕⑦ 附魔位必过用例（用户报"附魔位不能放卡片"）
+                //
+                //  先把局面做成用户截图里那样：**桌上 2 张素材 + 刀片卡，手里 1 素材 + 1 法术**，
+                //  然后
+                //    ① 拖那张法术进「附　魔 位」→ 附魔层数必须 +1（必过）
+                //    ② 拖一张素材进「附　魔 位」→ 必须被拒、且提示要说清该拖到「上　桌 位」
+                //    ③ 切俯视拍一张：槽名 + 附魔层数同框
+                //  三条都走玩家那条路（TableInteraction 的松手判决 / 单击分派）。
+                // ══════════════════════════════════════════════════════
+
+                // ㉕① 点一张手牌素材上桌
+                case 226:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeClickHandMaterial();
+                    Stage = 227;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕② 再点一张 → 桌上两张素材（对应用户截图里的局面）
+                case 227:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeClickHandMaterial();
+                    Stage = 228;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 228:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("bp_19_two_materials.png")) return;
+                    ProbeLogSync("㉕② 桌上两张素材（复现用户截图里的局面）");
+                    ProbeSpellIntoEnchantSlot("㉕③ 拖法术进附魔位（必过）");
+                    Stage = 229;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕④ 负例：素材拖进附魔位
+                case 229:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeMaterialIntoEnchantSlot("㉕④ 素材拖进附魔位（应被拒）");
+                    Stage = 230;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕⑤ 切俯视（槽名和附魔层数要同框）
+                case 230:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("top");
+                    Stage = 231;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕⑥ 俯视：两个槽名牌 + 顶栏的"附魔层数"都在画面里
+                case 231:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("bp_20_enchant_top.png")) return;
+                    ProbeLogSync("㉕⑥ 俯视（附魔之后）");
+                    Stage = 232;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕⑦ 切回桌面视角，继续原来的链（收回手牌 → 启动 → …）
+                case 232:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("board");
                     Stage = 199;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -769,6 +838,22 @@ namespace GameJam.EditorTools
                     if (!Shot("bp_14_reenter_turn1.png")) return;
                     ProbeLogSync("⑳⑥ 第二次进关卡");
                     ProbeTableLook("⑳⑥ 第二次进关卡");
+                    Stage = 233;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉕⑧ 另一条路：**点**手牌里的法术（应该和拖进附魔位等价）
+                case 233:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeClickHandSpell("㉕⑧ 点手牌法术（附魔的另一条路）");
+                    Stage = 234;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 234:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("bp_21_spell_click.png")) return;
+                    ProbeLogSync("㉕⑧ 点法术之后");
                     Stage = 215;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -2904,6 +2989,137 @@ namespace GameJam.EditorTools
                 GameJam.Rules.MaterialState s = r.FindTable(all[i]);
                 if (s == null || s.removed || !s.OnTable) continue;
                 return all[i];
+            }
+            return null;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  附魔位必过用例（用户报"附魔位不能放卡片"）
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// ★ 拖一张手牌**法术**进「附　魔 位」—— 用户报的"附魔位不能放卡片"的必过用例。
+        ///
+        /// 【为什么一行日志要拆成四段】"拖过去又弹回来"可能是四处里任何一处：
+        ///   ① 落点判定没认到这个槽（FindDropTarget 的矩形 / 余量算错）
+        ///   ② 槽位语义把它挡了（CanStageInto 把法术当成"不是法术"）
+        ///   ③ 出牌那一步没走到（阶段不对 / 卡没绑上 TableSpellCard）
+        ///   ④ 附魔本身没生效（引擎那一侧）
+        ///   所以这里把 落点解析到的槽号 / 两个槽的 CanStageInto 判定 / 被处理与否 /
+        ///   附魔层数前后 / notice 全打出来 —— 是哪一段断的，一眼看得出来。
+        ///
+        /// 走的是玩家那条路：TableInteraction.DropCard（松手判决）+ 卡被摆到槽心上。
+        /// </summary>
+        private static void ProbeSpellIntoEnchantSlot(string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+            if (setup == null || it == null || loop == null || loop.rulesV21 == null || setup.board == null)
+            {
+                Debug.LogWarning("[AutoPlay/Slot] " + what + "：找不到 TableSetup / TableInteraction，跳过。");
+                return;
+            }
+
+            PlayCard spell = FindHandSpell(setup);
+            if (spell == null)
+            {
+                Debug.LogWarning("[AutoPlay/Slot] " + what + "：手牌里没有法术卡，跳过。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+            string layersBefore = r.blade.layers.Describe();
+
+            // 玩家的鼠标把这张法术拖到「附魔位」的框里
+            spell.Teleport(setup.board.SlotPosition(TableTurnLoop.SlotSpell), spell.homeEuler);
+
+            int resolved = setup.board.FindDropTarget(spell.transform.position, it.snapSlackX, it.snapSlackZ);
+            bool canEnchant = loop.CanStageInto(TableTurnLoop.SlotSpell, spell);
+            bool canTable   = loop.CanStageInto(TableTurnLoop.SlotMaterial, spell);
+
+            bool handled = it.DropCard(spell, false);
+
+            Debug.Log("[AutoPlay/Slot] " + what + "：把法术「" + spell.DisplayName + "」拖到「附　魔 位」"
+                      + "（槽 " + TableTurnLoop.SlotSpell + "，落点 x=" + spell.transform.position.x.ToString("0.###")
+                      + " z=" + spell.transform.position.z.ToString("0.###") + "）"
+                      + "\n   落点解析到的槽 = " + resolved + "（期望 " + TableTurnLoop.SlotSpell + "）"
+                      + "｜CanStageInto(附魔位) = " + canEnchant + "（期望 True）"
+                      + "｜CanStageInto(上桌位) = " + canTable + "（法术不该进上桌位）"
+                      + "｜被处理 = " + handled
+                      + "\n   附魔层数 " + layersBefore + " → " + r.blade.layers.Describe() + "（期望 +1 层）"
+                      + "｜手牌 " + r.HandText()
+                      + "｜notice " + loop.notice
+                      + "｜" + r.ViewSyncSummary());
+        }
+
+        /// <summary>
+        /// 负例：拖一张手牌**素材**进「附　魔 位」—— 应该被拒，而且提示要说清"该拖到上桌位"。
+        /// （用户很可能就是踩了这一下：他往附魔位拖了素材，而旧提示写的是"法术槽只放法术"，
+        ///   既没对上桌面牌子上的字、也没告诉他该放哪儿 → "附魔位不能放卡片"。）
+        /// </summary>
+        private static void ProbeMaterialIntoEnchantSlot(string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+            if (setup == null || it == null || loop == null || loop.rulesV21 == null || setup.board == null) return;
+
+            PlayCard mat = FirstHandMaterial(setup);
+            if (mat == null)
+            {
+                Debug.Log("[AutoPlay/Slot] " + what + "：手牌里没有素材（这一步跳过，不算通过也不算失败）。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+            int tableBefore = r.LiveTableCount();
+
+            mat.Teleport(setup.board.SlotPosition(TableTurnLoop.SlotSpell), mat.homeEuler);
+            bool handled = it.DropCard(mat, false);
+
+            Debug.Log("[AutoPlay/Slot] " + what + "：把素材「" + mat.DisplayName + "」拖到「附　魔 位」→ 被处理 "
+                      + handled + "｜桌面素材 " + tableBefore + " → " + r.LiveTableCount()
+                      + " 张（期望不变：素材不上桌）"
+                      + "｜notice " + loop.notice);
+        }
+
+        /// <summary>点手牌里的法术（= 附魔的另一条路，应该和拖进附魔位等价）。</summary>
+        private static void ProbeClickHandSpell(string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+            if (setup == null || it == null || loop == null || loop.rulesV21 == null) return;
+
+            PlayCard spell = FindHandSpell(setup);
+            if (spell == null)
+            {
+                Debug.LogWarning("[AutoPlay/Slot] " + what + "：手牌里没有法术卡，跳过。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+            string before = r.blade.layers.Describe();
+
+            bool handled = it.ClickCard(spell);
+
+            Debug.Log("[AutoPlay/Slot] " + what + "：点手牌法术「" + spell.DisplayName + "」→ 被处理 " + handled
+                      + "｜附魔层数 " + before + " → " + r.blade.layers.Describe()
+                      + "｜notice " + loop.notice);
+        }
+
+        /// <summary>手牌里的法术卡（权威判据：RebuildHand 绑的 bindingSpell / TableSpellCard）。</summary>
+        private static PlayCard FindHandSpell(TableSetup setup)
+        {
+            if (setup == null || setup.hand == null) return null;
+
+            for (int i = 0; i < setup.hand.Count; i++)
+            {
+                PlayCard c = setup.hand[i];
+                if (c == null) continue;
+                if (c.bindingSpell != null) return c;
+                if (c.GetComponent<TableSpellCard>() != null) return c;
             }
             return null;
         }

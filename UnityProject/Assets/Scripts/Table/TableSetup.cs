@@ -433,6 +433,21 @@ namespace GameJam.Prototype
         private Transform slotLabelsParent;
 
         /// <summary>
+        /// 两个槽在桌面上刻的字 —— **顺序就是槽位下标顺序**（[0] 在左、[1] 在右）。
+        ///
+        /// ★ 这是"槽位语义"的唯一出处之一，另一处是 <see cref="TableTurnLoop.SlotSpell"/> /
+        ///   <see cref="TableTurnLoop.SlotMaterial"/>。两边必须对得上：
+        ///   下标 0 = 附魔位 = 收法术，下标 1 = 上桌位 = 收素材。
+        ///   改任何一边都要同时改另一边 —— TableTurnLoop.SlotSemanticReport() 会在开一关时
+        ///   把这条一致性查一遍（名字里写着"附魔"、行为却是"收素材"这种事，
+        ///   玩家只会看到"这个槽放不了牌"，而日志里什么都看不出来）。
+        /// </summary>
+        public static readonly string[] V21SlotNames    = { "附　魔 位", "上　桌 位" };
+
+        /// <summary>旧流程的字样（先摆好、再按确认那套）。顺序同上。</summary>
+        public static readonly string[] LegacySlotNames = { "法　术 槽", "素　材 槽" };
+
+        /// <summary>
         /// 按**当前规则模式**重写两个槽的名字。
         ///
         /// 【v2.1 为什么必须换字样】这两个槽在 v2.1 里已经不是"待投放区"了 ——
@@ -455,10 +470,8 @@ namespace GameJam.Prototype
 
             if (slotLabelsParent == null || board == null) return;
 
-            // 顺序跟着槽的下标走：下标 0 在左、1 在右
-            string[] namesV21    = { "附　魔 位", "上　桌 位" };
-            string[] namesLegacy = { "法　术 槽", "素　材 槽" };
-            string[] names = TableSettings.UseRulesV21 ? namesV21 : namesLegacy;
+            // 顺序跟着槽的下标走：下标 0 在左、1 在右（见 V21SlotNames 的说明）
+            string[] names = TableSettings.UseRulesV21 ? V21SlotNames : LegacySlotNames;
 
             for (int i = 0; i < board.SlotCount && i < names.Length; i++)
             {

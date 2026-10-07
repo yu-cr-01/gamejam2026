@@ -487,6 +487,11 @@ namespace GameJam.Prototype
                          "　本关 " + GameJam.Rules.LevelRun.TurnsPerLevel + " 回合 × " +
                          GameJam.Rules.LevelRun.ActionPointsPerTurn + " 次行动";
 
+                // ★ 开一关就查一遍"槽位语义三者是否一致"（下标 / 牌子 / 收什么）。
+                //   用户报的"附魔位不能放卡片"在界面上只表现为"拖过去又弹回来"，
+                //   日志里必须有这一行，才分得清是哪一处走偏（见 SlotSemanticReport）。
+                SlotSemanticReport();
+
                 phase = TablePhase.Select;
                 SyncJuicer();
                 return;
@@ -724,10 +729,38 @@ namespace GameJam.Prototype
         ///
         /// 素材槽只收素材、法术槽只收法术。规则跟着槽走而不是跟着牌走 ——
         /// 牌自己不知道"我该放哪"，是桌面规定了哪里放什么。
+        ///
+        /// 【v2.1 为什么不能只看 card.card.IsSpell】数据层的 Card 只有"素材 / 模块"两种 kind，
+        ///   而 v2.1 的法术卡**就是用模块壳装的**（Card.Of(BuildSpellModule(...))，
+        ///   见 TableRulesV21 里那段"表现层将就"）—— 换句话说 Card 这一层分不出
+        ///   "变速模块"和"v2.1 法术"。3D 卡身上的 bindingSpell / bindingMaterial 才是权威
+        ///   （TableRulesV21.RebuildHand 绑的），所以 v2.1 一律问它。
+        ///   只认 Card.IsSpell 的写法踩过一次：附魔位把法术当成"不是法术"拒掉，
+        ///   玩家的感受就是**"附魔位不能放卡片"**。
         /// </summary>
         public bool CanStageInto(int slot, PlayCard card)
         {
-            if (card == null || card.card == null) return false;
+            if (card == null) return false;
+
+            if (V21 && rulesV21 != null)
+            {
+                bool spell    = rulesV21.IsHandSpellCard(card);
+                bool material = card.bindingMaterial != null || rulesV21.IsTableCard(card);
+
+                // 两张绑定都没有的卡（探针手工造的 / 旧流程留下的）→ 退回按 Card 判，
+                // 不然这种卡会"哪个槽都放不进去"，看起来和这次的 bug 一模一样、却查不出原因
+                if (!spell && !material && card.card != null)
+                {
+                    spell    = card.card.IsSpell;
+                    material = card.card.IsMaterial;
+                }
+
+                if (slot == SlotSpell)    return spell;
+                if (slot == SlotMaterial) return material;
+                return true;
+            }
+
+            if (card.card == null) return false;
 
             if (slot == SlotMaterial) return card.card.IsMaterial;
             if (slot == SlotSpell)    return card.card.IsSpell;
@@ -735,15 +768,141 @@ namespace GameJam.Prototype
             return true;
         }
 
-        /// <summary>放错槽了：说清楚这个槽收什么、你手里这张是什么。</summary>
+        /// <summary>
+        /// 放错槽了：说清楚这个槽收什么、你手里这张是什么、**该放哪儿**。
+        ///
+        /// 【v2.1 的说法必须和桌面上的牌子一致】牌子上写的是「附　魔 位 / 上　桌 位」，
+        ///   提示里却写"法术槽 / 素材槽"的话，玩家会以为自己看错了槽
+        ///   （这两个名字是上一版流程留下的，见 TableSetup.V21SlotNames）。
+        ///   用户报的"附魔位不能放卡片"就是这么来的：他往附魔位拖了一张**素材**，
+        ///   提示只说"法术槽只放法术"，既没对上牌子上的字、也没告诉他该拖到哪儿 ——
+        ///   所以提示必须写成「往哪儿放」。
+        /// </summary>
         public void RejectSlot(PlayCard card, int slot)
         {
-            string want = (slot == SlotMaterial) ? "素材" : "法术";
-            string got  = (card != null && card.card != null) ? card.card.TypeTag : "?";
+            bool v21 = V21 && TableSettings.UseRulesV21;
 
-            notice = (slot == SlotMaterial ? "素材槽" : "法术槽")
-                   + "只放" + want + "　——　" + (card != null ? card.DisplayName : "?")
-                   + " 是" + got;
+            bool isSpell = v21 && rulesV21 != null && IsHandSpell(card);
+            string got = v21 ? (isSpell ? "法术" : "素材")
+                             : ((card != null && card.card != null) ? card.card.TypeTag : "?");
+
+            string here = (slot == SlotMaterial)
+                ? (v21 ? "「上　桌 位」" : "素材槽")
+                : (v21 ? "「附　魔 位」" : "法术槽");
+            string there = (slot == SlotMaterial)
+                ? (v21 ? "「附　魔 位」" : "法术槽")
+                : (v21 ? "「上　桌 位」" : "素材槽");
+            string want = (slot == SlotMaterial) ? "素材" : "法术";
+
+            notice = here + "只收" + want + "　——　" + (card != null ? card.DisplayName : "?")
+                   + " 是" + got + "（" + got + "请拖到 " + there + "）";
+        }
+
+        /// <summary>
+        /// 槽位语义自检：**下标 / 桌面牌子上的字 / 这个槽收什么** 三者必须一致。
+        ///
+        /// 【为什么要常驻这一条】"附魔位放不了法术"这类问题在界面上只表现为
+        ///   "拖过去又弹回来了"，日志里什么都没有 —— 而它可能是三处里的任何一处走偏：
+        ///     ① 常量把两个槽的下标写反了（SlotSpell/SlotMaterial 对调）
+        ///     ② 桌面牌子上的字和下标的顺序不一致（玩家照牌子放，代码按另一套收）
+        ///     ③ 槽位的世界坐标顺序和牌子不一致（左边的牌子刻在右边的槽上）
+        ///   三者都是"改一处忘了另一处"造成的，所以每次开一关查一遍、写进日志。
+        ///
+        /// 返回一行摘要（探针直接打进日志），不一致时同时打 LogWarning。
+        /// </summary>
+        public string SlotSemanticReport()
+        {
+            if (setup == null || setup.board == null) return "槽位自检：没有桌面 / 卡槽，跳过";
+
+            bool ok = true;
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+            sb.Append("槽位自检：槽数 ").Append(setup.board.SlotCount);
+            if (setup.board.SlotCount < 2) { ok = false; sb.Append("（★ 少于 2 个）"); }
+
+            // ① 左右顺序：下标 0 的 x 必须小于下标 1（牌子是按下标从左往右刻的）
+            float x0 = setup.board.SlotPosition(0).x;
+            float x1 = setup.board.SlotPosition(1).x;
+            bool leftFirst = x0 < x1;
+            if (!leftFirst) ok = false;
+
+            sb.Append("｜下标 0 在").Append(leftFirst ? "左" : "★右")
+              .Append("（x ").Append(x0.ToString("0.###")).Append(" / ").Append(x1.ToString("0.###")).Append("）");
+
+            // ② 名字和语义：v2.1 的牌子 [0] 必须含"附魔"、[1] 必须含"上桌"，
+            //    而 SlotSpell 必须指 [0]（附魔位）、SlotMaterial 必须指 [1]（上桌位）
+            if (TableSettings.UseRulesV21)
+            {
+                string[] names = TableSetup.V21SlotNames;
+                bool nameOk = names != null && names.Length >= 2
+                           && Squash(names[SlotSpell]).Contains("附魔")
+                           && Squash(names[SlotMaterial]).Contains("上桌");
+                if (!nameOk) ok = false;
+
+                sb.Append("｜牌子 [").Append(SlotSpell).Append("]=").Append(names != null && names.Length > 0 ? names[SlotSpell] : "?")
+                  .Append("（收法术）、[").Append(SlotMaterial).Append("]=").Append(names != null && names.Length > 1 ? names[SlotMaterial] : "?")
+                  .Append("（收素材）→ ").Append(nameOk ? "一致" : "★名字与语义不一致");
+
+                // ③ 行为：拿手牌里的法术/素材各问一次 CanStageInto，确认"附魔位收法术、上桌位收素材"
+                PlayCard handSpell = null, handMaterial = null;
+                if (setup.hand != null)
+                {
+                    for (int i = 0; i < setup.hand.Count; i++)
+                    {
+                        PlayCard c = setup.hand[i];
+                        if (c == null) continue;
+                        if (handSpell == null && IsHandSpell(c)) handSpell = c;
+                        if (handMaterial == null && c.bindingMaterial != null) handMaterial = c;
+                    }
+                }
+
+                if (handSpell != null)
+                {
+                    bool intoEnchant = CanStageInto(SlotSpell, handSpell);
+                    if (!intoEnchant) ok = false;
+                    sb.Append("｜法术「").Append(OneLine(handSpell.DisplayName)).Append("」进附魔位=").Append(intoEnchant ? "收" : "★被拒");
+                }
+                if (handMaterial != null)
+                {
+                    bool intoTable = CanStageInto(SlotMaterial, handMaterial);
+                    if (!intoTable) ok = false;
+                    sb.Append("｜素材「").Append(OneLine(handMaterial.DisplayName)).Append("」进上桌位=").Append(intoTable ? "收" : "★被拒");
+                }
+            }
+
+            string line = sb.ToString();
+            if (!ok) Debug.LogWarning("[V21][槽位自检] ★ " + line);
+            else     Debug.Log("[V21][槽位自检] ✓ " + line);
+
+            return line;
+        }
+
+        /// <summary>这张 3D 手牌卡是不是法术（权威判据：RebuildHand 绑的 TableSpellCard）。</summary>
+        private static bool IsHandSpell(PlayCard c)
+        {
+            if (c == null) return false;
+            if (c.bindingSpell != null) return true;
+            return c.GetComponent<TableSpellCard>() != null;
+        }
+
+        /// <summary>
+        /// 比对牌名字样之前先把空白去掉 —— 牌子上的字是**排版过的**
+        /// （"附　魔 位" 里有一个全角空格和一个半角空格），
+        /// 直接 Contains("附魔") 永远不成立，自检会天天误报"名字与语义不一致"。
+        /// 第一版就是这么写错的：实测日志里它确实报了 ★不一致，而功能其实是好的 ——
+        /// 自检误报比不检更坏（下次真出问题没人信它）。
+        /// </summary>
+        private static string Squash(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            return s.Replace("\u3000", "").Replace(" ", "").Replace("\t", "");
+        }
+
+        /// <summary>把可能带换行的名字压成一行（法术卡的名字里带需求原文，是两行的）。</summary>
+        private static string OneLine(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            return s.Replace("\r", " ").Replace("\n", " ");
         }
 
         /// <summary>
