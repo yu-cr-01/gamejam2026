@@ -41,6 +41,25 @@ namespace GameJam.EditorTools
         // ── 给策划看的版本信息 ────────────────────────────────────────
         private const string ProductName = "破壁机计划";
 
+        /// <summary>
+        /// 必须进「Graphics → Always Included Shaders」的 shader。
+        ///
+        /// 【为什么必须有这一条】
+        ///   工程里没有任何**资源**引用 Standard —— 材质全是运行时 `new Material(...)` 的，
+        ///   于是构建时的 shader 剥离判定"没人用"，把它剥掉了。
+        ///   打包版里 `Shader.Find("Standard")` 返回 **null**，代码静默退到 Legacy Diffuse，
+        ///   桌面看起来就是一片近黑（编辑器里因为 shader 永远在，完全看不出来）。
+        ///   编辑器实测 shader=Standard、打包版 shader=Legacy Shaders/Diffuse 就是铁证。
+        ///
+        ///   Sprites/Default 是卡面在用的那个（CardFactory），默认就在表里，
+        ///   这里显式列上只是为了"以后谁把它删了"能被这个检查拦住。
+        /// </summary>
+        private static readonly string[] RequiredShaders =
+        {
+            "Standard",
+            "Sprites/Default",
+        };
+
         /// <summary>批处理构建入口。菜单：工具 / 构建 Windows 试玩包。</summary>
         [MenuItem("工具/构建 Windows 试玩包 (v2.1)")]
         public static void BuildWindows()
@@ -68,6 +87,12 @@ namespace GameJam.EditorTools
 
             // ── 1. 播放器设置：只动"给玩家看"的那几项 ────────────────
             ApplyPlayerSettings();
+
+            // ── 1.5 保证 Standard 之类会被剥离的 shader 留在包里 ──────
+            //   放在这里而不是"构建前手动点一次"：剥离是按**资源引用**判定的，
+            //   哪天有人把最后一个引用删掉，这个检查会当场把它加回来并吼一声。
+            //   ★ 必须调 Inner 那个 —— 公开入口末尾会 EditorApplication.Exit(0)。
+            EnsureGraphicsShadersInner();
 
             // ── 2. 保证至少有一个启用的场景 ───────────────────────────
             string[] scenes = ResolveScenes();
@@ -140,6 +165,11 @@ namespace GameJam.EditorTools
             Debug.Log("[Build] 整个目录：" + outDir);
             Debug.Log("[Build] 目录体积：" + Mb(total) + "（" + files.Length + " 个文件）");
             Debug.Log("[Build] Player.log 会写到：" + PlayerLogPath());
+
+            // ── 6. 把给策划看的「试玩说明.txt」一起放进产物目录 ──────
+            //   放在最后：前面的步骤失败就直接退出，不会留下"半份产物 + 说明"。
+            CopyPlayerReadme(projectRoot, outDir);
+
             Debug.Log("[Build] ── 构建结束 ──────────────────────────────");
 
             if (Application.isBatchMode) EditorApplication.Exit(0);
@@ -148,6 +178,32 @@ namespace GameJam.EditorTools
         private static string Mb(long bytes)
         {
             return (bytes / 1024.0 / 1024.0).ToString("0.00") + " MB";
+        }
+
+        /// <summary>
+        /// 把「试玩说明.txt」放进产物目录，这样它自然会进 zip，策划解压第一眼就看到。
+        ///
+        /// 【为什么母本放在 Builds\ 而不是 v21_win\ 里】
+        ///   RunBuild 开头会 `Directory.Delete(outDir, true)` 清掉整个产物目录
+        ///   —— 母本要是放在里面，每构建一次说明就没了（上一版就踩了这个：
+        ///   重构建之后 v21_win 里那份说明消失了，得手工补回来）。
+        ///   Builds\ 本身不清，母本放在那一层就活得下来。
+        ///
+        /// 母本不存在就跳过，只记一行 —— 说明文件不该拦住构建。
+        /// </summary>
+        private static void CopyPlayerReadme(string projectRoot, string outDir)
+        {
+            string src = Path.Combine(projectRoot, "Builds", "试玩说明.txt");
+            if (!File.Exists(src))
+            {
+                Debug.Log("[Build] （Builds/试玩说明.txt 母本不存在，产物里没有说明文件）");
+                return;
+            }
+
+            string dst = Path.Combine(outDir, "试玩说明.txt");
+            File.Copy(src, dst, true);
+            Debug.Log("[Build] 已放入试玩说明：" + dst
+                      + "（" + new FileInfo(dst).Length + " 字节）");
         }
 
         /// <summary>
@@ -162,6 +218,114 @@ namespace GameJam.EditorTools
             string root = appData != null ? appData.FullName : local;
             return Path.Combine(root, "LocalLow",
                                 PlayerSettings.companyName, PlayerSettings.productName, "Player.log");
+        }
+
+        // ── Always Included Shaders ───────────────────────────────────
+        /// <summary>
+        /// 命令行单独入口（构建时也会自动跑一遍）：
+        ///   Unity.exe -quit -batchmode -projectPath &lt;工程&gt;
+        ///       -executeMethod GameJam.EditorTools.BuildPlayer.EnsureGraphicsShaders
+        ///       -logFile &lt;日志&gt;
+        ///
+        /// 走 SerializedObject 而不是手改 YAML —— 内置 shader 的引用是
+        /// `{fileID: N, guid: 0000000000000000f000000000000000, type: 0}`，
+        /// 那个 N 是 Unity 的内部编号，**背错了就是一个断掉的引用**，
+        /// 而且断引用不会报错、只会表现为"shader 还是找不到"，极难查。
+        /// 让 Unity 自己写，写完再把名字打出来，是可自证的。
+        /// </summary>
+        public static void EnsureGraphicsShaders()
+        {
+            try
+            {
+                EnsureGraphicsShadersInner();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[Build] Always Included Shaders 处理失败：" + e);
+                if (Application.isBatchMode) EditorApplication.Exit(1);
+                throw;
+            }
+            // ★ 只有"从命令行直接调这一个方法"才该在这里退出。
+            //   构建流程走的是 EnsureGraphicsShadersInner —— 第一版让它俩共用一个方法，
+            //   结果 RunBuild 里一调就 EditorApplication.Exit(0)，
+            //   Unity 7 秒就结束了、压根没构建（日志停在 shader 那几行，退出码还是 0，很能骗人）。
+            if (Application.isBatchMode) EditorApplication.Exit(0);
+        }
+
+        private static void EnsureGraphicsShadersInner()
+        {
+            const string path = "ProjectSettings/GraphicsSettings.asset";
+
+            UnityEngine.Object[] assets = AssetDatabase.LoadAllAssetsAtPath(path);
+            if (assets == null || assets.Length == 0 || assets[0] == null)
+                throw new Exception("读不到 " + path);
+
+            UnityEngine.Object settings = assets[0];
+            SerializedObject so = new SerializedObject(settings);
+            SerializedProperty arr = so.FindProperty("m_AlwaysIncludedShaders");
+            if (arr == null || !arr.isArray)
+                throw new Exception(path + " 里没有 m_AlwaysIncludedShaders");
+
+            // 先看现在有什么
+            List<string> before = new List<string>();
+            for (int i = 0; i < arr.arraySize; i++)
+            {
+                Shader s = arr.GetArrayElementAtIndex(i).objectReferenceValue as Shader;
+                before.Add(s != null ? s.name : "(空引用)");
+            }
+            Debug.Log("[Build] Always Included Shaders 原有 " + before.Count + " 条："
+                      + string.Join("、", before.ToArray()));
+
+            // 缺哪条补哪条
+            for (int i = 0; i < RequiredShaders.Length; i++)
+            {
+                string want = RequiredShaders[i];
+
+                bool already = false;
+                for (int j = 0; j < before.Count; j++)
+                    if (before[j] == want) { already = true; break; }
+
+                if (already)
+                {
+                    Debug.Log("[Build] ✔ 已在表里：" + want);
+                    continue;
+                }
+
+                Shader sh = Shader.Find(want);
+                if (sh == null)
+                {
+                    Debug.LogError("[Build] ✘ 找不到内置 shader「" + want
+                                   + "」—— 这个名字可能拼错了，或者该版本 Unity 没这个 shader。"
+                                   + "没有它，打包版会退到 Legacy Diffuse，桌面会变黑。");
+                    continue;
+                }
+
+                arr.InsertArrayElementAtIndex(arr.arraySize);
+                arr.GetArrayElementAtIndex(arr.arraySize - 1).objectReferenceValue = sh;
+                Debug.Log("[Build] ＋ 已加入：" + want);
+            }
+
+            so.ApplyModifiedProperties();
+            EditorUtility.SetDirty(settings);
+            AssetDatabase.SaveAssets();
+
+            // 写回之后再读一遍 —— 只信落盘后的结果，不信内存里的
+            SerializedObject so2 = new SerializedObject(settings);
+            SerializedProperty arr2 = so2.FindProperty("m_AlwaysIncludedShaders");
+            List<string> after = new List<string>();
+            for (int i = 0; i < arr2.arraySize; i++)
+            {
+                Shader s = arr2.GetArrayElementAtIndex(i).objectReferenceValue as Shader;
+                after.Add(s != null ? s.name : "(空引用)");
+            }
+            Debug.Log("[Build] Always Included Shaders 现在 " + after.Count + " 条："
+                      + string.Join("、", after.ToArray()));
+
+            for (int i = 0; i < RequiredShaders.Length; i++)
+            {
+                if (!after.Contains(RequiredShaders[i]))
+                    Debug.LogError("[Build] ✘ 写回失败，表里仍然没有：" + RequiredShaders[i]);
+            }
         }
 
         // ── 播放器设置 ────────────────────────────────────────────────

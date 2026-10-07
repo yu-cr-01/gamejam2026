@@ -536,8 +536,8 @@ namespace GameJam.Prototype
             Renderer bodyR = body.GetComponent<Renderer>();
             if (bodyR != null)
             {
-                Shader sh = Shader.Find("Standard");
-                if (sh == null) sh = Shader.Find("Diffuse");
+                // ★ 统一走 CardFactory 的出口（见那里关于"打包版里 Standard 会被剥掉"的说明）
+                Shader sh = CardFactory.StdShader();
                 if (sh != null)
                 {
                     bodyR.material = new Material(sh);

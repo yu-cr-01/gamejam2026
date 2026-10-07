@@ -415,7 +415,9 @@ namespace GameJam.EditorTools
                 case 56:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("v21_choice_blade.png")) return;
-                    Stage = 57;
+                    // 黑桌探针顺带把"点候选核心 → 桌面刀片卡立刻跟着换"验一遍
+                    // （★ 必须在 BladePick 阶段做：SwapBladeWith 只在选刀片阶段受理）
+                    Stage = blackProbe ? 220 : 57;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -626,159 +628,223 @@ namespace GameJam.EditorTools
                 //    材质状态、光源清单、环境光、画质档位、相机参数全打出来，四类当场分开。
                 // ══════════════════════════════════════════════════════
 
-                // ⑲⓪ 开场：第一帧就该是"木桌 + 书 + 蜡烛"
+                // ⑲⓪ 第 1 回合的桌面（★ 这条链是从 ㊶ 第 1 回合接进来的，
+                //      开场 / 选关 / 选牌组 / 选刀片那几张图由主链在 ⑤①~⑤⑨ 拍过，
+                //      这里只拍"正式开局、桌上什么都没动"的那一帧当基准）
                 case 190:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
-                    if (!Shot("bp_01_title.png")) return;
-                    ProbeTableLook("⑲⓪ 开场（第一次进游戏）");
-                    Stage = 191;
-                    stageTime = EditorApplication.timeSinceStartup;
-                    return;
-
-                // ⑲① 点书 = 新游戏
-                case 191:
-                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    StartGame();
-                    Stage = 192;
-                    stageTime = EditorApplication.timeSinceStartup;
-                    return;
-
-                // ⑲② 关卡界面 → 选第一关
-                case 192:
-                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    if (!Shot("bp_02_level_select.png")) return;
-                    PickLevel();
-                    Stage = 193;
-                    stageTime = EditorApplication.timeSinceStartup;
-                    return;
-
-                // ⑲③ 牌组界面 → 选第一副
-                case 193:
-                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    if (!Shot("bp_03_choice_deck.png")) return;
-                    PickDeck();
-                    Stage = 194;
-                    stageTime = EditorApplication.timeSinceStartup;
-                    return;
-
-                // ⑲④ 刀片界面（顺带拍"点候选核心之后桌面刀片卡有没有立刻跟着换"）
-                case 194:
-                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    if (!Shot("bp_04_choice_blade.png")) return;
-                    ProbeCorePickV21();
-                    Stage = 195;
-                    stageTime = EditorApplication.timeSinceStartup;
-                    return;
-
-                // ⑲⑤ 确认刀片 → 第 1 回合
-                case 195:
-                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    if (!Shot("bp_05_blade_picked.png")) return;
-                    ProbeConfirmBladeV21();
-                    Stage = 196;
-                    stageTime = EditorApplication.timeSinceStartup;
-                    return;
-
-                // ⑲⑥ 第 1 回合的桌面
-                case 196:
-                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
-                    if (!Shot("bp_06_turn1.png")) return;
-                    ProbeLogSync("⑲⑥ 第 1 回合");
-                    ProbeTableLook("⑲⑥ 第 1 回合");
-                    Stage = 197;
-                    stageTime = EditorApplication.timeSinceStartup;
-                    return;
-
-                // ⑲⑦ 出牌 + 附魔 + 启动（把"反应特效"那一段跑到）
-                case 197:
-                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    ProbeClickHandMaterial();
-                    ProbeAddFxLayers();
-                    ProbeActivateV21();
-                    Stage = 198;
-                    stageTime = EditorApplication.timeSinceStartup;
-                    return;
-
-                case 198:
-                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
-                    if (!Shot("bp_07_activate.png")) return;
-                    ProbeLogSync("⑲⑦ 启动/反应特效之后");
-                    ProbeTableLook("⑲⑦ 启动/反应特效之后");
+                    if (!Shot("bp_01_turn1.png")) return;
+                    ProbeLogSync("⑲⓪ 第 1 回合（什么都没动）");
+                    ProbeTableLook("⑲⓪ 第 1 回合（什么都没动）");
                     Stage = 199;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                // ⑲⑧ 推到关卡结束（4 回合耗尽 / 达标 / 爆刀）
+                // ⑲⑨ 点手牌素材 = 上桌（后面要把它收回来）
                 case 199:
                     if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    ProbeDriveLevelV21();
+                    ProbeClickHandMaterial();
                     Stage = 200;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
                 case 200:
-                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
-                    if (!Shot("bp_08_level_end.png")) return;
-                    ProbeLogSync("⑲⑧ 关卡结束");
-                    ProbeTableLook("⑲⑧ 关卡结束");
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("bp_09_on_table.png")) return;
+                    ProbeLogSync("⑲⑨ 素材已上桌");
                     Stage = 201;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                // ⑲⑨ ★ 回菜单 —— 用户报"黑桌"最可能的第一帧就在这前后
+                // ⑳⓪ ★ 把桌面那张素材**拖回手牌**（用户追加的那条）
                 case 201:
                     if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    ProbeReturnToTitle();
+                    ProbeWithdrawTableMaterial("⑳⓪ 拖回手牌");
                     Stage = 202;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
                 case 202:
-                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
-                    if (!Shot("bp_09_back_to_title.png")) return;
-                    ProbeLogSync("⑲⑨ 回菜单");
-                    ProbeTableLook("⑲⑨ 回菜单");
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("bp_10_withdrawn.png")) return;
+                    ProbeLogSync("⑳⓪ 收回之后");
                     Stage = 203;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                // ⑳⓪ 再进一关（第二次走同一条路 —— 累计型缺陷在这里现形）
+                // ⑳① 再上桌一次（当启动目标），然后附魔 + 启动 —— 走完"反应特效"那一段
                 case 203:
                     if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    StartGame();
+                    ProbeClickHandMaterial();
+                    ProbeAddFxLayers();
                     Stage = 204;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
                 case 204:
                     if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    PickLevel();
-                    PickDeck();
+                    ProbeActivateV21();
                     Stage = 205;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
                 case 205:
-                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    ProbeCorePickV21();
-                    ProbeConfirmBladeV21();
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("bp_11_activate.png")) return;
+                    ProbeLogSync("⑳① 启动/反应特效之后");
+                    ProbeTableLook("⑳① 启动/反应特效之后");
                     Stage = 206;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                // ⑳① 第二次进关卡的桌面 —— 和 ⑲⑥ 那张逐点对照
+                // ⑳② 已经启动过的素材**不许**收回（用户要求的边界）
                 case 206:
-                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
-                    if (!Shot("bp_10_reenter_turn1.png")) return;
-                    ProbeLogSync("⑳① 第二次进关卡");
-                    ProbeTableLook("⑳① 第二次进关卡");
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeWithdrawStartedCheck("⑳② 已启动的素材");
                     Stage = 207;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
+                // ⑳③ 推到关卡结束（4 回合耗尽 / 达标 / 爆刀）
                 case 207:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeDriveLevelV21();
+                    Stage = 208;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 208:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("bp_12_level_end.png")) return;
+                    ProbeLogSync("⑳③ 关卡结束");
+                    ProbeTableLook("⑳③ 关卡结束");
+                    Stage = 209;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑳④ ★ 回菜单 —— 用户报"黑桌"最可能的第一帧就在这前后
+                case 209:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeReturnToTitle();
+                    Stage = 210;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 210:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("bp_13_back_to_title.png")) return;
+                    ProbeLogSync("⑳④ 回菜单");
+                    ProbeTableLook("⑳④ 回菜单");
+                    Stage = 211;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑳⑤ 再进一关（第二次走同一条路 —— 累计型缺陷在这里现形）
+                case 211:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    StartGame();
+                    Stage = 212;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 212:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    PickLevel();
+                    PickDeck();
+                    Stage = 213;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 213:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeBladePickCandidate(0, "⑳⑤ 第二次进关卡·点候选");
+                    ProbeConfirmBladeV21();
+                    Stage = 214;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑳⑥ 第二次进关卡的桌面 —— 和 ⑲⑧ 那张逐点对照
+                case 214:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("bp_14_reenter_turn1.png")) return;
+                    ProbeLogSync("⑳⑥ 第二次进关卡");
+                    ProbeTableLook("⑳⑥ 第二次进关卡");
+                    Stage = 215;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 215:
                     if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
                     Finish();
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ⑳⑦~⑳⑪ 刀片候选的"连续换"验证（DSH_BLACKPROBE=1）
+                //
+                //  【它复现的是用户那句话】「在选择刀片的时候桌面上的刀片也要更换」——
+                //    现象是"点了没视觉变化，只有按确认之后才换"。
+                //    这里先拍默认门面，再连点**两张不同**的候选（第 2 张、第 3 张 ——
+                //    第 1 张就是默认那张，点它看不出换没换），每次都拍一张 + 打一行
+                //    "桌面刀片卡 = 谁"，最后按确认 —— 三张截图必须各不相同、
+                //    日志里的卡名必须跟着走、确认之后必须还是最后点的那张。
+                //
+                //  ★ 两个"必须"：
+                //    ① 必须在 BladePick 阶段跑：SwapBladeWith 的第一道门就是 phase == BladePick，
+                //       所以它是从 ㊴（case 56，选刀片界面）岔进来的，不是从 190 那条链。
+                //    ② **截图和改状态必须分成两个 stage**：ScreenCapture 是帧末异步写盘的，
+                //       同一帧里先截图、后点候选，落盘的是"点完之后"的那一帧
+                //       （文件头那段"一律先截图、下一个 stage 再改状态"就是这个教训）。
+                // ══════════════════════════════════════════════════════
+
+                // ⑳⑦ 默认候选的样子（还没点任何卡）
+                case 220:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("bp_15_blade_default.png")) return;
+                    ProbeLogSync("⑳⑦ 还没点候选（默认门面）");
+                    Stage = 221;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 点第 2 张候选（第 1 张 = 默认那张，点它看不出变化）
+                case 221:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeBladePickCandidate(1, "⑳⑧ 点第 2 张候选");
+                    Stage = 222;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑳⑧ 桌面刀片卡应该已经换成第 2 张
+                case 222:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("bp_16_blade_candB.png")) return;
+                    Stage = 223;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // 再点第 3 张（证明"每点一次都跟着换"，不是只换第一次）
+                case 223:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeBladePickCandidate(2, "⑳⑨ 点第 3 张候选");
+                    Stage = 224;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑳⑩ 第 3 张上桌的样子 + 自检（换卡不能留下"残留 view"）
+                case 224:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("bp_17_blade_candC.png")) return;
+                    ProbeLogSync("⑳⑩ 点完候选（还没确认）");
+                    Stage = 225;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑳⑪ 确认 → 桌面上那张必须和最后点的候选一致，然后回主链进第 1 回合
+                case 225:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeConfirmBladeV21();
+                    ProbeLogSync("⑳⑪ 刀片已确认");
+                    Stage = 58;
+                    stageTime = EditorApplication.timeSinceStartup;
                     return;
 
                 // ══════════════════════════════════════════════════════
@@ -1781,10 +1847,18 @@ namespace GameJam.EditorTools
                       + " 张 → " + r.HandText());
 
             // 点手牌里的第一张素材 = 选它当刀片核心（走玩家那条 SwapBladeWith 路）
+            // ★ 跳过 H=0 的：PickCoreCandidate 现在会当场拒绝 H=0 的核心（H=0 一进关卡就爆刀），
+            //   拿它去点会让后面每一步的前提（刀片已成立）落空。判据和 CoreCandidate 完全一致。
             for (int i = 0; i < setup.hand.Count; i++)
             {
                 PlayCard c = setup.hand[i];
                 if (c == null || c.bindingMaterial == null) continue;   // 绑定为空的必然是法术
+
+                if (c.bindingMaterial.H <= 0)
+                {
+                    Debug.Log("[AutoPlay/V21] 跳过 H=0 的「" + c.DisplayName + "」（当核心会一进关卡就爆刀）");
+                    continue;
+                }
 
                 bool ok = loop.SwapBladeWith(c);
                 Debug.Log("[AutoPlay/V21] 拿 " + c.DisplayName + " 当刀片核心 → " + ok);
@@ -2649,8 +2723,190 @@ namespace GameJam.EditorTools
         }
 
         // ══════════════════════════════════════════════════════════════
-        //  黑桌探针（DSH_BLACKPROBE=1）用的量测 —— 见 ⑲⓪~⑳① 那一段
+        //  刀片候选的"连续换"验证（DSH_BLACKPROBE=1）用的探针 —— 见 ⑳⑦~⑳⑨ 那一段
+        //
+        //  【它复现的是用户那句话】「在选择刀片的时候桌面上的刀片也要更换」——
+        //    现象是"点了没视觉变化，只有按确认之后才换"。
+        //    所以每点一次候选都要打一行"桌面刀片卡 = 谁"，让"换没换"变成日志里的字。
+        //    ★ 必须在 BladePick 阶段点：SwapBladeWith 的第一道门就是 phase == BladePick。
         // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// ⑳⑦~⑳⑨ 用：点手牌里的第 <paramref name="index"/> 张**可当核心**的素材
+        /// （H&gt;0 的素材，和 CoreCandidate 的判据同一个），然后把它**桌面上那张刀片卡的名字**打出来。
+        ///
+        /// 【为什么要打"桌面刀片卡 = 谁"】用户报的就是「点了没视觉变化，只有按确认之后才换」——
+        ///   这件事在截图里只能看出"卡面好像没变"，日志里有卡名才是证据。
+        ///   走的是玩家那条路（TableTurnLoop.SwapBladeWith → PickCoreCandidate），不另开捷径。
+        /// </summary>
+        private static void ProbeBladePickCandidate(int index, string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableTurnLoop loop = Loop();
+            if (setup == null || loop == null)
+            {
+                Debug.LogWarning("[AutoPlay/Black] " + what + "：找不到 TableSetup / TableTurnLoop，跳过。");
+                return;
+            }
+
+            // 候选 = 手牌里 H>0 的素材（H=0 的会被 PickCoreCandidate 拒掉，见那里的说明）
+            System.Collections.Generic.List<PlayCard> pool = new System.Collections.Generic.List<PlayCard>();
+            for (int i = 0; i < setup.hand.Count; i++)
+            {
+                PlayCard c = setup.hand[i];
+                if (c == null || c.bindingMaterial == null) continue;
+                if (c.bindingMaterial.H <= 0) continue;
+                pool.Add(c);
+            }
+
+            if (pool.Count == 0)
+            {
+                Debug.LogWarning("[AutoPlay/Black] " + what + "：手牌里没有 H>0 的素材，选不了核心。");
+                return;
+            }
+
+            if (index >= pool.Count)
+            {
+                Debug.Log("[AutoPlay/Black] " + what + "：可当核心的素材只有 " + pool.Count +
+                          " 张（要第 " + (index + 1) + " 张），改点最后一张 —— 至少证明'再点一次'不会把桌面卡点丢。");
+                index = pool.Count - 1;
+            }
+
+            PlayCard card = pool[index];
+            string before = BladeCardText(loop);
+
+            bool ok = loop.SwapBladeWith(card);
+
+            Debug.Log("[AutoPlay/Black] " + what + "：「" + card.DisplayName + "」"
+                      + "（H " + card.bindingMaterial.H + " V " + card.bindingMaterial.V + "）"
+                      + "｜被接受 " + ok
+                      + "｜桌面刀片卡 " + before + " → " + BladeCardText(loop)
+                      + "｜notice " + loop.notice);
+        }
+
+        /// <summary>桌面上那张刀片卡现在显示的是谁（没建出来就说明白）。</summary>
+        private static string BladeCardText(TableTurnLoop loop)
+        {
+            if (loop == null || loop.bladeCard == null) return "（桌面没有刀片卡）";
+            return "「" + loop.bladeCard.DisplayName + "」";
+        }
+
+        /// <summary>
+        /// ⑳⓪ 用：把桌面第一张素材**拖到玩家这一侧再松手** = 收回手牌。
+        ///
+        /// 【为什么是 Teleport + DropCard 而不是模拟鼠标】探针不模拟输入事件，玩家那条路
+        ///   在松手时的唯一判决就是 TableInteraction.DropCard —— 所以这里只把
+        ///   "鼠标把牌拖到哪儿"换成"探针把牌放到哪儿"，判决函数一模一样。
+        ///   拖到 z = HandZoneZ 之外（更靠近玩家）才算"收回"，这条线是游戏自己的常量。
+        /// </summary>
+        private static void ProbeWithdrawTableMaterial(string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+            if (setup == null || it == null || loop == null || loop.rulesV21 == null)
+            {
+                Debug.LogWarning("[AutoPlay/Black] " + what + "：找不到 TableSetup / TableInteraction，跳过。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+            PlayCard target = FirstTableCard(r);
+            if (target == null)
+            {
+                Debug.LogWarning("[AutoPlay/Black] " + what + "：桌面上没有素材卡，收回这一步跳过。");
+                return;
+            }
+
+            int tableBefore = r.LiveTableCount();
+            int handBefore  = setup.hand != null ? setup.hand.Count : -1;
+
+            // 玩家的鼠标把卡拖到手牌那一片（比 HandZoneZ 再往玩家一侧 0.15，避免压线）
+            target.Teleport(new Vector3(target.transform.position.x, 0.022f,
+                                        TableInteraction.HandZoneZ - 0.15f),
+                            target.homeEuler);
+            bool handled = it.DropCard(target, false);
+
+            Debug.Log("[AutoPlay/Black] " + what + "：把桌面上的「" + target.DisplayName + "」拖到手牌区（z " +
+                      (TableInteraction.HandZoneZ - 0.15f).ToString("0.##") + "）→ 被处理 " + handled
+                      + "｜桌面素材 " + tableBefore + " → " + r.LiveTableCount() + " 张"
+                      + "｜3D 手牌 " + handBefore + " → " + (setup.hand != null ? setup.hand.Count : -1) + " 张"
+                      + "｜notice " + loop.notice
+                      + "｜" + r.ViewSyncSummary());
+        }
+
+        /// <summary>
+        /// ⑳② 用：本回合**已经启动过**的素材必须收不回来（用户拍板的边界）。
+        /// 桌面上找不到这样的卡就如实说"这次没测到"，绝不假装通过。
+        /// </summary>
+        private static void ProbeWithdrawStartedCheck(string what)
+        {
+            TableTurnLoop loop = Loop();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            if (loop == null || it == null || loop.rulesV21 == null) return;
+
+            TableRulesV21 r = loop.rulesV21;
+
+            PlayCard target = null;
+            GameJam.Rules.MaterialState st = null;
+            // 桌面卡用规则层的 FindTable 认（和 ProbeClickTableCard 同一条口径），
+            // 再挑"本回合启动过"的那一张 —— 不碰 tableCards（那是规则侧的私有表）
+            PlayCard[] all = Object.FindObjectsOfType<PlayCard>();
+            for (int i = 0; i < all.Length; i++)
+            {
+                if (all[i] == null) continue;
+                GameJam.Rules.MaterialState s = r.FindTable(all[i]);
+                if (s == null || s.removed || !s.OnTable) continue;
+                if (!r.StartedThisTurn(s)) continue;
+
+                st = s;
+                target = all[i];
+                break;
+            }
+
+            if (st == null || target == null)
+            {
+                Debug.Log("[AutoPlay/Black] " + what + "：桌面上没有'本回合启动过且还在场'的素材"
+                          + "（启动过的多半已经被献祭吞噬/形态变化带走了），这一次没测到 —— 不算通过也不算失败。"
+                          + "｜桌面 " + r.TableText());
+                return;
+            }
+
+            int tableBefore = r.LiveTableCount();
+            string noticeBefore = loop.notice;
+            target.Teleport(new Vector3(target.transform.position.x, 0.022f,
+                                        TableInteraction.HandZoneZ - 0.15f),
+                            target.homeEuler);
+            bool handled = it.DropCard(target, false);
+
+            // ★ 判据是"桌面张数有没有变 + notice 说了什么"，不是 DropCard 的返回值 ——
+            //   那个返回值的意思是"这一下输入被交互层消费掉了"（拒绝也是消费），
+            //   拿它当"收回成功"会读到反的结论（第一版就是这么写错的）。
+            bool refused = (r.LiveTableCount() == tableBefore) && (loop.notice != noticeBefore);
+
+            Debug.Log("[AutoPlay/Black] " + what + "：把**已启动过**的「" + st.name + "」往手牌区拖 → 输入被消费 "
+                      + handled
+                      + "｜桌面素材 " + tableBefore + " → " + r.LiveTableCount() + " 张"
+                      + (r.LiveTableCount() == tableBefore ? "（✓ 没被收走，符合预期）" : "（★ 被收走了，不符合预期！）")
+                      + "｜拒绝了 " + refused
+                      + "｜notice " + loop.notice);
+        }
+
+        /// <summary>桌面上的第一张素材 3D 卡（用规则层的 FindTable 认，不靠名字 —— 名字会随 D 变）。</summary>
+        private static PlayCard FirstTableCard(TableRulesV21 r)
+        {
+            if (r == null) return null;
+
+            PlayCard[] all = Object.FindObjectsOfType<PlayCard>();
+            for (int i = 0; i < all.Length; i++)
+            {
+                if (all[i] == null) continue;
+                GameJam.Rules.MaterialState s = r.FindTable(all[i]);
+                if (s == null || s.removed || !s.OnTable) continue;
+                return all[i];
+            }
+            return null;
+        }
 
         /// <summary>回菜单（走游戏自己的公开入口 TableTurnLoop.ReturnToTitle）。</summary>
         private static void ProbeReturnToTitle()

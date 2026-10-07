@@ -131,7 +131,7 @@ namespace GameJam.Prototype
             if (discTex != null) return discTex;
 
             const int S = 128;
-            discTex = new Texture2D(S, S, TextureFormat.RGBA32, false);
+            discTex = new Texture2D(S, S, TextureFormat.RGBA32, true);   // true = 建 mip 链（同 NewTex）
             discTex.hideFlags = HideFlags.HideAndDontSave;
 
             float r = S * 0.5f - 1f;
@@ -150,7 +150,7 @@ namespace GameJam.Prototype
                 }
             }
 
-            discTex.Apply();
+            discTex.Apply(true);   // 生成 mip（同 NewTex）
             discTex.wrapMode = TextureWrapMode.Clamp;
             return discTex;
         }
@@ -252,7 +252,7 @@ namespace GameJam.Prototype
 
             Texture2D t = NewTex(W, H);
             t.SetPixels32(px);
-            t.Apply(false, false);
+            t.Apply(true, false);   // true = 生成 mip（见 NewTex 的说明）
 
             faceCache[key] = t;
             return t;
@@ -315,7 +315,7 @@ namespace GameJam.Prototype
 
             slotFrameTex = NewTex(W, H);
             slotFrameTex.SetPixels32(px);
-            slotFrameTex.Apply(false, false);
+            slotFrameTex.Apply(true, false);   // true = 生成 mip（见 NewTex 的说明）
             return slotFrameTex;
         }
 
@@ -357,7 +357,7 @@ namespace GameJam.Prototype
             tableTex = NewTex(W, H);
             tableTex.wrapMode = TextureWrapMode.Repeat;
             tableTex.SetPixels32(px);
-            tableTex.Apply(false, false);
+            tableTex.Apply(true, false);   // true = 生成 mip（见 NewTex 的说明）
             return tableTex;
         }
 
@@ -407,7 +407,7 @@ namespace GameJam.Prototype
 
             panelTex = NewTex(S, S);
             panelTex.SetPixels32(px);
-            panelTex.Apply(false, false);
+            panelTex.Apply(true, false);   // true = 生成 mip（见 NewTex 的说明）
             return panelTex;
         }
 
@@ -453,7 +453,7 @@ namespace GameJam.Prototype
             metalTex = NewTex(S, S);
             metalTex.wrapMode = TextureWrapMode.Repeat;
             metalTex.SetPixels32(px);
-            metalTex.Apply(false, false);
+            metalTex.Apply(true, false);   // true = 生成 mip（见 NewTex 的说明）
             return metalTex;
         }
 
@@ -497,7 +497,7 @@ namespace GameJam.Prototype
 
             glowTex = NewTex(S, S);
             glowTex.SetPixels32(px);
-            glowTex.Apply(false, false);
+            glowTex.Apply(true, false);   // true = 生成 mip（见 NewTex 的说明）
             return glowTex;
         }
 
@@ -543,7 +543,7 @@ namespace GameJam.Prototype
 
             flameTex = NewTex(W, H);
             flameTex.SetPixels32(px);
-            flameTex.Apply(false, false);
+            flameTex.Apply(true, false);   // true = 生成 mip（见 NewTex 的说明）
             return flameTex;
         }
 
@@ -644,7 +644,7 @@ namespace GameJam.Prototype
 
             Texture2D tex = NewTex(size, size);
             tex.SetPixels32(px);
-            tex.Apply(false, false);
+            tex.Apply(true, false);   // true = 生成 mip（见 NewTex 的说明）
 
             emblemCache[key] = tex;
             return tex;
@@ -665,9 +665,23 @@ namespace GameJam.Prototype
             }
         }
 
+        /// <summary>
+        /// 程序化贴图的统一建法。
+        ///
+        /// ★★ 这里必须建 mip 链（第 4 个参数 = true）、并且 Apply 时生成 mip（Apply(true)）★★
+        ///
+        /// 【为什么】原来这两处都是 false（无 mip / 不生成 mip），编辑器里看不出问题，
+        ///   但**打包版会按画质档位的 Texture Quality 限制贴图分辨率**：
+        ///   一张"只有 mip 0、却要被降到半分辨率"的贴图，采样出来的颜色是错的
+        ///   （实测：打包版里桌面比编辑器暗 3~4 倍，木纹完全看不见 —— 就是用户报的"桌面变黑"）。
+        ///   有完整的 mip 链之后，降分辨率 = 采样更糊的一级，颜色均值不变，两边就对上了。
+        ///
+        /// 【为什么不是"把贴图质量关掉"】那是改画质设置，会影响整个工程；
+        ///   而"贴图该有 mip"本来就是对的 —— 斜看桌面时没有 mip 还会闪（摩尔纹）。
+        /// </summary>
         private static Texture2D NewTex(int w, int h)
         {
-            Texture2D t = new Texture2D(w, h, TextureFormat.RGBA32, false);
+            Texture2D t = new Texture2D(w, h, TextureFormat.RGBA32, true);   // true = 建 mip 链
             t.wrapMode = TextureWrapMode.Clamp;
             t.filterMode = FilterMode.Bilinear;
             t.anisoLevel = 2;

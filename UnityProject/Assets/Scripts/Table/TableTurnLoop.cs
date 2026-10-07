@@ -534,9 +534,17 @@ namespace GameJam.Prototype
             //      正文 §2.5 的刀片是玩家从手里挑的，选之前桌上得有个东西可看。
             //      这里取手牌第一张素材 —— 和 ConfirmBladePick 的兜底口径一致
             //      （两边不一致就会出现"桌上摆着 A、确认下去变成 B"）。
+            //
+            //   ③ ★ 玩家点过候选（bladeCoreCard 不为空）→ **必须摆他点的那张**。
+            //      用户报的是「点了没视觉变化，只有按确认之后才换」：根因就是这里
+            //      一直问 CoreCandidate()（"手牌里第一张素材"），玩家点第二、第三张时
+            //      它答的仍然是第一张 —— 于是桌面刀片卡纹丝不动。
+            //      优先级：定下来的核心 > 玩家点的候选 > 兜底候选，三者取第一个非空。
             if (V21)
             {
-                MaterialCard core = rulesV21.coreCard != null ? rulesV21.coreCard : rulesV21.CoreCandidate();
+                MaterialCard core = rulesV21.coreCard;
+                if (core == null) core = bladeCoreCard;
+                if (core == null) core = rulesV21.CoreCandidate();
                 if (core == null || core.card == null) return;
 
                 bladeCard = CardFactory.Create(Card.Of(core.card), setup.cardsRoot,
@@ -589,6 +597,18 @@ namespace GameJam.Prototype
         {
             if (mc == null || mc.card == null) return false;
 
+            // ★ H=0 的候选当场拒绝，而且**不动桌面上那张刀片卡**。
+            //   【为什么提前到这里拒】原来只有 ConfirmBladePick 里有一道 HasCore 检查，
+            //   而那时候 ChooseCore 已经把这卡移出手牌、刀片也已经换成它了 ——
+            //   玩家看到的是"点了确认，牌没了、刀片还是 0，还得自己再点一张"。
+            //   现在点的时候就拦下来，桌面上的刀片卡保持上一张的样子（用户要求的口径）。
+            if (mc.H <= 0)
+            {
+                notice = "刀片核心「" + mc.name + "」的 H 是 0 —— H=0 一进关卡就爆刀，换一张";
+                Debug.Log("[V21] 刀片核心候选被拒：" + mc.name + "（H=0），桌面刀片卡不动");
+                return false;
+            }
+
             bladeCoreCard = mc;
 
             // 刀片位换成这张卡，同时**整副手牌重建一次** —— 否则卡牌的 homePosition
@@ -596,6 +616,12 @@ namespace GameJam.Prototype
             // 那张被点过的牌会先跳回去再让位，看起来像点错了。
             rulesV21.RebuildHand();
             BuildBladeCard();
+
+            // 桌面上那张卡到底换成了谁 —— 用户报的正是"看不出换没换"，
+            // 所以日志里要有卡名，而不是只写"已刷新"
+            Debug.Log("[V21] 刀片核心候选 → 桌面刀片卡已刷新：「"
+                      + (bladeCard != null ? bladeCard.DisplayName : "（没建出来）") + "」"
+                      + "（候选 " + mc.name + " H=" + mc.H + " V=" + mc.V + "，还没确认）");
 
             notice = "刀片核心候选：" + mc.name + "（H " + mc.H + " · V " + mc.V + "）—— 按确认进入关卡";
             return true;

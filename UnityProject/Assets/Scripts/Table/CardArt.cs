@@ -263,7 +263,7 @@ namespace GameJam.Prototype
             }
 
             tex.SetPixels32(dst);
-            tex.Apply(false, false);
+            tex.Apply(true, false);   // 生成 mip：卡面是斜看的，没有 mip 会闪；降分辨率时颜色也会错（见 NewTex）
             return tex;
         }
 
@@ -339,7 +339,7 @@ namespace GameJam.Prototype
 
         private static Texture2D NewTex(int w, int h)
         {
-            Texture2D t = new Texture2D(w, h, TextureFormat.RGBA32, false);
+            Texture2D t = new Texture2D(w, h, TextureFormat.RGBA32, true);   // true = 建 mip 链（理由见 ProceduralArt.NewTex 那段）
             t.filterMode = FilterMode.Bilinear;
             t.wrapMode   = TextureWrapMode.Clamp;
             t.SetPixels32(new Color32[w * h]);     // 全透明

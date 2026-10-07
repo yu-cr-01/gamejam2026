@@ -274,9 +274,25 @@ namespace GameJam.Prototype
 
         // ── 蜡烛 ─────────────────────────────────────────────────────
 
+        /// <summary>当前那根蜡烛的根节点（整局只有一根，见 BuildCandle 里的说明）。</summary>
+        private GameObject candleRoot;
+
         private void BuildCandle()
         {
+            // ★ 建新的之前先把上一根收掉。
+            //
+            // 【为什么要在这里收，而不是在 Clear() 里】
+            //   蜡烛和它的点光是**这一局的照明来源**（进关卡之后桌上还得亮着），
+            //   所以 Clear() 故意不拆它。但每次回开场都会再 Build() 一次 ——
+            //   不在建的时候收，蜡烛就会一根一根叠在同一个坐标上，
+            //   点光也跟着累积（实测：回一趟菜单之后场景里就有 **2 个** CandleLight，
+            //   而且两个都在闪、强度还不同步）。灯一多，Unity 的"每物体光源上限"
+            //   就会开始丢光 —— 桌面变暗/明暗不对这类问题会以"偶发"的形式冒出来。
+            CardFactory.DestroySafe(candleRoot);
+            candleRoot = null;
+
             GameObject go = NewRoot("TitleCandle", CandleAt);
+            candleRoot = go;
 
             // 蜡身
             Cyl(go.transform, "Wax", 0.030f, 0.170f, new Vector3(0f, 0.085f, 0f),
@@ -570,10 +586,8 @@ namespace GameJam.Prototype
 
         private static Material Mat(Color c)
         {
-            Shader sh = Shader.Find("Standard");
-            if (sh == null) sh = Shader.Find("Diffuse");
-
-            Material m = new Material(sh);
+            // ★ 统一走 CardFactory 的出口（见那里关于"打包版里 Standard 会被剥掉"的说明）
+            Material m = new Material(CardFactory.StdShader());
             m.color = c;
             if (m.HasProperty("_Glossiness")) m.SetFloat("_Glossiness", 0.06f);
             if (m.HasProperty("_Metallic"))   m.SetFloat("_Metallic", 0f);

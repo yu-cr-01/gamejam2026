@@ -1357,23 +1357,26 @@ namespace GameJam.Prototype
             if (turnLoop != null && turnLoop.V21)
             {
                 // v2.1 的提示比旧流程多两行（"点手牌 = 上桌"和 F1 那条），
-                // 所以这一块自己算高度（240）：直接用外面那个 214 的话，
+                // 所以这一块自己算高度（260）：直接用外面那个 214 的话，
                 // 第一行会顶到 y 上面去、和别的 HUD 叠在一起。
-                float yv = Screen.height - 240f - 14f;
+                float yv = Screen.height - 260f - 14f;
 
                 GUI.Label(new Rect(16f, yv, w, 24f), "点手牌里的素材 = 直接上桌（拖到「上桌位」再点「上　桌」也行）", h1);
                 GUI.Label(new Rect(16f, yv + 28f, w, 22f), "点「上桌位」里待上桌的卡 = 上桌并选为目标", dim);
                 GUI.Label(new Rect(16f, yv + 48f, w, 22f), "点桌面上的素材 = 选它当「启动破壁机」的目标（会抬起来）", dim);
-                GUI.Label(new Rect(16f, yv + 68f, w, 22f), "点手牌里的法术 = 直接附魔到刀片（不消耗行动机会）", dim);
-                GUI.Label(new Rect(16f, yv + 88f, w, 22f), "「启动破壁机」消耗 1 行动机会 + 1 点刀片 H", dim);
-                GUI.Label(new Rect(16f, yv + 108f, w, 22f), "每回合 5 次行动、每关 4 回合；本回合最后一次启动会献祭吞噬目标", dim);
-                GUI.Label(new Rect(16f, yv + 128f, w, 22f), "刀片 H 归零 = 爆刀，关卡结束、当前分数 ×2", dim);
-                GUI.Label(new Rect(16f, yv + 148f, w, 22f), "右键单击卡牌 → 查看完整数据　｜　右键拖动 → 转头", dim);
-                GUI.Label(new Rect(16f, yv + 168f, w, 22f), "F1 → 卡牌图鉴（素材 / 法术全在这）　｜　F2 → 卡牌规则解析报告", dim);
-                GUI.Label(new Rect(16f, yv + 188f, w, 22f), "Esc → 菜单（继续 / 设置 / 关卡 / 卡牌图鉴 / 退出关卡 / 退出游戏）", dim);
+                // 收回手牌这一行是用户拍板新加的功能，必须写在提示里 ——
+                // 不写的话玩家只会得出"上桌就再也拿不回来了"，而这正是他提的那条。
+                GUI.Label(new Rect(16f, yv + 68f, w, 22f), "把桌面上的素材往下拖到手牌那一片 = 收回手牌（只在本回合、还没启动过时能收）", dim);
+                GUI.Label(new Rect(16f, yv + 88f, w, 22f), "点手牌里的法术 = 直接附魔到刀片（不消耗行动机会）", dim);
+                GUI.Label(new Rect(16f, yv + 108f, w, 22f), "「启动破壁机」消耗 1 行动机会 + 1 点刀片 H", dim);
+                GUI.Label(new Rect(16f, yv + 128f, w, 22f), "每回合 5 次行动、每关 4 回合；本回合最后一次启动会献祭吞噬目标", dim);
+                GUI.Label(new Rect(16f, yv + 148f, w, 22f), "刀片 H 归零 = 爆刀，关卡结束、当前分数 ×2", dim);
+                GUI.Label(new Rect(16f, yv + 168f, w, 22f), "右键单击卡牌 → 查看完整数据　｜　右键拖动 → 转头", dim);
+                GUI.Label(new Rect(16f, yv + 188f, w, 22f), "F1 → 卡牌图鉴（素材 / 法术全在这）　｜　F2 → 卡牌规则解析报告", dim);
+                GUI.Label(new Rect(16f, yv + 208f, w, 22f), "Esc → 菜单（继续 / 设置 / 关卡 / 卡牌图鉴 / 退出关卡 / 退出游戏）", dim);
 
                 if (TableSettings.ShowDebugInfo)
-                    GUI.Label(new Rect(16f, yv + 210f, w, 22f),
+                    GUI.Label(new Rect(16f, yv + 230f, w, 22f),
                               "物理：" + (interaction.PhysicsOn ? "开（受重力）" : "关（脚本控制）")
                               + "　　视角：" + (setup != null && setup.rig != null && setup.rig.IsFreeLook
                                                 ? "自由转头中" : "固定机位"), dim);

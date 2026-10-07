@@ -571,9 +571,10 @@ namespace GameJam.Prototype
 
         private static Shader Std()
         {
-            Shader sh = Shader.Find("Standard");
-            if (sh == null) sh = Shader.Find("Diffuse");
-            return sh;
+            // ★ 和 CardFactory 走同一个出口：打包版里 Standard 可能被剥掉，
+            //   那件事必须由那里吵一声（见 CardFactory.StdShader 的说明），
+            //   各文件自己抄一份 Shader.Find 就会出现"有的地方报了、有的地方静默"。
+            return CardFactory.StdShader();
         }
 
         internal static Material MakeLit(Color c, float gloss, float metallic)

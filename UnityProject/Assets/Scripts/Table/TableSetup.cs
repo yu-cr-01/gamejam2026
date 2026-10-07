@@ -52,7 +52,13 @@ namespace GameJam.Prototype
             "桌面视角", "手牌特写", "俯视", "榨汁机特写", "自由视角"
         };
 
-        private static readonly Color TableColor  = new Color(0.20f, 0.155f, 0.125f);
+        /// <summary>
+        /// 桌面材质里那个"还没贴木纹之前"的染色。
+        ///
+        /// ★ 只在木纹贴图缺失（ProceduralArt 被换掉 / 取不到）时才是主角 —— 见 TableTint 的
+        ///   说明为什么它必须浅：深色染色会把木纹贴图的亮度再乘一次，桌面就成了黑的。
+        /// </summary>
+        private static readonly Color TableColor  = new Color(0.62f, 0.50f, 0.42f);
 
         /// <summary>卡槽指示块（也就是吸附判定用的"框"）的尺寸。两处共用，别各写一个数。</summary>
         private const float SlotSizeX = 0.255f;
@@ -279,14 +285,72 @@ namespace GameJam.Prototype
             Renderer r = table.GetComponent<Renderer>();
             if (r != null)
             {
-                r.material = MakeMaterial(TableColor, 0.05f);
-
                 // 程序化木纹。立方体顶面的 UV 是 0..1 铺满整面，
                 // 直接贴会被拉成长条，所以给一个接近"每格 0.9 米见方"的平铺次数。
-                r.material.mainTexture = ProceduralArt.TableSurface();
-                r.material.mainTextureScale = new Vector2(3f, 2.1f);
+                Texture2D wood = ProceduralArt.TableSurface();
+
+                // ★ 有木纹 → 染色取近白（贴图自己带颜色，染色只负责微调色温）；
+                //   木纹拿不到（程序化美术被换掉 / 出图失败）→ 退回纯色桌面，
+                //   这时 _Color 就是全部反照率，所以用能看清的中间调 TableColor。
+                r.material = MakeMaterial(wood != null ? TableTint : TableColor, 0.05f);
+
+                if (wood != null)
+                {
+                    r.material.mainTexture = wood;
+                    r.material.mainTextureScale = new Vector2(3f, 2.1f);
+                }
+
+                LogTableMaterialOnce(r.material, wood);
             }
         }
+
+        /// <summary>
+        /// ★★ 桌面材质的颜色必须是**接近白色**的染色，不能是又一个深色 ★★
+        ///
+        /// 【为什么】（用户报的"桌面变黑 / 木纹不见了"就是这一条）
+        ///   Standard 材质的最终反照率 = _Color × _MainTex。木纹贴图本身已经是深木色
+        ///   （0.15~0.25），再乘一个深色 _Color（原来是 0.20/0.155/0.125）之后
+        ///   有效反照率只剩 **0.03~0.05** —— 而这张桌子受到的总光照只有 1.2 上下，
+        ///   于是整张桌面渲染出来只有 4%~6% 的灰，**看起来就是纯黑，木纹更是完全不可见**。
+        ///   实测（DSH_BLACKPROBE 的黑桌探针，桌面四个固定点）：
+        ///     深色 _Color：近侧 (41,35,31)，四舍五入就是黑；
+        ///     白 _Color  ：同样的点回到 60~70 这一档（和历史上好看的版本一致），木纹可辨。
+        ///
+        /// 【为什么不是把光照调亮】光照是"气氛"（暖光 + 冷补光 + 烛光），整套构图都按它调过；
+        ///   而"暗色 × 暗色 = 更暗"是纯粹的口径错误 —— 贴图已经承担了颜色，
+        ///   _Color 只该当染色用。改这一处，桌面立刻回到设计意图上的深木色。
+        /// </summary>
+        private static readonly Color TableTint = new Color(1f, 0.97f, 0.93f);
+
+        /// <summary>
+        /// 打一次"桌面贴图到底长什么样"的证据行（只打一次）。
+        ///
+        /// 【为什么留这一行】"桌面是黑的"这件事在编辑器里看不见、在打包版里才现形，
+        ///   而它有两类完全不同的原因，截图长得一模一样：
+        ///     ① 贴图没了 / 越界采样（mip 链缺失 + 画质档位把贴图降到半分辨率）
+        ///     ② 反照率被乘暗（_Color × 贴图 双重变暗，见 TableTint）
+        ///   这一行同时给出"画质档位 / 贴图 mip 层数 / 贴图名 / 采样模式"，
+        ///   下一次再有人报黑桌，对着日志就能分清是哪一类（也能证明 ① 已经被修掉）。
+        /// </summary>
+        private static void LogTableMaterialOnce(Material m, Texture2D wood)
+        {
+            if (tableLogged) return;
+            tableLogged = true;
+
+            Debug.Log("[TableSetup] 桌面材质：shader=" + (m.shader != null ? m.shader.name : "NULL")
+                      + "｜_Color=" + m.color.ToString()
+                      + "｜木纹贴图=" + (wood != null ? wood.name + " " + wood.width + "×" + wood.height : "NULL")
+                      + "｜mip 层数=" + (wood != null ? wood.mipmapCount.ToString() : "-")
+                      + "（>1 = 有 mip 链；=1 且画质档位限制贴图分辨率时颜色会出错）"
+                      + "｜画质档位=" + QualitySettings.GetQualityLevel()
+                      + "「" + QualitySettings.names[QualitySettings.GetQualityLevel()] + "」"
+                      + "｜贴图分辨率限制=" + QualitySettings.globalTextureMipmapLimit
+                      + "（0 = 不限制）"
+                      + "｜各向异性=" + QualitySettings.anisotropicFiltering
+                      + "｜色彩空间=" + (QualitySettings.activeColorSpace == ColorSpace.Linear ? "Linear" : "Gamma"));
+        }
+
+        private static bool tableLogged;
 
         // ── 卡槽标记 ──────────────────────────────────────────────────
         private Renderer[] slotMarkers;
@@ -574,10 +638,8 @@ namespace GameJam.Prototype
         // ── 工具 ──────────────────────────────────────────────────────
         private static Material MakeMaterial(Color color, float glossiness)
         {
-            Shader sh = Shader.Find("Standard");
-            if (sh == null) sh = Shader.Find("Diffuse");
-
-            Material m = new Material(sh);
+            // ★ 统一走 CardFactory 的出口（见那里关于"打包版里 Standard 会被剥掉"的说明）
+            Material m = new Material(CardFactory.StdShader());
             m.color = color;
             if (m.HasProperty("_Glossiness")) m.SetFloat("_Glossiness", glossiness);
             if (m.HasProperty("_Metallic"))   m.SetFloat("_Metallic", 0f);

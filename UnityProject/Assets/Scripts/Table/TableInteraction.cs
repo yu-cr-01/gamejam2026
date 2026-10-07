@@ -91,6 +91,24 @@ namespace GameJam.Prototype
         public static readonly Color MarkerIdle = new Color(0.30f, 0.34f, 0.42f);
         public static readonly Color MarkerHot  = new Color(0.35f, 0.95f, 0.60f);
 
+        /// <summary>
+        /// "手牌区"的分界线（世界 z）。桌面素材被拖到 z 小于它就 = 往玩家自己这边收回来。
+        ///
+        /// 【为什么是一条 z 线，而不是"手牌卡的包围盒"】
+        ///   手牌会随张数重排（LayoutHand），空手牌时更是**一张卡都没有**可以当参照物 ——
+        ///   拿卡的位置当判据会在"最后一张牌"上直接失效。
+        ///   两个区域的 z 是固定的：槽位那一排在 z = −0.20（矩形纵深 0.35，后沿 −0.375），
+        ///   手牌那一排在 z ≈ −0.58（见 TableTurnLoop.HandSlot）。
+        ///   取两者中间偏玩家一侧的 −0.45：既不会和槽位判定区重叠
+        ///   （槽位吸附的可达边界是 −0.375 − snapSlackZ 0.13 ≈ −0.505，
+        ///   而那一下是**桌面卡**的收回判定，两者本来就不会同时命中），
+        ///   也不需要玩家把手牌拖得很往下才算数。
+        /// </summary>
+        public const float HandZoneZ = -0.45f;
+
+        /// <summary>这个落点算不算"玩家想把它收回手牌"。</summary>
+        public static bool InHandZone(Vector3 world) { return world.z <= HandZoneZ; }
+
         // ─────────────────────────────────────────────────────────────
 
         void Update()
@@ -309,8 +327,18 @@ namespace GameJam.Prototype
 
             PlayCard hit = Hovered;
 
-            // ① 桌面素材 → 选为启动目标（按下即生效）
-            if (RouteCardClick(hit)) return;
+            // ① 桌面素材 → 也是**先拿起来，松手才判**
+            //    【为什么从"按下即选中"改成"松手判"】v2.1 现在有两种手势落在同一张卡上：
+            //      单击 = 选它当启动目标；往下拖到玩家这一侧 = 收回手牌（见 DropCard）。
+            //      按下那一刻分不出是哪一种 —— 和手牌那几张牌的道理完全一样，
+            //      所以判决点只能挪到松手那一下（RouteCardClick 里那段老说明还成立：
+            //      "早一帧生效"是当时唯一的诉求，而那时桌面卡只有一种手势）。
+            TableRulesV21 rules = turnLoop != null ? turnLoop.rulesV21 : null;
+            if (rules != null && TableSettings.UseRulesV21 && hit != null && rules.IsTableCard(hit))
+            {
+                if (mayDrag) BeginDrag(hit, ray);
+                return;
+            }
 
             // ② 手牌（素材 / 法术）→ 拿起来拖动；是"点"还是"拖"由松手时的位移判（见 DropCard）
             if (mayDrag && hit != null) BeginDrag(hit, ray);
@@ -319,6 +347,11 @@ namespace GameJam.Prototype
         /// <summary>
         /// 单击一张卡的**按下**分派：桌面素材 → 选为启动目标。
         /// **返回 true 表示这一下已经被消费掉了**，调用方不该再做别的。
+        ///
+        /// 【谁还在用它】只有 <see cref="ClickCard"/>（探针 / 工具那条"我指定这一张，点它一下"的路）。
+        ///   玩家那条路（HandleLeftClick）现在**不在这里**选中桌面卡了 ——
+        ///   桌面卡多了一种手势（拖回手牌），按下那一刻分不出是"点"还是"拖"，
+        ///   所以选中挪到了松手判决 <see cref="DropCard"/> 里（那里也调这个方法，口径唯一）。
         ///
         /// 【手牌为什么在这里返回 false】手牌的"打出去"要等松手才能判（点 / 落槽两种手势），
         ///   统一在 <see cref="DropCard"/> → <see cref="TableTurnLoop.PlayCardV21"/> 那一条路上。
@@ -421,6 +454,29 @@ namespace GameJam.Prototype
             // ══ v2.1：点 / 落槽 = 出牌 ══════════════════════════════════
             if (turnLoop != null && turnLoop.V21)
             {
+                // ★★ 桌面素材：这一下有三种可能，**先按桌面卡判**，别让它掉进下面的出牌分支 ★★
+                //    单击（位移 ≤ ClickSlack）→ 选它当启动目标（老行为，一个字没变）
+                //    拖到玩家这一侧（z ≤ HandZoneZ）→ 收回手牌（本回合、且还没启动过才行）
+                //    拖回桌面别处 → 放回它自己的位置，规则状态一点不动
+                //    【为什么必须放在最前面】它是一张**已经在桌面上**的卡，
+                //    下面那段是按"手上的牌打出去"写的（落槽 = 出牌），
+                //    桌面卡掉进去会被当成"再出一次牌"，那是另一个 bug。
+                TableRulesV21 rules = turnLoop.rulesV21;
+                if (rules != null && rules.IsTableCard(card))
+                {
+                    if (isClick)
+                    {
+                        rules.OnTableCardClicked(card);   // 选中 + notice（玩家那条路走的是这里）
+                        card.ReturnHome();
+                        return true;
+                    }
+
+                    if (InHandZone(card.transform.position) && rules.WithdrawToHand(card)) return true;
+
+                    card.ReturnHome();     // 拖回桌面别处 = 放回它自己的格位
+                    return true;
+                }
+
                 // 放错了槽（素材拖进附魔位、法术拖进上桌位）：说清楚，牌回手牌原位
                 if (slot >= 0 && !turnLoop.CanStageInto(slot, card))
                 {

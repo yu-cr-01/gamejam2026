@@ -90,12 +90,49 @@ namespace GameJam.Prototype
             return cjkFont;
         }
 
-        private static Shader StdShader()
+        /// <summary>
+        /// 场景里那些"runtime 现建"的材质统一用哪个受光 shader。
+        ///
+        /// ★★ 打包版里可能找不到 Standard —— 这件事必须吵出来，不能静默降级 ★★
+        ///
+        /// 【为什么找不到】没有任何**资源**引用 Standard（本工程的美术资源都是贴图，
+        ///   材质全是运行时 new 出来的），而 Standard 也不在
+        ///   Project Settings → Graphics → Always Included Shaders 里 ——
+        ///   于是打包时它被剥掉了，`Shader.Find("Standard")` 在播放器里返回 null。
+        ///   实测（打完包跑起来打的那行日志）：
+        ///     编辑器 —— shader=Standard
+        ///     打包版 —— shader=Legacy Shaders/Diffuse      ← 悄悄换了个人
+        ///   后果不只是"看着不亮"：Standard 才有的 _Glossiness / _Metallic 全部失效，
+        ///   而**深色物体（桌面）在这条回退路上会暗到像纯黑** —— 用户报的"桌面变黑、木纹不见了"
+        ///   就是它和"深色 _Color × 深色贴图"两条叠在一起的结果。
+        ///
+        /// 【怎么根治】把 Standard 加进 Always Included Shaders（或在 Resources 下放一个
+        ///   引用 Standard 的材质资源）—— 那两处都在本文件的改动范围之外，
+        ///   所以这里做的是**让它别再静默**：一旦回退，日志里就有一行 WARNING 指路。
+        /// </summary>
+        public static Shader StdShader()
         {
             if (stdShader == null) stdShader = Shader.Find("Standard");
-            if (stdShader == null) stdShader = Shader.Find("Diffuse");   // 兜底
+
+            if (stdShader == null)
+            {
+                // 兜底：Legacy Shaders/Diffuse 在 Always Included Shaders 里，所以播放器一定找得到
+                stdShader = Shader.Find("Diffuse");
+
+                if (!loggedStdShaderFallback)
+                {
+                    loggedStdShaderFallback = true;
+                    Debug.LogWarning("[CardFactory] 找不到 Standard shader，运行时材质退到「"
+                                     + (stdShader != null ? stdShader.name : "★连 Diffuse 都没有")
+                                     + "」。打包版里出现「颜色 / 明暗和编辑器不一样」就是这个原因 —— "
+                                     + "把 Standard 加进 Project Settings → Graphics → Always Included Shaders 即可根治。");
+                }
+            }
             return stdShader;
         }
+
+        /// <summary>"Standard 被剥掉"这件事只吵一次（每张卡都吵会把日志刷爆）。</summary>
+        private static bool loggedStdShaderFallback;
 
         /// <summary>
         /// 不受光照影响的透明材质 —— 卡面 / 卡槽角标用，保证图案永远看得清。

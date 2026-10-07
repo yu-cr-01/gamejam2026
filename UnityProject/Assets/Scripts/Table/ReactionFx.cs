@@ -551,7 +551,7 @@ namespace GameJam.Prototype
                     }
                 }
                 ring.SetPixels32(px);
-                ring.Apply(false, false);
+                ring.Apply(true, false);   // 生成 mip（见 FxTexture.NewTex 的说明）
                 return ring;
             }
 
@@ -579,13 +579,17 @@ namespace GameJam.Prototype
                     }
                 }
                 dot.SetPixels32(px);
-                dot.Apply(false, false);
+                dot.Apply(true, false);    // 生成 mip（见 FxTexture.NewTex 的说明）
                 return dot;
             }
 
             private static Texture2D NewTex(int n, string name)
             {
-                Texture2D t = new Texture2D(n, n, TextureFormat.RGBA32, false);
+                // ★ 建 mip 链（第 4 个参数 = true）+ Apply(true) 生成 mip —— 和 ProceduralArt.NewTex 同一条理由：
+                //   粒子只有 0.045 世界单位大，屏幕上是**缩小采样**，没有 mip 就只有 mip 0 可采；
+                //   而打包版会按画质档位限制贴图分辨率，一张没有 mip 链的贴图被降级时颜色就错了
+                //   （实机表现：编辑器里是亮的光点，打包版里暗得几乎看不见）。
+                Texture2D t = new Texture2D(n, n, TextureFormat.RGBA32, true);
                 t.name = name;
                 t.wrapMode = TextureWrapMode.Clamp;   // 不重复：边缘采样不会把对面的亮边拉过来
                 t.filterMode = FilterMode.Bilinear;

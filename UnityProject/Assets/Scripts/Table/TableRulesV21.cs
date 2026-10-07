@@ -324,6 +324,10 @@ namespace GameJam.Prototype
             actionPoints   = LevelRun.ActionPointsPerTurn;
             startsThisTurn = 0;
 
+            // 新的一关 = 新的回合计时，"本回合启动过哪些"必须从零开始
+            startedThisTurnList.Clear();
+            sourceOfState.Clear();
+
             // ★ 目标分：v2.1 用 TableSettings.V21TargetScore，**不用** levelTargetScore。
             //   传进来的那个值来自 game_config.json 的 levels[].targetScore（1000/1500/2000），
             //   那是旧流程的口径（旧流程一次杯内模拟能拿几百分）。
@@ -567,6 +571,9 @@ namespace GameJam.Prototype
             actionPoints   = LevelRun.ActionPointsPerTurn;
             startsThisTurn = 0;
 
+            // 第 1 回合 = "本回合启动过哪些"从零开始（和 EndRound 开新回合同一件事）
+            startedThisTurnList.Clear();
+
             lastLog.Clear();
             lastLog.Add("【第 1 回合开始】行动机会 " + actionPoints + "/" + LevelRun.ActionPointsPerTurn +
                         "；附魔层数不变：" + (blade != null ? blade.layers.Describe() : "（无）"));
@@ -601,6 +608,10 @@ namespace GameJam.Prototype
                 mc.H,
                 mc.V);
             table.Add(st);
+
+            // 记下来源：这张素材被收回手牌时，卡面名字后面那句"（V=0）/（旧配置V=0）"
+            // 才能原样带回去（见 sourceOfState 的说明）
+            sourceOfState[st] = mc.source;
 
             Debug.Log("[V21] 出素材：" + st.Describe() + "｜桌面 " + table.Count + " 张");
 
@@ -657,6 +668,12 @@ namespace GameJam.Prototype
             bool last = IsLastStartForSure();
             TurnResult r = engine.StartBlade(BuildState(), target, last);
             Absorb(r);
+
+            // ★ 记下"这一张启动过了" —— 收回手牌的限制条件要用（见 startedThisTurnList）。
+            //   记在引擎调用**之后**：引擎可能已经把目标移出桌面（形态变化 / 被吞噬），
+            //   但"它被启动过"这件事照样成立，玩家不该还能把它收回手里。
+            if (target != null && !startedThisTurnList.Contains(target))
+                startedThisTurnList.Add(target);
 
             Debug.Log("[V21] 启动（" + (last ? "确定是本回合最后一次 → 结算后判定献祭吞噬" : "可能还有下一次") +
                       "）\n" + (r != null ? r.LogText() : "（引擎没返回结果）"));
@@ -748,6 +765,9 @@ namespace GameJam.Prototype
                 TurnResult b = engine.BeginTurn(BuildState());
                 Absorb(b);
                 startsThisTurn = 0;
+
+                // 新回合 = "本回合启动过哪些"清零（收回手牌的限制就是按回合算的）
+                startedThisTurnList.Clear();
             }
 
             Debug.Log("[V21] 回合推进\n" + (r != null ? r.LogText() : "（引擎没返回结果）"));
@@ -1495,6 +1515,134 @@ namespace GameJam.Prototype
             LoopNotice("启动目标：" + st.name + "（D " + st.D + "/" + st.fullD + "）");
         }
 
+        // ══════════════════════════════════════════════════════════════
+        //  收回手牌（用户追加的那条：「上桌之后怎么不能拖回来？」）
+        //
+        //  【结论先说清：严格按正文这是新增，不是修 bug】
+        //    正文 §三 里素材上桌之后是"启动目标"，移出途径只有形态变化 / 溶解 /
+        //    D 耗尽 / 献祭吞噬四条，**没有"收回手牌"**。
+        //    但"放错了想撤回"是玩家最正常的期待，而当时连撤销都没有 ——
+        //    所以按用户拍板给了这一条**有边界的**撤回：
+        //      · 只在**本回合**内（回合推进 = 上一回合的后悔权作废）；
+        //      · 而且这张素材**本回合还没被启动过**（启动是"用了它"，用了就不能反悔）。
+        //    这条边界正好卡在"操作失误"和"规则结算"之间：能撤回的都是还没产生后果的。
+        //
+        //  【为什么状态侧要和 PlayMaterial 严格对称】
+        //    出牌是 hand → table，收回是 table → hand，两边必须改同一对列表，
+        //    中间不许有第三种状态 —— 否则 TableRulesV21 的权威同步
+        //    （SyncTableVisuals 的"状态 vs view 一一对应"）与自检立刻会报数量对不上。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 这张桌面素材现在能不能收回手牌。返回 false 时 <paramref name="reason"/> 是给玩家看的原因
+        /// （不能收回必须说清楚 —— 静默失败就是"点了没反应"）。
+        /// </summary>
+        public bool CanWithdraw(MaterialState st, out string reason)
+        {
+            reason = "";
+
+            if (st == null) { reason = "这不是一张桌面素材"; return false; }
+            if (st.removed || !st.OnTable) { reason = "「" + st.name + "」已经不在桌面上了"; return false; }
+            if (levelOver) { reason = "关卡已结束，不能收回手牌"; return false; }
+            if (loop != null && loop.phase != TablePhase.Select)
+            {
+                reason = "现在不是出牌阶段（" + loop.phase + "），不能收回手牌";
+                return false;
+            }
+
+            if (StartedThisTurn(st))
+            {
+                reason = "「" + st.name + "」本回合已经启动过 —— 启动过的素材不能收回手牌（只在本回合、且还没启动过时能收）";
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 把桌面上的一张素材收回手牌（见上面那一段的规则口径）。
+        ///
+        /// 【走的是 3D 卡，不是 MaterialState】交互层手里只有 PlayCard（射线拾取拿到的就是它），
+        ///   而 MaterialState 只能靠 tableCards 反查 —— 这正是 FindTable 的用途。
+        ///   重载一个 MaterialState 版本是给探针/工具用的，两条最终进同一个实现。
+        /// </summary>
+        public bool WithdrawToHand(PlayCard view)
+        {
+            return WithdrawToHand(FindTable(view));
+        }
+
+        /// <summary>同上，直接给状态（探针用）。</summary>
+        public bool WithdrawToHand(MaterialState st)
+        {
+            string reason;
+            if (!CanWithdraw(st, out reason))
+            {
+                LoopNotice("收回失败：" + reason);
+                Debug.Log("[V21] 收回手牌被拒：" + reason);
+                return false;
+            }
+
+            // ① 先摘掉"桌面标签"那张 3D 卡。
+            //    ★ 顺序很重要：SyncTableVisuals 的第①步是按 `state.removed || !OnTable` 判断
+            //      "这张已经离场了"的，而收回并没有把 removed 置成 true（它不是规则上的移除，
+            //      是玩家的撤回）—— 所以同步逻辑认不出它，会当成**还活着的桌面卡**，
+            //      于是自检报"状态 0 张 vs 桌面标签 1 张"。这里先把标签和 3D 卡一起收掉，
+            //      同步那边看到的就是干净的 0 对 0。
+            TableMaterialCard tag = FindTableCard(st);
+            if (tag != null) tableCards.Remove(tag);
+            if (tag != null && tag.view != null) CardFactory.DestroySafe(tag.view.gameObject);
+
+            // ② 状态侧：table → hand（和 PlayMaterial 严格对称的那一对列表）
+            if (!table.Remove(st))
+            {
+                LoopNotice("收回失败：「" + st.name + "」已经不在桌面表里了");
+                return false;
+            }
+
+            MaterialCard mc = new MaterialCard();
+            mc.card   = st.card;
+            mc.H      = st.H;
+            mc.D      = st.D > 0 ? st.D : DefaultMaterialD;
+            mc.V      = st.V;
+            mc.source = SourceOf(st);
+
+            hand.Add(mc);
+
+            // 刚收回来的那张不该还是"启动目标" —— 它已经不在桌面上了。
+            // 桌面上还有别的素材就顺手选最新的那张（和出牌之后的自动选中同一条口径），
+            // 一张都没有就明确置空（置空比留一个已经离场的引用安全：
+            // HUD / ApplySelectionHighlight / IsPreviewTarget 都按"是不是 null"判断）。
+            if (selected == st)
+            {
+                selected = null;
+                selectedAuto = false;
+            }
+            if (selected == null) SelectNewestTableMaterial();
+
+            // ③ 表现侧：整副手牌重建（收回来的那张要有一张新的 3D 手牌卡），
+            //    再走一次权威同步（它会重建桌面卡、扫残留、打自检）。
+            RebuildHand();
+            SyncTableVisuals();
+
+            LoopNotice("已收回手牌：「" + mc.DisplayName + "」（本回合还没启动过才能收回）");
+            Debug.Log("[V21] 收回手牌：" + st.Describe() + " → 手牌 " + mc.DisplayName +
+                      "｜桌面素材剩 " + LiveTableCount() + " 张｜手牌 " + HandText() +
+                      "｜" + ViewSyncSummary());
+            return true;
+        }
+
+        /// <summary>这张桌面素材当初出牌时的数值来源（查不到就按 v2.1 卡表算，见 sourceOfState）。</summary>
+        private MaterialCard.ValueSource SourceOf(MaterialState st)
+        {
+            MaterialCard.ValueSource src;
+            if (st != null && sourceOfState.TryGetValue(st, out src)) return src;
+
+            // 形态变化产出的新卡没有登记过来源：它在卡表里有名字就是卡表来的，否则算旧配置的
+            return (st != null && st.card != null && CardSpecs.MaterialByName(st.card.name) != null)
+                ? MaterialCard.ValueSource.CardTable
+                : MaterialCard.ValueSource.LegacyConfig;
+        }
+
         /// <summary>
         /// 手牌里的法术被点中了：直接打出（正文 §2.1：打出无代价、不消耗行动机会）。
         /// 返回 true 表示这张卡确实是法术、已经被这次点击消费掉。
@@ -1712,6 +1860,10 @@ namespace GameJam.Prototype
             table.Clear();
             selected = null;
             selectedAuto = false;
+
+            // 桌面清空 = 没有"本回合启动过的卡"可谈了（回菜单 / 重开一关都会走这里）
+            startedThisTurnList.Clear();
+            sourceOfState.Clear();
 
             SweepUnclaimedViews("ClearTable");
         }
