@@ -27,40 +27,40 @@ namespace GameJam.Prototype
     ///   好处是蜡烛挪了位置（改 TableTitleRig.CandleAt）量筒自己会跟着走，
     ///   不会出现"蜡烛搬走了、量筒留在原地"的两处各写一个数。
     ///
-    /// 【为什么是"往近端让 0.28"而不是"紧贴着蜡烛底"】
+    /// 【为什么"往下"要靠往近端让位，而不是靠贴着蜡烛】
     ///   桌面视角是 42° 俯视，投影下来有个反直觉的换算：
     ///     桌面往近端（−Z）挪 1 个单位 ≈ 屏幕上往下 490 像素，
-    ///     而物件自己长高 1 个单位只有 718 像素 —— 比例接近，但方向不同。
-    ///   换句话说 **"往近端让一点"和"长高一截"在屏幕上效果相当**，
-    ///   所以想让它落在蜡烛下面，靠的是让位、不是高度。
-    ///   （第一版按"3D 里贴着蜡烛底"给了 0.10 的让位，屏幕上只低了 49 像素，
-    ///     整支量筒全糊在蜡烛身上 —— 3D 里的"贴着"和画面上的"下面"不是一回事。）
-    ///   0.28 是量出来的：筒顶正好差几像素压在蜡烛底上，既像"贴着蜡烛"，又不挡它。
+    ///     而物件自己长高 1 个单位只有 570 像素 —— 两者量级相当，但**方向完全不同**。
+    ///   也就是说想让一个东西出现在另一个东西"下面"，靠的是往镜头这边让位，
+    ///   不是把它加高。第一版按"3D 里贴着蜡烛底"只让了 0.10，屏幕上才低 49 像素，
+    ///   整支量筒糊在蜡烛身上 —— 3D 里的"贴着"和画面上的"下面"不是一回事。
+    ///   最后让 0.18：筒口那圈正好落在蜡烛底下方几个像素，是"贴着蜡烛底"的读法。
     ///
     /// 【尺寸为什么这么小】
-    ///   蜡烛高 0.179，卡牌 0.24×0.335 摆在前排 z≈−0.4 一带。
-    ///   量筒 0.20 高（比蜡烛略高一点点）、半径 0.026（比蜡烛的 0.030 细），
-    ///   屏幕上约占 144 像素高 —— 够看清 6 道刻度和数字，又不会戳到画面中央。
-    ///   再高就会顶到前排的关卡卡（那排卡在屏幕上的左边缘正好切在这块区域）。
+    ///   蜡烛高 0.179、卡牌 0.24×0.335（前排 z≈−0.4 一带铺开）。
+    ///   量筒 0.20 高（比蜡烛的蜡身略高）、半径 0.024（比蜡烛的 0.030 细），
+    ///   屏幕上约占 115 像素高 —— 够排下 6 道刻度环和数字，又不会戳到画面中央。
+    ///   再往下/往右挪就会压到前排那几张关卡卡（它们在屏幕上的左边缘正好切在这块区域）。
+    /// </summary>
     /// </summary>
     public class ScoreCylinderRig : MonoBehaviour
     {
         // ── 尺寸（世界单位，桌面顶面 y = 0）──────────────────────────
         /// <summary>筒身半径。比蜡烛（0.030）细一档，"量筒"的细长感靠这个。</summary>
-        private const float TubeR = 0.026f;
+        private const float TubeR = 0.024f;
         /// <summary>筒身底面：坐在底座上，所以从底座的厚度开始。</summary>
         private const float TubeBotY = 0.014f;
         /// <summary>筒身顶面。</summary>
         private const float TubeTopY = 0.190f;
         /// <summary>底座半径 / 厚度。比筒身粗一圈的厚玻璃盘 —— 没有它量筒像根插在桌上的吸管。</summary>
-        private const float FootR = 0.036f;
+        private const float FootR = 0.034f;
         private const float FootH = 0.014f;
-        /// <summary>口沿：略往外翻的一圈，量筒的"嘴"就在这儿。</summary>
-        private const float RimR = 0.031f;
-        private const float RimH = 0.011f;
+
+        /// <summary>口沿：筒口外翻的一圈薄环（只有环，不能是实心盘 —— 见 BuildRingMesh 的注释）。</summary>
+        private const float RimR = 0.0305f;
 
         /// <summary>液体半径（筒身内壁）。</summary>
-        private const float LiquidR = 0.0235f;
+        private const float LiquidR = 0.0215f;
         /// <summary>液面量程的下端 = 刻度上的 0 分。</summary>
         private const float LiquidBotY = 0.018f;
         /// <summary>液面量程的上端 = 刻度上的目标分（满筒）。</summary>
@@ -69,26 +69,47 @@ namespace GameJam.Prototype
         /// <summary>刻度档数。5 段 = 6 道刻度环 —— 和榨汁机罐身同样的档数，读法不变。</summary>
         private const int TickDivisions = 5;
 
-        /// <summary>刻度环半径系数：比筒身粗一点点，读起来才是"刻在玻璃上的线"。</summary>
-        private const float TickRingK = 1.07f;
-        private const float TickRingH = 0.0018f;
+        /// <summary>
+        /// 刻度环：比筒身粗出去多少 / 环本身的宽度。
+        /// 环要"贴着玻璃外面一点点"，太宽像法兰盘、太窄在这个机位下只剩一个像素。
+        /// </summary>
+        private const float TickRingRise = 0.0006f;
+        private const float TickRingWidth = 0.0034f;
 
-        /// <summary>数字标签的字号系数（TextMesh 世界字高 ≈ localScale × 3.4，和罐子同一个数）。</summary>
-        private const float LabelSize = 0.0060f;
-        /// <summary>数字离筒壁往前（−Z）多少 —— 相机在近端，往前才不会被玻璃盖住。</summary>
-        private const float LabelForward = 0.021f;
+        /// <summary>
+        /// 数字标签的字号系数（TextMesh 世界字高 ≈ localScale × 3.4，和罐子同一个数）。
+        ///
+        /// 比罐子（0.0060）还小一档：罐子半径 0.088、数字摆在罐子正前方有地方，
+        /// 这支筒子半径只有 0.024 —— 编号只能摆到筒身**左边**去（见 AddTickLabel），
+        /// 而且关卡目标分是四位数（1000 / 1500 / 2000），字号再大"1000"就要顶出屏幕了。
+        /// </summary>
+        private const float LabelSize = 0.0058f;
+
+        /// <summary>数字右边缘离筒壁留的空（数字是右对齐的，从这个 x 往左排）。</summary>
+        private const float LabelGap = 0.008f;
 
         // ── 摆位 ──────────────────────────────────────────────────────
         /// <summary>蜡烛的物体名（TableTitleRig.BuildCandle → NewRoot("TitleCandle", CandleAt)）。</summary>
         private const string CandleObjectName = "TitleCandle";
 
         /// <summary>
-        /// 相对蜡烛的水平偏移（桌面空间）。
-        /// x 给 0：屏幕上是"正下方"最直白的读法 —— 偏一点就成了"斜下方的另一个瓶子"。
-        /// z 给 −0.28：见类注释里那段俯视投影的换算。
+        /// 相对蜡烛的水平偏移（桌面空间）。这两个数是**照着屏幕量出来的**，不是随手填的：
+        ///
+        /// · z 给 −0.24：桌面视角下"往近端让 1 个单位 ≈ 屏幕上往下 490 像素"，
+        ///   让 0.24 之后筒口那圈落在蜡烛底下方一点点（"贴着蜡烛底"），
+        ///   但筒身整体还是**偏左**的 —— 在这个机位上，画面左边竖着的东西都是斜的
+        ///   （蜡烛自己也是斜的），量筒越高越往左，所以它不会真的盖住蜡烛。
+        ///   让少了（第一版给 0.10）屏幕上只低 49 像素，整支量筒糊在蜡烛身上；
+        ///   让多了（0.28 以上）它就跟蜡烛脱开、变成桌面上另一个孤零零的瓶子。
+        ///
+        /// · x 给 +0.062：**透视会让"往下"的物件同时往画面外侧跑** ——
+        ///   同一个世界 x，越靠近相机投影出来越靠左（蜡烛自己也是这样，它是斜的）。
+        ///   不补这一点，量筒的底会落在蜡烛左边 70 像素处，看着是"左下方另一根管子"；
+        ///   补上之后两支的**底**在屏幕上基本对齐，一眼就是"蜡烛下面那支量筒"。
+        ///   再往右一点就会压到前排关卡卡在屏幕上的左边缘（那排卡铺得很宽）。
         /// </summary>
-        private const float CandleOffsetX = 0f;
-        private const float CandleOffsetZ = -0.28f;
+        private const float CandleOffsetX = 0.062f;
+        private const float CandleOffsetZ = -0.24f;
 
         /// <summary>
         /// 找不到蜡烛时的兜底坐标 —— 和 TableTitleRig.CandleAt 同一个值。
@@ -102,6 +123,15 @@ namespace GameJam.Prototype
         private const int CandleLookupEvery = 30;
 
         // ── 运行时 ────────────────────────────────────────────────────
+        /// <summary>
+        /// 筒身玻璃的取色 = JuicerRig.GlassColor 但**更实一点**（alpha 0.26 → 0.42）。
+        /// 罐子那边背后是立绘和机器、还有一片亮桌面，0.26 就够看出玻璃；
+        /// 这支筒子孤零零立在画面左侧的暗桌面上，同样的透明度在截图里几乎看不见管子，
+        /// 只剩六道环悬在空中，读不出"这是一支玻璃量筒"。
+        /// </summary>
+        private static readonly Color TubeGlassColor =
+            new Color(JuicerRig.GlassColor.r, JuicerRig.GlassColor.g, JuicerRig.GlassColor.b, 0.42f);
+
         private Transform  liquid;          // 液面
         private Renderer[] tickRenderers;   // 刻度环
         private TextMesh[] tickLabels;      // 刻度数字
@@ -116,9 +146,6 @@ namespace GameJam.Prototype
 
         private float shownLevel;           // 平滑后的液面（0..1）
         private float wantLevel;            // 目标液面
-
-        /// <summary>液面是不是已经在追目标值（截图工具用它判断要不要 Snap）。</summary>
-        public bool LevelSettled { get { return Mathf.Abs(shownLevel - wantLevel) <= 0.0005f; } }
 
         // ══════════════════════════════════════════════════════════════
         //  建
@@ -146,7 +173,7 @@ namespace GameJam.Prototype
             // 玻璃 / 果汁的取色和材质配方都从 JuicerRig 拿：
             // 得分面板只有一套配色，罐子和量筒是同一个东西的前后两版，
             // 各抄一份 MakeGlass（那 20 行里少设一个关键字就会渲染成不透明）迟早走岔。
-            Material glass  = JuicerRig.MakeGlass(JuicerRig.GlassColor);
+            Material glass  = JuicerRig.MakeGlass(TubeGlassColor);
             Material liquidMat = JuicerRig.MakeGlass(JuicerRig.LiquidColor);
 
             // 底座
@@ -158,9 +185,8 @@ namespace GameJam.Prototype
             JuicerRig.Cyl(transform, "Tube", TubeR, tubeH,
                           new Vector3(0f, TubeBotY + tubeH * 0.5f, 0f), glass);
 
-            // 口沿
-            JuicerRig.Cyl(transform, "Rim", RimR, RimH,
-                          new Vector3(0f, TubeTopY + RimH * 0.5f, 0f), glass);
+            // 口沿：一圈薄环（不是实心盘 —— 实心盘会把筒口封成一个盖）
+            AddRing(transform, "Rim", TubeTopY, BuildRingMesh(TubeR + 0.0008f, RimR, 32), glass);
 
             // 液体：和罐子同一招 —— 圆柱本身做满高，靠 scale.y 压出液面，
             // 液面变化只是改一个 scale，不用重建模型（见 ApplyLevel）。
@@ -169,7 +195,81 @@ namespace GameJam.Prototype
             liquid = liq.transform;
 
             BuildTicks();
+
+            // ★ 建完必须先把液面压到 0 高度。
+            //   Update 只在 |shownLevel − wantLevel| > 0.0005 时才 ApplyLevel，
+            //   而开局两者都是 0 —— 不主动压这一次的话，液体圆柱会停在建模时的"满高"，
+            //   桌面上直接立起一根 1 米高的橙柱子（正好把量筒整个盖住，截图里踩过）。
+            //   （榨汁机那边的 Build 末尾是无条件 ApplyLevel 的，所以罐子没这个毛病。）
+            ApplyLevel();
+
             PlaceUnderCandle();
+        }
+
+        /// <summary>
+        /// 一道平躺圆环的网格（刻度环 / 口沿共用的几何）。
+        ///
+        /// 【为什么不用 JuicerRig.Cyl 造一个薄圆盘】
+        /// 薄圆盘的**上表面是一整块实心圆**。桌面视角是 43° 俯视，
+        /// 这块实心圆投影出来就是一个白色椭圆饼；六道叠在一起像条毛毛虫，
+        /// 完全读不出"刻度线"（第一版就是这么干的，截图里一眼假）。
+        /// 圆环中间是空的，剩下的那圈才是真正像刻度线的东西。
+        ///
+        /// 法线朝上（+Y）：相机永远在桌面上方（自由转头最低也只到 −14°），看不到环的背面，
+        /// 所以不做双面 —— 省一半三角形。
+        /// </summary>
+        private static Mesh BuildRingMesh(float innerR, float outerR, int segs)
+        {
+            Vector3[] verts = new Vector3[segs * 2];
+            int[] tris = new int[segs * 6];
+
+            for (int i = 0; i < segs; i++)
+            {
+                float a = Mathf.PI * 2f * i / segs;
+                float c = Mathf.Cos(a), s = Mathf.Sin(a);
+
+                verts[i * 2]     = new Vector3(c * innerR, 0f, s * innerR);   // 内圈
+                verts[i * 2 + 1] = new Vector3(c * outerR, 0f, s * outerR);   // 外圈
+            }
+
+            for (int i = 0; i < segs; i++)
+            {
+                int n  = (i + 1) % segs;
+                int v0 = i * 2, v1 = i * 2 + 1, v2 = n * 2, v3 = n * 2 + 1;
+
+                // 这个绕序算出来的法线是 +Y（从上方看是逆时针）
+                tris[i * 6]     = v0; tris[i * 6 + 1] = v2; tris[i * 6 + 2] = v1;
+                tris[i * 6 + 3] = v1; tris[i * 6 + 4] = v2; tris[i * 6 + 5] = v3;
+            }
+
+            Mesh mesh = new Mesh();
+            mesh.name = "ScoreRing";
+            mesh.vertices = verts;
+            mesh.triangles = tris;
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        /// <summary>把一道环挂到 parent 下、抬到 y 高度。返回它的渲染器（点亮刻度要用）。</summary>
+        private static MeshRenderer AddRing(Transform parent, string name, float y,
+                                            Mesh mesh, Material mat)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = new Vector3(0f, y, 0f);
+
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+
+            MeshRenderer mr = go.AddComponent<MeshRenderer>();
+            mr.sharedMaterial = mat;
+
+            // 桌面上的东西一律不带碰撞体（见 JuicerRig.Strip：会挡住卡牌的射线拾取）。
+            // 网格是自己建的本来就没有 —— 这里只是把阴影关掉：一圈薄环投出来的影子
+            // 是一整块圆盘，比环本身还显眼。
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            mr.receiveShadows = false;
+            return mr;
         }
 
         private void BuildTicks()
@@ -182,8 +282,17 @@ namespace GameJam.Prototype
             tickLabels    = new TextMesh[n];
             tickValues    = new float[n];
 
-            Material tickMat = CardFactory.MakeUnlit(null);
-            tickMat.color = JuicerRig.TickColor;
+            // ★ 每道刻度**各要一份材质实例**。
+            //   刻度是"越过的点亮成琥珀色"，六道环各有各的颜色；共用一个材质的话
+            //   写最后一次的那个颜色会把六道全染成一样（全亮或全不亮）。
+            //   罐子那边是靠 renderer.material 的"访问即克隆"拿到实例的 ——
+            //   那在编辑模式会报材质泄漏，这里改成建的时候就分好，读写都走 sharedMaterial。
+            Material tickProto = CardFactory.MakeUnlit(null);
+            tickProto.color = JuicerRig.TickColor;
+
+            // 六道环尺寸完全一样 → 网格只建一次，六个渲染器共用
+            float inner = TubeR + TickRingRise;
+            Mesh ringMesh = BuildRingMesh(inner, inner + TickRingWidth, 32);
 
             for (int i = 0; i < n; i++)
             {
@@ -192,26 +301,33 @@ namespace GameJam.Prototype
 
                 tickValues[i] = t;   // 先存 0..1，SetScore 时换算成真实分数
 
-                // 刻度环：比筒身略粗一圈的薄圆盘，和罐子上的刻度线是同一种东西
-                GameObject ring = JuicerRig.Cyl(ticks.transform, "Tick" + i,
-                                                TubeR * TickRingK, TickRingH,
-                                                new Vector3(0f, y, 0f), tickMat);
-                tickRenderers[i] = ring.GetComponent<Renderer>();
+                Material tickMat = new Material(tickProto);
+                tickMat.color = JuicerRig.TickColor;
 
-                AddTickLabel(ticks.transform, "Label" + i,
-                             new Vector3(0f, y, -TubeR - LabelForward), i.ToString());
-                tickLabels[i] = ticks.transform.Find("Label" + i).GetComponent<TextMesh>();
+                tickRenderers[i] = AddRing(ticks.transform, "Tick" + i, y, ringMesh, tickMat);
+
+                // 数字：筒身左边、和环同高同 z（z 用 0 = 筒轴平面，右对齐的锚点正好在环的外缘外）
+                tickLabels[i] = AddTickLabel(ticks.transform, "Label" + i,
+                                             new Vector3(-(TubeR + LabelGap), y, 0f), i.ToString());
             }
         }
 
         /// <summary>
-        /// 一道刻度的数字。**立着、面朝近端相机** —— 不是 CardFactory.AddText 那种
-        /// 平躺在桌面上的字（那个是给卡面和桌面标签用的，用在这里会变成趴在地上）。
+        /// 一道刻度的数字。**立在筒身左边、右对齐**，和它那道环同一个高度、
+        /// 同一个 z（筒轴平面）—— 就是真量筒上那种"刻度线 + 旁边的数字"的排法。
+        ///
+        /// 【为什么不像罐子那样摆在筒身正前方】
+        ///   ① 筒子太细：数字居中摆在正前方时，"1000"这种四位数比筒身还宽，
+        ///      会横跨到蜡烛身上去（第一版就是这样，标题界面一屏的"1000/800/600…"糊成一团）；
+        ///   ② 摆在"前方"（−Z）会被透视**往下拽**：这个机位下越靠近相机的点屏幕上越低，
+        ///      数字会掉到自己那条刻度线下面二十几个像素，看着像串位。
+        ///   摆到左边、和环同高同 z，这两个毛病一起没了 —— 右边正好是蜡烛，也腾出了地方。
         ///
         /// 朝向沿用罐子刻度数字那一套：TextMesh 的可读面朝局部 −Z，
         /// 让局部 +Z 指向世界 +Z（LookRotation(forward, up)），可读面就正对相机。
+        /// 返回 TextMesh，让调用方自己存着 —— 不靠 transform.Find 去找回来。
         /// </summary>
-        private static void AddTickLabel(Transform parent, string name, Vector3 localPos, string text)
+        private static TextMesh AddTickLabel(Transform parent, string name, Vector3 localPos, string text)
         {
             GameObject go = new GameObject(name);
             go.transform.SetParent(parent, false);
@@ -221,8 +337,8 @@ namespace GameJam.Prototype
 
             TextMesh tm = go.AddComponent<TextMesh>();
             tm.text = text;
-            tm.anchor = TextAnchor.MiddleCenter;
-            tm.alignment = TextAlignment.Center;
+            tm.anchor = TextAnchor.MiddleRight;      // 锚点 = 文字右缘 → 位数变多时往左长，不压到筒身
+            tm.alignment = TextAlignment.Right;
             tm.fontSize = 48;              // 配合 localScale 缩放，实际字号由 LabelSize 决定
             tm.characterSize = 1f;
             tm.color = JuicerRig.TickColor;
@@ -237,6 +353,8 @@ namespace GameJam.Prototype
                 MeshRenderer mr = go.GetComponent<MeshRenderer>();
                 if (mr != null) mr.sharedMaterial = f.material;
             }
+
+            return tm;
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -289,6 +407,12 @@ namespace GameJam.Prototype
                 tickLabels[i].text = Mathf.RoundToInt(tickValues[i] * target).ToString();
             }
 
+            // 分数一变就先按**当前**液面点一次刻度（罐子也是这么做的）。
+            // 少了这一句，0 分开局那发 SetScore 之后没人再动过液面，
+            // "0" 那道刻度就一直是不亮的白色 —— 一眼看着像"最低档还没到"。
+            // 液面动画随后每帧再点一次，越过的刻度是跟着液面一档一档亮起来的。
+            RefreshTickHighlight();
+
             // 编辑模式下 Update 不跑，光设 wantLevel 液面永远是空的 ——
             // TablePreviewCapture 就是在编辑模式调这个方法的，所以在那儿直接一步到位。
             if (!Application.isPlaying) SnapLevelToScore();
@@ -320,25 +444,34 @@ namespace GameJam.Prototype
             for (int i = 0; i < tickRenderers.Length; i++)
             {
                 bool passed = tickValues[i] <= shownLevel + 0.001f;
+                Color want = passed ? JuicerRig.TickHotColor : JuicerRig.TickColor;
 
-                if (tickRenderers[i] != null)
+                // 颜色没变就不写：液面在追目标分的那一秒里这个方法每帧都跑，
+                // 而 TextMesh.color 一赋值就会重建一次文字网格，六行字白重建六十次。
+                if (tickRenderers[i] != null && tickRenderers[i].sharedMaterial.color != want)
                 {
                     // ★ sharedMaterial 而不是 material：
                     //   TablePreviewCapture 走的是**编辑模式**，那里访问 renderer.material
                     //   会复制一份材质实例、Unity 会报 "This will leak materials into the scene"
                     //   （BlenderArt 里为同一件事专门写过一段注释）。
                     //   这些材质是本组件自己 new 出来的、不挂在任何资源上，直接改没有副作用。
-                    tickRenderers[i].sharedMaterial.color = passed ? JuicerRig.TickHotColor : JuicerRig.TickColor;
+                    tickRenderers[i].sharedMaterial.color = want;
                 }
 
-                if (tickLabels[i] != null)
-                    tickLabels[i].color = passed ? JuicerRig.TickHotColor : JuicerRig.TickColor;
+                if (tickLabels[i] != null && tickLabels[i].color != want)
+                    tickLabels[i].color = want;
             }
         }
 
         private void ApplyLevel()
         {
             if (liquid == null) return;
+
+            // 0 分就是"一滴都没有"：这么薄的圆盘只剩一个亮橙色的点，
+            // 看着像筒底积了一层汁 —— 干脆整块藏起来，空筒就是空的。
+            bool any = shownLevel > 0.002f;
+            if (liquid.gameObject.activeSelf != any) liquid.gameObject.SetActive(any);
+            if (!any) return;
 
             // ★ 和罐子同一套换算：内置圆柱是"半径 0.5、高 2"的，所以
             //   scale.y 要填**半高**、位置 y 要填**底面 + 半高**（圆柱以中心为原点）。

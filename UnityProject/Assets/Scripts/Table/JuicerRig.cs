@@ -5,7 +5,7 @@ using GameJam.Data;
 namespace GameJam.Prototype
 {
     /// <summary>
-    /// 榨汁机 + 液体罐 + 液压冲压模具。全部代码生成，不依赖任何外部模型。
+    /// 榨汁机 + 液压冲压模具。全部代码生成，不依赖任何外部模型。
     ///
     /// 【整体结构】—— 上压下接
     ///
@@ -14,19 +14,26 @@ namespace GameJam.Prototype
     ///            │   ▒▒ 残渣   │  ← 榨汁剩下的残渣，被冲头压成刀片
     ///            ├────────────┤  ← 模具底板
     ///      ║     │            │     ║   ← 四根立柱（把机器架高）
+    ///      ║     │            │     ║     四柱之间是空的，一眼看到对面的桌面
     ///      ║     └────────────┘     ║
-    ///      ║      ┌──────────┐      ║
-    ///      ║      │  液体罐   │      ║   ← 罐子就在榨汁机下面，接榨出来的汁
-    ///      ╚══════└──────────┘══════╝
+    ///      ╚════════════════════════╝
     ///                    桌面
     ///
     /// 【为什么立柱是四根外露的、而不是一个整壳】
     /// 机身如果做成实心圆柱，里面的冲头和残渣就被挡住了，什么效果都看不见。
     /// 四柱开放式机架正是液压机本来的样子，冲压过程一览无余。
+    /// （原来四柱中间还塞着个液体罐接汁，现在是空的 —— 罐子搬去蜡烛下面了，见下。）
     ///
-    /// 【刻度就是得分面板】
-    /// 罐身上的每一道刻度环对应一个分数档位，液面高度 = 当前得分 / 目标分。
-    /// 玩家不用看 HUD，看罐子里有多少汁就知道打到哪了。
+    /// 【得分面板已经不在这台机器上了】
+    /// 罐身上的刻度环原来是得分面板：液面高度 = 当前得分 / 目标分。
+    /// 但那罐子长得太靠边 —— 机器在桌子右后角、又被美术立绘挡掉一半，
+    /// 玩家想看一眼"还差多少分"得先去画面右上角找那半截罐子。
+    /// 现在刻度罐整个不建了（<see cref="ShowJarAndScale"/> = false），得分面板是
+    /// 蜡烛正下方那支量筒（<see cref="ScoreCylinderRig"/>），液面 / 刻度 / 点亮规则一模一样。
+    ///
+    /// ★ 但**喂分数的入口没变，还是这一个 SetScore(score, target)**：
+    ///   TableTurnLoop.SyncJuicer / TableRulesV21 都只认它，这里再转发给量筒。
+    ///   得分面板换地方是表现层的事，规则层不该知道桌面上摆的是罐子还是量筒。
     /// </summary>
     public class JuicerRig : MonoBehaviour
     {
@@ -51,10 +58,14 @@ namespace GameJam.Prototype
         private const int TickDivisions = 5;
 
         // ── 颜色 ──────────────────────────────────────────────────────
-        private static readonly Color GlassColor   = new Color(0.80f, 0.90f, 0.97f, 0.26f);
-        private static readonly Color LiquidColor  = new Color(0.98f, 0.62f, 0.18f, 0.86f);
-        private static readonly Color TickColor    = new Color(0.94f, 0.96f, 0.98f, 0.90f);
-        private static readonly Color TickHotColor = new Color(1.00f, 0.76f, 0.26f, 1.00f);
+        // 【为什么是 internal 而不是 private】
+        // 得分面板从罐子搬到了蜡烛下面的量筒（ScoreCylinderRig），那支量筒要用**同一组**
+        // 取色 —— 它俩是同一个东西的前后两版，颜色对不上玩家会以为是两种信息。
+        // 所以配色只有这一份定义，量筒那边直接引用，不另抄一套。
+        internal static readonly Color GlassColor   = new Color(0.80f, 0.90f, 0.97f, 0.26f);
+        internal static readonly Color LiquidColor  = new Color(0.98f, 0.62f, 0.18f, 0.86f);
+        internal static readonly Color TickColor    = new Color(0.94f, 0.96f, 0.98f, 0.90f);
+        internal static readonly Color TickHotColor = new Color(1.00f, 0.76f, 0.26f, 1.00f);
         private static readonly Color RamColor     = new Color(0.80f, 0.83f, 0.88f);
         private static readonly Color ResidueColor = new Color(0.52f, 0.36f, 0.19f);
         private static readonly Color BladeColor   = new Color(0.90f, 0.93f, 0.97f);
@@ -74,11 +85,40 @@ namespace GameJam.Prototype
 
         /// <summary>
         /// 有美术立绘（Art/Juicer/gameblender_*）时，是否把程序搭的机身盖掉。
-        /// true  = 立绘就是这台机器（Frame + Press 全关，只留液体罐和刻度）
+        /// true  = 立绘就是这台机器（Frame + Press 全关）
         /// false = 立绘和程序化机身同时出现（要对比造型时用）
         /// 想只盖一半（比如保留刀片挤出来的反馈），把下面关掉、自己 SetActive 对应节点即可。
         /// </summary>
         public const bool HideProceduralMachineWhenArtPresent = true;
+
+        /// <summary>
+        /// 是否建榨汁机自己那个液体罐 + 刻度环（旧的得分面板）。
+        ///
+        /// ★ 默认 **false = 不建**。得分面板已经搬到蜡烛下面的量筒（ScoreCylinderRig），
+        ///   罐子留着就是桌面上第二个"有刻度的东西"，两个刻度盘各说各的分数最误导人。
+        ///   代码全部保留（BuildJar / BuildTicks / ApplyLevel 都还在，SetScore 的刻度段也还在），
+        ///   想对比旧版造型时把这里改回 true 就能整罐回来 —— 不用改任何别的地方。
+        ///
+        /// 去掉罐子之后榨汁机看着仍然是完整的：罐子本来是**塞在四柱机架中间**接汁的，
+        /// 不参与承重（四根立柱从桌面一直顶到顶板），拿走之后是"开放式压机"，
+        /// 没有一段悬空的零件。挂了立绘的情况更简单 —— 立绘本来就是整机图。
+        ///
+        /// 【为什么是 static bool 而不是 const bool】
+        ///   const false 会让编译器把 `if (ShowJarAndScale) BuildJar();` 整句判成
+        ///   **不可达代码**（CS0162）—— 本工程的编译检查要求 0 warning，一个开关不能带两个警告进来。
+        ///   写成普通 static 还顺带多了个好处：Play 里改一下就能立刻对比新旧两版面板，
+        ///   不用重编译（BuildJar 只在 Build 时跑，比造型时手动调一次够用）。
+        /// </summary>
+        public static bool ShowJarAndScale = false;
+
+        /// <summary>
+        /// 是否建蜡烛下面那支量筒得分板。默认开 —— 关了它桌面上就没有得分面板了，
+        /// 只有同时把 <see cref="ShowJarAndScale"/> 打开才说得通（两个开关是一对）。
+        /// </summary>
+        public static bool ShowScoreCylinder = true;
+
+        /// <summary>蜡烛下面那支量筒（得分面板）。SetScore 会转发给它。</summary>
+        public ScoreCylinderRig scoreBoard;
 
         private int   score;
         private int   target = 1000;
@@ -112,7 +152,9 @@ namespace GameJam.Prototype
 
         public void Build()
         {
-            BuildJar();
+            // 罐子 + 刻度环默认不建了（得分面板搬到了量筒，见 ShowJarAndScale 的注释）
+            if (ShowJarAndScale) BuildJar();
+
             BuildFrame();
             BuildPress();
 
@@ -138,9 +180,33 @@ namespace GameJam.Prototype
                 if (pressRoot != null) pressRoot.SetActive(false);
             }
 
+            // 得分面板：蜡烛下面那支量筒。★ 必须在下面的 SetScore(0, target) **之前**建好，
+            // 否则那一发初始化就转发不到它身上（刻度数字会停在建模时的占位值上）。
+            BuildScoreBoard();
+
             SetScore(0, target);
             shownLevel = 0f;
             ApplyLevel();
+        }
+
+        /// <summary>
+        /// 把量筒挂到**桌子**上（不是挂在机身下）。
+        ///
+        /// 【为什么不挂在 this.transform 下】
+        ///   整机挂着 0.75 的整体缩放（TableSetup.BuildJuicer），挂进去量筒会跟着缩 0.75、
+        ///   坐标还得反着算回桌面空间。而"蜡烛在哪、量筒就在哪"这套定位本来就是桌面空间的 ——
+        ///   摆位的事交给 ScoreCylinderRig 自己按蜡烛算，这里只负责给它一个有桌面的父节点。
+        ///
+        /// 【为什么由榨汁机来建】
+        ///   因为喂分数的入口是 JuicerRig.SetScore：谁转发分数、谁负责保证转发对象存在。
+        ///   这样 TableSetup 不用为新面板再加一行装配代码（那个文件在被别人改）。
+        /// </summary>
+        private void BuildScoreBoard()
+        {
+            if (!ShowScoreCylinder) return;
+
+            Transform host = transform.parent != null ? transform.parent : transform;
+            scoreBoard = ScoreCylinderRig.Build(host);
         }
 
         // ── 液体罐 + 刻度 ─────────────────────────────────────────────
@@ -309,6 +375,14 @@ namespace GameJam.Prototype
         //  得分 → 液面 + 刻度高亮
         // ══════════════════════════════════════════════════════════════
 
+        /// <summary>
+        /// 得分 → 液面 + 刻度高亮。**全工程唯一的得分表现入口**
+        /// （TableTurnLoop.SyncJuicer / TableRulesV21 都调它）。
+        ///
+        /// 罐子不建的时候（ShowJarAndScale = false）前半段会自己空转过去
+        /// （tickValues 为 null、liquid 为 null，两处都有判空），
+        /// 分数照旧转发给蜡烛下面那支量筒 —— 换面板不该改规则层的调用方。
+        /// </summary>
         public void SetScore(int newScore, int newTarget)
         {
             score  = Mathf.Max(0, newScore);
@@ -327,17 +401,23 @@ namespace GameJam.Prototype
             }
 
             RefreshTickHighlight();
+
+            // 转发给现在真正在台面上的那个面板（用夹过的值，保证两边显示的分母一致）
+            if (scoreBoard != null) scoreBoard.SetScore(score, target);
         }
 
         /// <summary>
         /// 把液面瞬间设到当前得分，不做平滑。
         /// 给编辑器截图工具用 —— 编辑模式下 Update 不跑，光调 SetScore 液面永远是 0。
+        /// 罐子和量筒两个面板一起 Snap，截图里不会出现"一个有汁一个空着"。
         /// </summary>
         public void SnapLevelToScore()
         {
             shownLevel = wantLevel;
             ApplyLevel();
             RefreshTickHighlight();
+
+            if (scoreBoard != null) scoreBoard.SnapLevelToScore();
         }
 
         /// <summary>液面已经越过的那几条刻度点亮成琥珀色 —— 一眼看出打到第几档。</summary>
@@ -482,7 +562,7 @@ namespace GameJam.Prototype
             return sh;
         }
 
-        private static Material MakeLit(Color c, float gloss, float metallic)
+        internal static Material MakeLit(Color c, float gloss, float metallic)
         {
             Material m = new Material(Std());
             m.color = c;
@@ -512,8 +592,11 @@ namespace GameJam.Prototype
         /// 透明材质。
         /// Standard 的透明模式不是改个颜色就行 —— 要手动把 _Mode / 混合因子 /
         /// 关键字 / 渲染队列 一起设成 Transparent，少一项就会渲染成不透明。
+        ///
+        /// internal 是给 ScoreCylinderRig（蜡烛下面那支量筒）用的：它和罐子是同一种玻璃，
+        /// 这套配方少写一行就废，绝不能有第二份抄本。
         /// </summary>
-        private static Material MakeGlass(Color c)
+        internal static Material MakeGlass(Color c)
         {
             Material m = new Material(Std());
             m.color = c;
@@ -539,9 +622,13 @@ namespace GameJam.Prototype
         /// 造一根圆柱。
         /// Unity 的内置圆柱是"半径 0.5、高 2"（y 从 −1 到 +1），
         /// 所以要拿 直径 和 半高 去缩，直接填半径和高度会差一倍。
+        /// 传进来的 pos 是圆柱**中心**的位置。
+        ///
+        /// internal 是给 ScoreCylinderRig 复用的 —— "别把半径填进 scale"这条坑
+        /// 在量筒那边同样会踩，两处共用这一个函数就不会各踩一次。
         /// </summary>
-        private static GameObject Cyl(Transform parent, string name,
-                                      float radius, float height, Vector3 pos, Material mat)
+        internal static GameObject Cyl(Transform parent, string name,
+                                       float radius, float height, Vector3 pos, Material mat)
         {
             GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             go.name = name;
@@ -558,8 +645,9 @@ namespace GameJam.Prototype
         /// 拆掉碰撞体。
         /// 卡牌的拾取用的是全场景 Physics.Raycast，机器要是带碰撞体，
         /// 从它前面划过去的射线就会被挡住，卡点不动。
+        /// （量筒同样走它 —— 桌面左边也不是没卡会飞过去。）
         /// </summary>
-        private static void Strip(GameObject go)
+        internal static void Strip(GameObject go)
         {
             Collider c = go.GetComponent<Collider>();
             if (c != null) c.enabled = false;
