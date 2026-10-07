@@ -568,6 +568,24 @@ namespace GameJam.EditorTools
                 // ㉚⓪ 1600×900（上一条链切过来的就是这个分辨率）
                 case 270:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+
+                    // 状态守卫（和 ㉘⓪ 那条同一个理由）：这一屏要量"提示块压不压手牌"，
+                    // 前提是手里还有牌。这台机器上同时跑着别的 Unity 实例，它的自动化脚本
+                    // 会点到最前面那个窗口 —— 点到这边就等于替玩家把牌全打出去了（实测踩过：
+                    // 走到第 1 回合时手里 0 张，量出来的是"手牌是空的"）。
+                    // 遇到这种局面就**走游戏自己的入口重开一局**（Begin → 点书 → 选关 →
+                    // 选牌组 → 选刀片），再从 57 重新走到这一屏。
+                    if (HandCardCount() == 0)
+                    {
+                        Debug.LogWarning("[AutoPlay/取景] 走到第 1 回合时手里一张牌都没有"
+                                         + "（被别的进程点掉了）—— 重开一局再走一遍。");
+                        Loop().Begin();
+                        ProbeEnsureBladePick();
+                        Stage = 57;
+                        stageTime = EditorApplication.timeSinceStartup;
+                        return;
+                    }
+
                     if (Mathf.Abs(Object.FindObjectOfType<TableSetup>().cam.aspect - 1600f / 900f) > 0.02f)
                         ForceCameraAspect(1600f / 900f);
                     if (!Shot("fit_10_1600x900_ui.png")) return;
@@ -605,13 +623,44 @@ namespace GameJam.EditorTools
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                // ㉚④ 1.26（编辑器比例）→ 拍完接回主链（级联回归那一段）
+                // ㉚④ 1.26（编辑器比例）→ 拍完验"设置里关掉提示"
                 case 274:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.6) return;
                     if (Mathf.Abs(Object.FindObjectOfType<TableSetup>().cam.aspect - 1470f / 1167f) > 0.02f)
                         ForceCameraAspect(1470f / 1167f);
                     if (!Shot("fit_12_editor_ui.png")) return;
                     ProbeFramingReport("㉚④ 编辑器比例 1470×1167｜第 1 回合（提示块 + 手牌）");
+                    Stage = 275;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉚⑤ 设置里把提示关掉 —— 用户口径是"ShowHints=false 时照旧全隐"，
+                //      这一条**必须自己验**：改了摆法之后，"关掉就不画"还得成立。
+                case 275:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    TableSettings.ShowHints = false;
+                    Debug.Log("[AutoPlay/取景] 提示开关 → ShowHints=false（这一屏提示块应当整块不画）");
+                    Stage = 276;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉚⑥ 关掉提示的这一屏：日志里会写明"提示块：未画"
+                case 276:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("fit_13_no_hints_ui.png")) return;
+                    ProbeFramingReport("㉚⑥ ShowHints=false｜第 1 回合");
+                    // ★ 还原**必须另起一个 stage**：CaptureScreenshot 是**帧末**写盘的，
+                    //   同一帧里把开关改回去 → 落盘的就是改回去那一帧（图里又出现提示块了，
+                    //   实测踩过：日志说"提示块未画"、图上却还在）。文件头那条规矩对"改回来"同样成立。
+                    Stage = 277;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉚⑦ 还原提示开关，接回主链（后面那些回归图要照旧）
+                case 277:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.5) return;
+                    TableSettings.ShowHints = true;
+                    Debug.Log("[AutoPlay/取景] 提示开关 → 已还原 ShowHints=true");
                     Stage = layoutProbe ? 240 : 110;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -1632,15 +1681,26 @@ namespace GameJam.EditorTools
                     return;
 
                 // 㛢⑩ 牌组选择界面·桌面视角（斜视）：每一行文字都得看得见
+                //
+                //  ★ 开拍之前先把 Game 视图**钉到固定尺寸**。理由：这一条链要出
+                //    **改前 / 改后对照图**（同一个探针跑两遍，中间只改一处渲染次序），
+                //    而"上一遍跑完留下的窗口尺寸"会让两遍落在不同宽高比上 ——
+                //    实测第二遍变成 3840×2160，牌组卡的排布和字号全跟着变，两张图没法并排看。
+                //    显式钉住，两遍才是同一机位、同一批卡、同一个窗口。
                 case 310:
                     if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
-                    GoToView("board");
+                    SetGameViewSizeEx(CardFaceProbeW, CardFaceProbeH);
+                    SessionState.SetInt(KeyGvW, CardFaceProbeW);
+                    SessionState.SetInt(KeyGvH, CardFaceProbeH);
+                    Debug.Log("[AutoPlay/卡面] 㛢⑩ Game 视图钉到 " + CardFaceProbeW + "×" + CardFaceProbeH
+                              + "（现在 " + Screen.width + "×" + Screen.height
+                              + "）—— 改前 / 改后两遍必须同口径");
                     Stage = 311;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
                 case 311:
-                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.6) return;
                     if (!Shot("cf_30_decks_board.png")) return;
                     ProbeCardTextReport("㛢⑩ 牌组界面·桌面视角");
                     ProbeLogSync("㛢⑩ 牌组界面·桌面视角（回归：状态与画面一致 / 残留 0 张）");
@@ -2964,6 +3024,13 @@ namespace GameJam.EditorTools
                 uiText = worstArea > 0f
                     ? ("★ UI 压住手牌：" + worstName)
                     : ("UI 压住：无（提示块 / 检视窗口 / " + (panels != null ? panels.Count : 0) + " 块面板都不相交）");
+
+                // 提示块这一帧**到底画没画**也写出来：ShowHints=false 那一屏要能一眼看出"未画"
+                Rect hr = hud.HintBlockScreenRect;
+                uiText += hr.width > 0f
+                    ? ("｜提示块 " + hr.width.ToString("0") + "×" + hr.height.ToString("0")
+                       + " px @ y " + hr.y.ToString("0") + "~" + hr.yMax.ToString("0"))
+                    : "｜提示块：未画";
             }
 
             Debug.Log("[AutoPlay/取景] " + what
@@ -3485,6 +3552,19 @@ namespace GameJam.EditorTools
             Debug.Log("[AutoPlay/取景] 相机比例已还原（宽高比 " + setup.cam.aspect.ToString("0.000") + "）");
         }
 
+        /// <summary>手牌那一排现在有几张（不含已经放进槽里的）—— 状态守卫用。</summary>
+        private static int HandCardCount()
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null || setup.hand == null) return 0;
+
+            int n = 0;
+            for (int i = 0; i < setup.hand.Count; i++)
+                if (setup.hand[i] != null && setup.hand[i].slotIndex < 0) n++;
+
+            return n;
+        }
+
         /// <summary>
         /// 取景探针要的那一屏：**v2.1 的"选刀片"**（手里 5 张 = 手牌最宽的一档）。
         ///
@@ -3508,13 +3588,21 @@ namespace GameJam.EditorTools
             if (loop.IsLevelSelect)                 PickLevel();
             if (loop.phase == TablePhase.DeckPick)  PickDeck();
 
-            if (before != loop.phase || loop.phase != TablePhase.BladePick)
+            if (before != loop.phase)
             {
                 string hand = loop.rulesV21 != null
                     ? (loop.rulesV21.hand.Count + " 素材 + " + loop.rulesV21.handSpells.Count + " 法术")
                     : "（规则侧不在）";
 
                 Debug.Log("[AutoPlay/取景] 状态摆位：" + before + " → " + loop.phase + "，初始手牌 " + hand);
+            }
+            else if (loop.phase != TablePhase.BladePick)
+            {
+                // ★ 只在**真的动过阶段**时打日志：这台机器上局面可能被别的进程点到别处去了
+                //   （比如已经在打牌了），那时这个守卫摆不动它 —— 每帧打一行会把日志刷爆
+                //   （实测：一个 stage 打了几百行，真正要看的行全被冲没了）。
+                Debug.LogWarning("[AutoPlay/取景] 现在不在「选刀片」那一屏（阶段 " + loop.phase
+                                 + "），状态守卫摆不回去 —— 这一屏的取景图不作数。");
             }
         }
 
@@ -5195,6 +5283,13 @@ namespace GameJam.EditorTools
         /// 卡又是"很薄但很长"的那种），1.12 能把整张卡完整放进画面还留一圈背景。
         /// </summary>
         private const float CardFaceCloseupMargin = 1.12f;
+
+        /// <summary>
+        /// 卡面探针用的 Game 视图尺寸 —— **钉死**，好让"改前 / 改后"两遍落在同一个窗口上。
+        /// 1470×1167 是这台机器上 Game 视图的常用尺寸（宽高比 1.26，牌组 6 张排成一行）。
+        /// </summary>
+        private const int CardFaceProbeW = 1470;
+        private const int CardFaceProbeH = 1167;
 
         /// <summary>桌上那张刀片卡（它不在任何列表里，只能按引用认 —— 见 TableTurnLoop.bladeCard）。</summary>
         private static PlayCard BladeCard()
