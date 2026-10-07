@@ -84,6 +84,7 @@ namespace GameJam.EditorTools
         private static bool   turnProbe;
         private static bool   slotProbe;
         private static bool   fxProbe;
+        private static bool   blackProbe;
 
         static AutoPlayHarness()
         {
@@ -108,6 +109,12 @@ namespace GameJam.EditorTools
             //   也单独一条链 —— 它会把时间放慢 5 倍来抓特效中间帧，
             //   混进主链会让后面每一步的等待时间都失去意义。
             fxProbe = System.Environment.GetEnvironmentVariable("DSH_FXPROBE") == "1";
+
+            // ★ 黑桌探针（DSH_BLACKPROBE=1，见 ⑲⓪~⑳⑤ 那一段）：
+            //   走用户报的那条来回路径（启动 → 反应特效 → 关卡结束 → 回菜单 → 再进关卡），
+            //   每一步都截图 **并且把桌面渲染出来的像素量进日志** ——
+            //   "哪一帧开始变黑"必须是个数字，靠眼睛看截图只会吵起来。
+            blackProbe = System.Environment.GetEnvironmentVariable("DSH_BLACKPROBE") == "1";
 
             // ★ 每次域重载都要订阅，否则进 Play 之后就再也没人推进流程了
             EditorApplication.update += Tick;
@@ -432,7 +439,7 @@ namespace GameJam.EditorTools
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("v21_turn1.png")) return;
                     // 三条支线各走各的（都不设 = 原来的"只用点击"那条路，行为一个字没变）
-                    Stage = fxProbe ? 170 : (slotProbe ? 120 : 110);
+                    Stage = fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110));
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -600,6 +607,176 @@ namespace GameJam.EditorTools
                     return;
 
                 case 188:
+                    if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
+                    Finish();
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ⑲⓪~⑳⑤ 黑桌探针（DSH_BLACKPROBE=1）
+                //
+                //  【它复现的是用户那句话】「桌面变黑 —— 桌子的木质表面纹理不见了」，
+                //    用户走的路径是"启动 → 反应特效 → 关卡结束 → 回菜单 → 再进关卡"，
+                //    所以这条链把**那条来回路径整条走一遍**，每一步都截图，
+                //    并且每次都调 ProbeTableLook 把"桌面渲染出来的像素"量进日志 ——
+                //    哪一帧开始黑、黑到什么程度，日志里是数字，不靠看截图下结论。
+                //
+                //  【为什么盯着桌面量】桌面是场景里唯一一块**大面积、朝上、纯 Standard 材质**
+                //    的表面。光源没了 / 材质被换 / 贴图丢了 / 相机裁剪坏了 —— 这四类原因
+                //    在截图里长得一模一样（都是一块黑），而 ProbeTableLook 一次把
+                //    材质状态、光源清单、环境光、画质档位、相机参数全打出来，四类当场分开。
+                // ══════════════════════════════════════════════════════
+
+                // ⑲⓪ 开场：第一帧就该是"木桌 + 书 + 蜡烛"
+                case 190:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("bp_01_title.png")) return;
+                    ProbeTableLook("⑲⓪ 开场（第一次进游戏）");
+                    Stage = 191;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑲① 点书 = 新游戏
+                case 191:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    StartGame();
+                    Stage = 192;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑲② 关卡界面 → 选第一关
+                case 192:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("bp_02_level_select.png")) return;
+                    PickLevel();
+                    Stage = 193;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑲③ 牌组界面 → 选第一副
+                case 193:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("bp_03_choice_deck.png")) return;
+                    PickDeck();
+                    Stage = 194;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑲④ 刀片界面（顺带拍"点候选核心之后桌面刀片卡有没有立刻跟着换"）
+                case 194:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("bp_04_choice_blade.png")) return;
+                    ProbeCorePickV21();
+                    Stage = 195;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑲⑤ 确认刀片 → 第 1 回合
+                case 195:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("bp_05_blade_picked.png")) return;
+                    ProbeConfirmBladeV21();
+                    Stage = 196;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑲⑥ 第 1 回合的桌面
+                case 196:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("bp_06_turn1.png")) return;
+                    ProbeLogSync("⑲⑥ 第 1 回合");
+                    ProbeTableLook("⑲⑥ 第 1 回合");
+                    Stage = 197;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑲⑦ 出牌 + 附魔 + 启动（把"反应特效"那一段跑到）
+                case 197:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeClickHandMaterial();
+                    ProbeAddFxLayers();
+                    ProbeActivateV21();
+                    Stage = 198;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 198:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("bp_07_activate.png")) return;
+                    ProbeLogSync("⑲⑦ 启动/反应特效之后");
+                    ProbeTableLook("⑲⑦ 启动/反应特效之后");
+                    Stage = 199;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑲⑧ 推到关卡结束（4 回合耗尽 / 达标 / 爆刀）
+                case 199:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeDriveLevelV21();
+                    Stage = 200;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 200:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    if (!Shot("bp_08_level_end.png")) return;
+                    ProbeLogSync("⑲⑧ 关卡结束");
+                    ProbeTableLook("⑲⑧ 关卡结束");
+                    Stage = 201;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑲⑨ ★ 回菜单 —— 用户报"黑桌"最可能的第一帧就在这前后
+                case 201:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeReturnToTitle();
+                    Stage = 202;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 202:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    if (!Shot("bp_09_back_to_title.png")) return;
+                    ProbeLogSync("⑲⑨ 回菜单");
+                    ProbeTableLook("⑲⑨ 回菜单");
+                    Stage = 203;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑳⓪ 再进一关（第二次走同一条路 —— 累计型缺陷在这里现形）
+                case 203:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    StartGame();
+                    Stage = 204;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 204:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    PickLevel();
+                    PickDeck();
+                    Stage = 205;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 205:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeCorePickV21();
+                    ProbeConfirmBladeV21();
+                    Stage = 206;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑳① 第二次进关卡的桌面 —— 和 ⑲⑥ 那张逐点对照
+                case 206:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("bp_10_reenter_turn1.png")) return;
+                    ProbeLogSync("⑳① 第二次进关卡");
+                    ProbeTableLook("⑳① 第二次进关卡");
+                    Stage = 207;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 207:
                     if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
                     Finish();
                     return;
@@ -2469,6 +2646,204 @@ namespace GameJam.EditorTools
                       + "｜待放置 " + loop.StagedCount + " 张"
                       + "｜启动目标 " + (r.selected != null ? r.selected.name : "（无）")
                       + "｜notice " + loop.notice);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  黑桌探针（DSH_BLACKPROBE=1）用的量测 —— 见 ⑲⓪~⑳① 那一段
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>回菜单（走游戏自己的公开入口 TableTurnLoop.ReturnToTitle）。</summary>
+        private static void ProbeReturnToTitle()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null)
+            {
+                Debug.LogWarning("[AutoPlay/Black] 找不到 TableTurnLoop，回菜单这一步跳过。");
+                return;
+            }
+
+            loop.ReturnToTitle();
+            Debug.Log("[AutoPlay/Black] 已回菜单 → 阶段 " + loop.phase);
+        }
+
+        /// <summary>
+        /// ★ 黑桌探针的核心：把"桌面现在渲染成什么样"量成数字。
+        ///
+        /// 【为什么必须回读像素，而不是只看截图】
+        ///   截图要人眼看，"黑"和"很暗"之间的界线每次都能吵；而用户的报障恰恰是
+        ///   "桌子的木质表面纹理不见了"。所以这里 cam.Render() 一帧到临时 RT，
+        ///   再把**桌面上四个固定世界点**（近侧空地 / 远端 / 左右两侧）的像素值量出来。
+        ///   同一批点在"好的时候"和"黑的时候"各自是什么数，一比就知道是哪一帧开始掉的。
+        ///
+        /// 【为什么还要把材质 / 光源 / 环境 / 画质一起打】
+        ///   "桌面黑"至少有四类根因，在截图里长得一模一样：
+        ///     ① 材质被换 / 被销毁（shader 变成 InternalErrorShader、_MainTex 丢了）
+        ///     ② 光没了（方向光被销毁 / 被禁用 / 被挤出每物体光源上限）
+        ///     ③ 环境光没了（ambient 被改 / 场景没有天空盒）
+        ///     ④ 相机坏了（跑到桌子下面、裁剪面改坏、clearFlags 变了）
+        ///   这四行一起打，看到数字的那一刻就知道是哪一类，不用猜。
+        ///
+        /// 【为什么取这四个点】都在桌面上、都不和卡牌 / 蜡烛 / 机器重叠，而且
+        ///   分居四个方向 —— 单侧变黑（比如被什么挡住）和整面变黑能分开。
+        /// </summary>
+        private static void ProbeTableLook(string where)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            Camera cam = (setup != null && setup.cam != null) ? setup.cam : Camera.main;
+            if (cam == null)
+            {
+                Debug.LogWarning("[AutoPlay/Black] " + where + "：没有相机，桌面量不了。");
+                return;
+            }
+
+            // ── ① 桌面材质：贴图还在不在、shader 是不是被换掉了 ──
+            string matText = "（找不到名为 Table 的对象）";
+            GameObject tableGo = GameObject.Find("Table");
+            Renderer tableR = tableGo != null ? tableGo.GetComponent<Renderer>() : null;
+            Material tm = tableR != null ? tableR.sharedMaterial : null;
+            if (tm != null)
+            {
+                Texture tex = tm.HasProperty("_MainTex") ? tm.GetTexture("_MainTex") : tm.mainTexture;
+                string texText = tex != null
+                    ? (tex.name + "（" + tex.width + "×" + tex.height + "）")
+                    : "★NULL";
+
+                string tiling = "";
+                if (tm.HasProperty("_MainTex"))
+                {
+                    Vector2 sc = tm.GetTextureScale("_MainTex");
+                    tiling = "　Tiling(" + sc.x.ToString("0.##") + ", " + sc.y.ToString("0.##") + ")";
+                }
+
+                matText = "shader=" + (tm.shader != null ? tm.shader.name : "★NULL")
+                        + "　_Color=" + tm.color.ToString()
+                        + "　_MainTex=" + texText + tiling
+                        + "　_Glossiness=" + (tm.HasProperty("_Glossiness") ? tm.GetFloat("_Glossiness").ToString("0.##") : "—")
+                        + "　renderer.enabled=" + (tableR != null && tableR.enabled);
+            }
+
+            // ── ② 光源清单：方向光在不在、有没有被挤掉 ──
+            Light[] lights = Object.FindObjectsOfType<Light>();
+            int onCount = 0;
+            System.Text.StringBuilder lb = new System.Text.StringBuilder();
+            for (int i = 0; i < lights.Length; i++)
+            {
+                Light l = lights[i];
+                if (l == null) continue;
+                if (l.enabled) onCount++;
+                if (lb.Length > 0) lb.Append('｜');
+                lb.Append(l.name).Append(' ').Append(l.type)
+                  .Append(l.enabled ? " 开" : " ★关")
+                  .Append(" i=").Append(l.intensity.ToString("0.##"))
+                  .Append(" shadows=").Append(l.shadows);
+            }
+
+            // ── ③ 环境光 / 天空盒（Standard 材质没光的时候只剩它） ──
+            string amb = "ambientMode=" + RenderSettings.ambientMode
+                       + "　ambientLight=" + RenderSettings.ambientLight.ToString()
+                       + "　skybox=" + (RenderSettings.skybox != null ? RenderSettings.skybox.name : "★无")
+                       + "　reflection=" + RenderSettings.defaultReflectionMode
+                       + " " + RenderSettings.reflectionIntensity.ToString("0.##");
+
+            // ── ④ 相机 ──
+            string camText = "pos=" + cam.transform.position.ToString("0.###")
+                           + "　fwd=" + cam.transform.forward.ToString("0.##")
+                           + "　near/far=" + cam.nearClipPlane.ToString("0.###") + "/" + cam.farClipPlane.ToString("0.#")
+                           + "　cullingMask=" + cam.cullingMask
+                           + "　clear=" + cam.clearFlags
+                           + "　bg=" + cam.backgroundColor.ToString()
+                           + "　fov=" + cam.fieldOfView.ToString("0.#");
+
+            // ── ⑤ 画质档位（贴图 mip 限制 / 像素光数量都在这里） ──
+            int q = QualitySettings.GetQualityLevel();
+            string qText = "档位 " + q + "「" + QualitySettings.names[q] + "」"
+                         + "　pixelLightCount=" + QualitySettings.pixelLightCount
+                         + "　shadows=" + QualitySettings.shadows
+                         + "　aniso=" + QualitySettings.anisotropicFiltering
+                         + "　textureMipLimit=" + QualitySettings.globalTextureMipmapLimit
+                         + "　lodBias=" + QualitySettings.lodBias.ToString("0.##");
+
+            // ── ⑥ 桌面四个固定点的**实际渲染像素** ──
+            string pxText = ProbeTablePixels(cam);
+
+            Debug.Log("[AutoPlay/Black] " + where
+                      + "\n   桌面材质：" + matText
+                      + "\n   桌面像素（4 个固定点）：" + pxText
+                      + "\n   光源 " + onCount + "/" + lights.Length + " 开着：" + lb
+                      + "\n   环境：" + amb
+                      + "\n   相机：" + camText
+                      + "\n   画质：" + qText);
+        }
+
+        /// <summary>
+        /// 把相机渲一帧到临时 RT，回读桌面上四个固定世界点的像素（左下原点）。
+        /// 渲染完立刻把 targetTexture / RenderTexture.active 还原 —— 不还原的话
+        /// 后面所有截图都会拍到那张 RT（探针自己把画面搞坏，就白测了）。
+        /// </summary>
+        private static string ProbeTablePixels(Camera cam)
+        {
+            int w = Mathf.Max(64, cam.pixelWidth);
+            int h = Mathf.Max(64, cam.pixelHeight);
+
+            RenderTexture rt = RenderTexture.GetTemporary(w, h, 24);
+            RenderTexture prevActive = RenderTexture.active;
+            RenderTexture prevTarget = cam.targetTexture;
+            Texture2D read = null;
+
+            try
+            {
+                cam.targetTexture = rt;
+                cam.Render();
+                cam.targetTexture = prevTarget;
+
+                RenderTexture.active = rt;
+                read = new Texture2D(w, h, TextureFormat.RGBA32, false);
+                read.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+                read.Apply(false, false);
+            }
+            finally
+            {
+                cam.targetTexture = prevTarget;
+                RenderTexture.active = prevActive;
+                RenderTexture.ReleaseTemporary(rt);
+            }
+
+            if (read == null) return "（回读失败）";
+
+            // 桌面上的四个固定点（世界坐标，y=0 就是桌面顶面）
+            Vector3[] pts =
+            {
+                new Vector3( 0.00f, 0f, -0.55f),   // 近侧空地
+                new Vector3( 0.00f, 0f,  0.75f),   // 远端空地
+                new Vector3(-1.05f, 0f, -0.30f),   // 左侧
+                new Vector3( 1.05f, 0f, -0.30f),   // 右侧
+            };
+            string[] names = { "近侧", "远端", "左侧", "右侧" };
+
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            for (int i = 0; i < pts.Length; i++)
+            {
+                Vector3 sp = cam.WorldToScreenPoint(pts[i]);
+                if (sb.Length > 0) sb.Append("　");
+
+                if (sp.z <= 0f)
+                {
+                    sb.Append(names[i]).Append("=（在相机背后）");
+                    continue;
+                }
+
+                int x = Mathf.Clamp(Mathf.RoundToInt(sp.x), 0, w - 1);
+                int y = Mathf.Clamp(Mathf.RoundToInt(sp.y), 0, h - 1);
+                Color c = read.GetPixel(x, y);
+
+                sb.Append(names[i]).Append("=(")
+                  .Append(Mathf.RoundToInt(c.r * 255f)).Append(',')
+                  .Append(Mathf.RoundToInt(c.g * 255f)).Append(',')
+                  .Append(Mathf.RoundToInt(c.b * 255f)).Append(')');
+            }
+
+            CardFactory.DestroySafe(read);
+            return sb.ToString() + "　（RT " + w + "×" + h + "）";
         }
 
         private static void OpenInspect()

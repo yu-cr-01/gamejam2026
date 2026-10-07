@@ -183,6 +183,40 @@ namespace GameJam.Prototype
         /// <summary>本回合已经启动过几次（HUD 的"本回合是否已用过启动"看它）。</summary>
         public int startsThisTurn;
 
+        /// <summary>
+        /// **本回合被启动过的那些桌面素材**（"收回手牌"的限制条件要用它）。
+        ///
+        /// 【为什么不能只看 startsThisTurn】那是"本回合启动过几次"的计数，
+        ///   回答不了"这一张启动过没有" —— 玩家先启动 A、再想收回 B 时，
+        ///   计数大于 0 会把 B 一起拒掉，而 B 明明还能收（用户要的正是这个区分）。
+        ///
+        /// 【为什么存在这里而不是 MaterialState 上】Assets/Scripts/Rules/** 是封版基线
+        ///   （210 项断言守着），不许为了表现层往 MaterialState 上加字段。
+        ///   而 MaterialState 在桌面这一层是**按引用**用的（BuildState 直接把 table 传进引擎，
+        ///   Absorb 是就地读回），所以"记住是哪些对象"就够了，一个 List 足够。
+        ///
+        /// 清空点：开一关（BeginLevel）、第 1 回合（StartFirstTurn）、每个新回合（EndRound 里
+        /// 引擎开新回合之后）、清桌面（ClearTable）—— 也就是"回合"这个概念会重置的每一处。
+        /// </summary>
+        private readonly List<MaterialState> startedThisTurnList = new List<MaterialState>();
+
+        /// <summary>这一张桌面素材本回合启动过没有。</summary>
+        public bool StartedThisTurn(MaterialState st)
+        {
+            return st != null && startedThisTurnList.Contains(st);
+        }
+
+        /// <summary>
+        /// 出牌那一刻这张素材的**数值来源**（收回手牌时原样带回去）。
+        ///
+        /// 【为什么要记】MaterialCard.source 决定卡面名字后面那句
+        ///   "（V=0）/（旧配置V=0）/（占位V=0）"（见 MaterialCard.DisplayName）。
+        ///   收回手牌时会新建一张 MaterialCard，重猜来源会让一句本来正确的注释变错。
+        ///   出牌那一步是唯一知道来源的地方，顺手记下来最省事。
+        /// </summary>
+        private readonly Dictionary<MaterialState, MaterialCard.ValueSource> sourceOfState =
+            new Dictionary<MaterialState, MaterialCard.ValueSource>();
+
         public int score;
 
         /// <summary>
