@@ -65,6 +65,19 @@ namespace GameJam.Prototype
         /// <summary>v2.1：这张 3D 卡对应的**手牌法术**（规则侧的对象）。</summary>
         public SpellCard bindingSpell;
 
+        /// <summary>
+        /// 这张卡已经**排好销毁**了（CardFactory.DestroySafe 盖的章）。
+        ///
+        /// 【为什么需要这个标记】Object.Destroy 是**帧末**才真删的：
+        ///   这一帧剩下的时间里，被销毁的卡还挂在 cardsRoot 下、还能被
+        ///   GetComponentsInChildren 找到、也还没变成"假 null"。
+        ///   而 TableRulesV21 的残留清扫是按"谁认领"数卡的（手牌 / 刀片 / 桌面标签），
+        ///   刚被销毁的卡已经不在 setup.hand 里了 —— 不认这个标记，它就会被当成残留，
+        ///   自检每次都报一堆假警（"抓到一张没人认领的卡：水"）。
+        ///   认了它，残留清扫就只对**真的漏销毁**的卡报警。
+        /// </summary>
+        public bool markedForDestroy;
+
         /// <summary>手牌原位 —— 放不出去时回到这里</summary>
         public Vector3 homePosition;
         public Vector3 homeEuler;

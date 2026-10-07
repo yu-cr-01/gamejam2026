@@ -75,6 +75,7 @@ namespace GameJam.EditorTools
         private static string outDir;
         private static bool   capture;
         private static bool   turnProbe;
+        private static bool   slotProbe;
 
         static AutoPlayHarness()
         {
@@ -88,6 +89,11 @@ namespace GameJam.EditorTools
             // 回合循环探针：把第一张手牌放进投放区并确认，一路拍到"下一回合"。
             // 单独一个开关，因为这条路径会真的改动游戏状态，不适合默认开启。
             turnProbe = System.Environment.GetEnvironmentVariable("DSH_TURNPROBE") == "1";
+
+            // ★ 槽位复现探针（用户报的三步：两张手牌进两个槽 → 再点一张手牌）。
+            //   单独一个开关、单独一条 stage 链：它会把这一局的手牌按那个顺序打出去，
+            //   混进主探针里会让后面那些"验形态变化 / 验回合推进"的步骤失去前提。
+            slotProbe = System.Environment.GetEnvironmentVariable("DSH_SLOTPROBE") == "1";
 
             // ★ 每次域重载都要订阅，否则进 Play 之后就再也没人推进流程了
             EditorApplication.update += Tick;
@@ -387,7 +393,109 @@ namespace GameJam.EditorTools
                 case 59:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("v21_turn1.png")) return;
-                    Stage = 110;
+                    Stage = slotProbe ? 120 : 110;      // ⑫⓪~ 槽位复现探针（DSH_SLOTPROBE=1）
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ⑫⓪~⑫⑤ 槽位复现探针（DSH_SLOTPROBE=1）
+                //
+                //  用户报的原话：「两张手牌塞满法术槽和素材槽之后再次点手牌就会出现这种情况」
+                //  （表现：桌上的牌散开浮着、面板张数对不上、底部还挂着一张放大检视的卡）。
+                //
+                //  这三步走的是**玩家那条路**：
+                //    拖进槽 = TableInteraction.DropCard(card, isClick:false)（松手判决）
+                //    点手牌 = TableInteraction.ClickCard(card)（单击分派）
+                //  探针只把"从鼠标射线认出是哪张卡"换成"由探针指定哪张"，
+                //  槽位坐标由 board.SlotPosition 给 —— 和玩家把牌拖到那个框里是同一个位置。
+                // ══════════════════════════════════════════════════════
+
+                // ⑫⓪ 先拍一张"刚开始"的对照图
+                case 120:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeLogSync("⑫⓪ 复现开始前");
+                    if (!Shot("v21_slot_before.png")) return;
+                    Stage = 121;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑫① 素材拖进「上桌位」（= 素材槽，1 号）→ 应该当场成为桌面素材并自动选为目标
+                case 121:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeDropHandIntoSlot(TableTurnLoop.SlotMaterial, "⑫① 素材进上桌位");
+                    Stage = 122;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 122:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    ProbeLogSync("⑫① 之后");
+                    if (!Shot("v21_slot_material.png")) return;
+                    Stage = 123;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑫② 法术拖进「附魔位」（= 法术槽，0 号）→ 应该当场附魔到刀片
+                case 123:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeDropSpellIntoSlot("⑫② 法术进附魔位");
+                    Stage = 124;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 124:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    ProbeLogSync("⑫② 之后");
+                    if (!Shot("v21_slot_spell.png")) return;
+                    Stage = 125;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑫③ 两个槽都碰过之后再点一张手牌 —— 用户报的那一步
+                case 125:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeClickHandMaterial();
+                    Stage = 126;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 126:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    ProbeLogSync("⑫③ 之后（用户报的那一步）");
+                    if (!Shot("v21_slot_click.png")) return;
+                    Stage = 127;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑫④ 再点一次手牌（把"连着点"也覆盖掉），然后收工
+                case 127:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeClickHandMaterial();
+                    Stage = 128;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 128:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    ProbeLogSync("⑫④ 连点之后");
+                    if (!Shot("v21_slot_click2.png")) return;
+                    Stage = 129;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑫⑤ 切到「俯视」拍一张槽位名字 —— v2.1 下这两个槽该写着「上桌位 / 附魔位」，
+                //     桌面视角里它们贴着屏幕下沿、看不清全，所以单拍一张。
+                case 129:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeTopView();
+                    Stage = 130;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 130:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.6) return;
+                    if (!Shot("v21_slot_names.png")) return;
+                    Stage = 69;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -1285,6 +1393,104 @@ namespace GameJam.EditorTools
             int v;
             if (!string.IsNullOrEmpty(raw) && int.TryParse(raw, out v) && v >= 0) return v;
             return fallback;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  槽位复现探针（DSH_SLOTPROBE=1）
+        //
+        //  【它复现的是用户那句话】「两张手牌塞满法术槽和素材槽之后再次点手牌就会出现这种情况」
+        //  （桌上的牌散开浮着、面板张数对不上）。三步都走**玩家那条路**：
+        //    拖进槽 = TableInteraction.DropCard(card, isClick:false)  ← 松手判决
+        //    点手牌 = TableInteraction.ClickCard(card)                ← 单击分派
+        //  探针只把"从鼠标射线认出是哪张卡"换成"由探针指定哪张"，
+        //  卡的位置用 board.SlotPosition 摆到槽心上 —— 和玩家把牌拖到那个框里一模一样。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>把一张手牌拖进某个槽（松手那一下的判决）。返回它有没有被这一下处理掉。</summary>
+        private static bool ProbeDropIntoSlot(PlayCard card, int slot, string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+
+            if (card == null || setup == null || setup.board == null || it == null || loop == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] " + what + "：找不到 TableSetup / TableInteraction / board，跳过。");
+                return false;
+            }
+
+            string slotName = (slot == TableTurnLoop.SlotSpell) ? "附魔位（法术槽）" : "上桌位（素材槽）";
+
+            // 玩家的鼠标把牌拖到了槽心上 → 松手（位移 > ClickSlack，所以是"拖拽"不是"单击"）
+            card.Teleport(setup.board.SlotPosition(slot), card.homeEuler);
+            bool handled = it.DropCard(card, false);
+
+            Debug.Log("[AutoPlay/V21] " + what + "：把「" + card.DisplayName + "」拖到 " + slotName
+                      + "（" + slot + " 号槽）→ 被处理 " + handled
+                      + "｜待放置 " + loop.StagedText
+                      + "｜附魔 " + loop.rulesV21.blade.layers.Describe());
+            return handled;
+        }
+
+        /// <summary>⑫① 把第一张手牌素材拖进「上桌位」。</summary>
+        private static void ProbeDropHandIntoSlot(int slot, string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null || setup.hand == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] " + what + "：找不到 3D 手牌，跳过。");
+                return;
+            }
+
+            for (int i = 0; i < setup.hand.Count; i++)
+            {
+                PlayCard c = setup.hand[i];
+                if (c == null || c.card == null) continue;
+
+                // 判据和游戏里 CanStageInto 用的是同一个字段（card.IsSpell / IsMaterial）——
+                // ★ 不能用 PlayCard.IsModule 当"是不是法术"：v2.1 的法术卡在数据层就是
+                //   一张 SpeedModule（Card.Of(BuildSpellModule(...))），IsModule 恒为 true。
+                bool match = (slot == TableTurnLoop.SlotSpell) ? c.card.IsSpell : c.card.IsMaterial;
+
+                if (match) { ProbeDropIntoSlot(c, slot, what); return; }
+            }
+
+            Debug.LogWarning("[AutoPlay/V21] " + what + "：手牌里没有这个槽收的牌（手牌 " + setup.hand.Count + " 张），跳过。");
+        }
+
+        /// <summary>⑫② 把手牌里的法术拖进「附魔位」。</summary>
+        private static void ProbeDropSpellIntoSlot(string what)
+        {
+            ProbeDropHandIntoSlot(TableTurnLoop.SlotSpell, what);
+        }
+
+        /// <summary>⑫⑤ 切到「俯视」机位（槽位名字在桌面视角里贴着屏幕下沿，俯视才看得全）。</summary>
+        private static void ProbeTopView()
+        {
+            CameraRig rig = Object.FindObjectOfType<CameraRig>();
+            if (rig == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] 找不到 CameraRig，俯视图这次拍不到。");
+                return;
+            }
+
+            rig.GoTo("top");
+            Debug.Log("[AutoPlay/V21] 视角切到「俯视」（当前视角 " + rig.CurrentView + "）—— 拍槽位名字");
+        }
+
+        /// <summary>把"状态几张 / 场景几张"的自检摘要打进日志（探针验收就看这几行）。</summary>
+        private static void ProbeLogSync(string what)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) return;
+
+            TableRulesV21 r = loop.rulesV21;
+
+            Debug.Log("[AutoPlay/V21] " + what + "｜" + r.ViewSyncSummary()
+                      + "｜桌面 " + r.TableText()
+                      + "｜手牌 " + r.HandText()
+                      + "｜目标 " + (r.selected != null ? r.selected.name : "（无）")
+                      + "｜分数 " + r.score + "｜阶段 " + loop.phase);
         }
 
         /// <summary>

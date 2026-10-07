@@ -267,6 +267,14 @@ namespace GameJam.Prototype
             //     于是那张卡就跟着回来了。收进入口只写一处，以后再加路径也不会漏。
             V21ClearTable();
 
+            // ★ 刀片卡也要一起收掉 —— V21ClearTable 只管 tableCards 里认领的桌面素材，
+            //   刀片卡（这一局的友方单位）不在那份表里，只有 BuildBladeCard / KillBladeCard 认它。
+            //   用户的第二张截图就是它：结算界面点「返回关卡界面」→ 那张刀片卡（水）跟着回来了，
+            //   杵在选关 / 牌组选择界面中间，看起来像"上一关的卡没清掉"。
+            //   这条路径原来没人调 KillBladeCard（NextLevel / ExitLevel / ReturnToTitle / RestartLevel 都调了），
+            //   所以按"离开关卡就收"收进这个入口，和上面那句同一个理由。
+            KillBladeCard();
+
             levels = GameConfig.Levels();
             if (levels.Count == 0) levels.Add(GameConfig.Level());
 
@@ -342,6 +350,9 @@ namespace GameJam.Prototype
             //   规则很简单：**只要离开关卡、进到任何一个非玩法阶段，桌面就不该留着牌**。
             V21ClearTable();
 
+            // 刀片卡同理（它不在 tableCards 里，V21ClearTable 管不到它）
+            KillBladeCard();
+
             Choice deckChoice = FindChoice(GameConfig.DeckPickId);
 
             if (deckChoice != null && deckChoice.OptionCount > 0 && choiceRig != null)
@@ -401,6 +412,11 @@ namespace GameJam.Prototype
                 rulesV21.BeginLevel(deck, level != null ? level.TargetScore : 0);
                 staged.Clear();
             }
+
+            // ★ 两个槽的名字跟规则模式走（v2.1 = 上桌位 / 附魔位，旧流程 = 素材槽 / 法术槽）。
+            //   放在这里而不是 TableSetup 启动时：设置面板改模式是"重进关卡才生效"，
+            //   这个字样必须和规则同一条时间线，否则会出现"名字是新的、行为是旧的"。
+            if (setup != null) setup.RefreshSlotLabels();
 
             BuildBladeCard();
         }
@@ -506,15 +522,21 @@ namespace GameJam.Prototype
         {
             KillBladeCard();
 
-            // ── v2.1：刀片核心还没定，先摆一张"候选核心"当门面 ──
-            //   正文 §2.5 的刀片是玩家从手里挑的，不是配置里指定的；
-            //   选刀片阶段桌面上得有个东西可看，否则"刀片位"是空的。
-            //   这里取手牌第一张素材 —— 也就是玩家不点任何牌时默认会选中的那张，
-            //   和 ConfirmBladePick 的兜底口径保持一致（两边不一致就会出现
-            //   "桌上摆着 A、确认下去变成 B"）。
+            // ── v2.1：刀片位的门面 ──
+            //   ① **核心已经定了**（ConfirmBladePick 之后）→ 用真正的那张核心卡。
+            //      ★ 这里绝对不能再问 CoreCandidate()：ChooseCore 已经把核心移出手牌了，
+            //        而 CoreCandidate 问的是"手牌里第一张素材"，于是会答成*另一张*卡 ——
+            //        实机踩到的就是它：核心是水（面板写着 刀片 水 H=2 V=2），
+            //        桌上摆出来的却是冰的卡面（H5 D2 V3）。
+            //        玩家看到的是"面板写桌面素材 3 张、画面里 4 张卡，而且有两张一模一样的冰"，
+            //        也就是那条"规则状态与 3D 卡不同步"的报障。
+            //   ② 还没定核心（选刀片阶段）→ 才用候选核心当门面：
+            //      正文 §2.5 的刀片是玩家从手里挑的，选之前桌上得有个东西可看。
+            //      这里取手牌第一张素材 —— 和 ConfirmBladePick 的兜底口径一致
+            //      （两边不一致就会出现"桌上摆着 A、确认下去变成 B"）。
             if (V21)
             {
-                MaterialCard core = rulesV21.CoreCandidate();
+                MaterialCard core = rulesV21.coreCard != null ? rulesV21.coreCard : rulesV21.CoreCandidate();
                 if (core == null || core.card == null) return;
 
                 bladeCard = CardFactory.Create(Card.Of(core.card), setup.cardsRoot,
@@ -834,9 +856,12 @@ namespace GameJam.Prototype
         /// v2.1 的「确认投放」= **出牌**：投放区里的素材上桌、法术立即生效。
         /// 两者都**不消耗行动机会**（正文 §2.6、§七-10/11）。
         ///
-        /// 【为什么法术不在这里出】
-        ///   法术的入口是"点手牌里的那张卡"（TableInteraction → OnSpellCardClicked），
-        ///   因为它不经过桌面。这里只兜一句提示，免得玩家把法术拖进法术槽之后按确认却什么都没发生。
+        /// 【v2.1 下它已经不是主路了 —— 主路是 PlayCardV21】
+        ///   这一版把"落槽即结算"做进去之后，牌一进「上桌位 / 附魔位」就当场生效，
+        ///   不会停在"待放置"这个中间态。所以这个方法现在的定位是：
+        ///     ① 老习惯（把牌摆到桌上、再按一下「放置到桌面」）不至于静默失效；
+        ///     ② 自动试玩的 ProbeStageMaterialV21 走的就是它。
+        ///   它**一行规则都不写** —— 逐张转发给 PlayCardV21，和"点手牌"是同一个入口。
         /// </summary>
         public void ConfirmV21()
         {
@@ -850,12 +875,11 @@ namespace GameJam.Prototype
 
             if (staged.Count == 0)
             {
-                notice = "桌上没有待放置的牌 —— 把素材拖到桌面中间，或者直接点手牌里的法术";
+                notice = "v2.1 出牌不用按确认：点手牌就上桌，把它拖进「上桌位 / 附魔位」也一样";
                 return;
             }
 
             List<PlayCard> batch = new List<PlayCard>(staged);
-            staged.Clear();
 
             int mats = 0, spells = 0;
 
@@ -864,38 +888,80 @@ namespace GameJam.Prototype
                 PlayCard card = batch[i];
                 if (card == null) continue;
 
-                if (board != null) board.Clear(card);
+                bool isSpell = rulesV21.IsHandSpellCard(card);
 
-                // ── 法术：立即打出（附魔到刀片），不消耗行动机会 ──
-                //   放在这个分支里是为了"拖进法术槽再点确认"这条老习惯也能走通，
-                //   和"直接点手牌"是同一个入口，不是第二条实现。
-                if (rulesV21.OnSpellCardClicked(card)) { spells++; continue; }
-
-                // ── 素材：上桌 ──
-                MaterialCard mc = rulesV21.FindHandMaterial(card);
-                if (mc == null)
+                // ★ 出牌只有 PlayCardV21 这一条路 —— 它自己会清槽位 / 摘 staged / 建 3D 卡。
+                //   这里再补一句 ReturnHome 是给"打不出去"的情况收尾（阶段不对、已经不是手牌了）。
+                if (PlayCardV21(card))
+                {
+                    if (isSpell) spells++; else mats++;
+                }
+                else
                 {
                     card.ReturnHome();
-                    notice = "这张牌不在 v2.1 的手牌里（" + card.DisplayName + "）";
-                    continue;
                 }
-
-                // ★ 素材上桌**不走 ConsumeInto**（那张牌不是被机器吸走的）。
-                //   这里只改规则状态，3D 卡由下面 SyncTableVisuals 统一重建并摆到桌面槽位上。
-                //   一开始写成"上桌 + 飞进罐口"，结果是同一张牌在桌上和罐口各出现一次 ——
-                //   "被吸进去"这个动作用在启动破壁机那一次才成立。
-                MaterialState st = rulesV21.PlayMaterial(mc);
-                if (st != null) mats++;
             }
+
+            lastPlayed = mats + " 张素材上桌" + (spells > 0 ? "，" + spells + " 张法术生效" : "");
+            notice = lastPlayed + "　（出牌不消耗行动机会，行动机会还剩 " + rulesV21.actionPoints +
+                     " 次 —— 点「启动破壁机」才消耗）";
+        }
+
+        /// <summary>
+        /// v2.1：**把这一张牌打出去** —— 这条路上唯一的那个函数。
+        ///
+        /// 【三条入口，一个出口】
+        ///   ① 点手牌（素材 / 法术）　　　　→ TableInteraction.RouteCardClick
+        ///   ② 拖进「上桌位」（素材槽）　　→ TableInteraction.DropCard
+        ///   ③ 拖进「附魔位」（法术槽）　　→ TableInteraction.DropCard
+        ///   三条都调它。落槽即结算（把牌拖进槽 = 立刻生效），所以槽不会"占住"，
+        ///   v2.1 下不存在"槽已满 / 待放置"这种中间态。
+        ///
+        /// 【为什么必须收成一个函数】—— 这次那个 bug 的根因
+        ///   原来"点手牌"走 TableInteraction.TryClickPlace（自己 Stage + Confirm），
+        ///   "拖进槽"走 EndDrag 的落槽分支（board.Place + Stage 摆着不动）。
+        ///   两条路各记各的状态：同一次操作被两边都碰过之后，规则状态说"这张牌上了桌"，
+        ///   3D 卡却被摆回槽位/手牌位 —— 表现就是"牌散开浮在桌上、面板张数对不上"。
+        ///   收成一条之后，"谁把牌打出去、打完谁负责摆 3D 卡"只有一个答案。
+        ///
+        /// 【语义】素材 → 上桌并自动选为启动目标（PlayMaterial → Select(st, true)）；
+        ///   法术 → 附魔到刀片（OnSpellCardClicked）。两者都不消耗行动机会（正文 §2.6 / §七-11）。
+        ///
+        /// 返回 true = 这一下已经被消费掉，调用方不要再做别的（回手牌 / 落槽 / 重排手牌）。
+        /// </summary>
+        public bool PlayCardV21(PlayCard card)
+        {
+            if (!V21 || rulesV21 == null || card == null) return false;
+
+            // 只有"能操作"的时候才出得了牌：选刀片核心 / 结算 / 关卡结束 / 暂停设置里都不行
+            if (!CanInteract) return false;
+
+            // ★ 先把这张牌从"待放置"里摘干净：它马上就要生效，不该再占着槽位或留在 staged 里
+            if (board != null) board.Clear(card);
+            staged.Remove(card);
+
+            // ── 法术：附魔到刀片（打完即消失，动画与提示都在 OnSpellCardClicked 里）──
+            if (rulesV21.OnSpellCardClicked(card)) return true;
+
+            // ── 素材：上桌（只动规则状态，3D 卡由下面统一对齐）──
+            MaterialCard mc = rulesV21.FindHandMaterial(card);
+            if (mc == null) return false;      // 不是手牌素材 → 交给调用方（例如点桌上的卡 = 选目标）
+
+            // ★ 素材上桌**不走 ConsumeInto**（那张牌不是被机器吸走的）。
+            //   一开始写成"上桌 + 飞进罐口"，结果是同一张牌在桌上和罐口各出现一次 ——
+            //   "被吸进去"这个动作用在启动破壁机那一次才成立。
+            MaterialState st = rulesV21.PlayMaterial(mc);
+            if (st == null) return false;
 
             // 表现层对齐：手牌重排、桌面素材建卡（PlayMaterial 只动规则状态）
             rulesV21.RebuildHand();
             rulesV21.SyncTableVisuals();
             rulesV21.SyncJuicer();
 
-            lastPlayed = mats + " 张素材上桌" + (spells > 0 ? "，" + spells + " 张法术生效" : "");
-            notice = lastPlayed + "　（出牌不消耗行动机会，行动机会还剩 " + rulesV21.actionPoints +
-                     " 次 —— 点「启动破壁机」才消耗）";
+            lastPlayed = "1 张素材上桌";
+            notice = "上桌：" + st.name + "（已自动选为启动目标）　出牌不消耗行动机会，还剩 "
+                     + rulesV21.actionPoints + " 次 —— 点「启动破壁机」才消耗";
+            return true;
         }
 
         /// <summary>

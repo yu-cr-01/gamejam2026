@@ -140,6 +140,22 @@ namespace GameJam.Prototype
         {
             if (o == null) return;
 
+            // ★ 先盖章再销毁：Object.Destroy 是**帧末**才真删的，这一帧剩下的时间里
+            //   这张卡还在 cardsRoot 下、还能被 GetComponentsInChildren 找到。
+            //   TableRulesV21 的残留清扫靠这个标记把"已经排好销毁"的卡排除掉，
+            //   否则每次重建手牌都会把刚销毁的卡报成残留（假警）。
+            GameObject go = o as GameObject;
+            if (go != null)
+            {
+                PlayCard pc = go.GetComponent<PlayCard>();
+                if (pc != null) pc.markedForDestroy = true;
+            }
+            else
+            {
+                PlayCard pc = o as PlayCard;
+                if (pc != null) pc.markedForDestroy = true;
+            }
+
             if (Application.isPlaying) Object.Destroy(o);
             else                       Object.DestroyImmediate(o);
         }

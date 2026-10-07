@@ -274,6 +274,7 @@ namespace GameJam.Prototype
             ClearTable();
             hand.Clear();
             handSpells.Clear();
+            coreCard = null;
 
             lastLog.Clear();
             lastSummary = "";
@@ -466,9 +467,25 @@ namespace GameJam.Prototype
 
             blade = new BladeState(mc.id, mc.name, mc.H, mc.V);
 
+            // ★ 记住"是哪一张卡当的核心"。
+            //   【为什么必须留这一份引用】桌面上那张刀片卡（BuildBladeCard）要照着它造 ——
+            //   而这张卡**已经从手牌里移除了**，再想找它就只能问 CoreCandidate()，
+            //   而那个方法问的是"手牌里第一张素材"，于是会答成另一张卡：
+            //   实机踩到的就是这一条 —— 核心是水（刀片 H=2 V=2），桌上摆出来的却是冰的卡面
+            //   （H5 D2 V3），玩家看到的是"面板写桌面 3 张、画面里 4 张，而且有两张一模一样的冰"。
+            //   留着引用，桌面上那张卡就一定是玩家真正选中的那张。
+            coreCard = mc;
+
             Debug.Log("[V21] 刀片核心 = " + mc.name + " → 刀片 H=" + blade.H + " V=" + blade.V +
                       "（该卡移出手牌，本关不再参与出牌）");
         }
+
+        /// <summary>
+        /// 当刀片核心的那张卡（玩家选中的那一张，已移出手牌）。
+        /// 没定核心时是 null —— 桌面上那张"候选刀片卡"走 CoreCandidate()。
+        /// 只由 <see cref="ChooseCore"/> 写、<see cref="BeginLevel"/> 清。
+        /// </summary>
+        public MaterialCard coreCard;
 
         /// <summary>有刀片核心吗（H&gt;0 才算 —— H=0 一进关卡就爆刀，等于没法玩）。</summary>
         public bool HasCore
@@ -897,6 +914,8 @@ namespace GameJam.Prototype
             // 规则一点都不写回旧状态。
             if (loop.turn != null) loop.turn.turnNumber = turnIndex;
 
+            DumpCardViews("RebuildHand 之前");
+
             TableSetup setup = loop.setup;
             setup.ClearHand();
 
@@ -948,15 +967,42 @@ namespace GameJam.Prototype
             // 有这一行就能立刻看出是"没建出来"还是"建完又被清掉了"。
             Debug.Log("[V21] 手牌已摆出：素材 " + hand.Count + " 张｜法术 " + handSpells.Count +
                       " 张 → 3D " + h.Count + " 张（" + HandText() + "）");
+
+            // ④ 残留清扫：手牌重建完还"没人认领"的卡，就是上一轮漏销毁的（见 SweepUnclaimedViews）
+            SweepUnclaimedViews("RebuildHand");
+
+            // ⑤ 自检（手牌侧）：3D 手牌张数必须 == 规则侧手牌张数
+            VerifyHandSync("RebuildHand");
+
+            DumpCardViews("RebuildHand 之后");
         }
 
         /// <summary>
-        /// 把桌面上还活着的素材摆出来。
+        /// 把桌面上还活着的素材摆出来 —— **以规则状态为准的权威同步**。
         /// 每次启动之后都要调 —— 形态变化 / D耗尽 / 献祭 / 溶解都会让素材离场。
+        ///
+        /// 【不变式（这个方法返回时必须成立）】
+        ///   cardsRoot 下"属于桌面的 3D 卡"与 table 里 `OnTable &amp;&amp; !removed` 的素材**一一对应**：
+        ///   多出来的销毁、少了的补建、位置重排。
+        ///   手牌那半边的不变式在 <see cref="RebuildHand"/> 里，两边各管一半。
+        ///
+        /// 【为什么必须"扫一遍场景"，不能只信 tableCards】
+        ///   用户报过"面板写桌面素材 3 张、画面里画着 4 张"。那第 4 张是**只存在于场景里**的残留：
+        ///   它不在 tableCards（所以按表遍历的同步永远看不见它），也不在手牌（ClearHand 也管不到它）。
+        ///   只按 tableCards 同步的写法天然看不见这种卡 —— 既不会销毁，也不会报警。
+        ///   所以这里第 ④ 步直接扫 cardsRoot 下所有 PlayCard：凡是不在手牌、
+        ///   不是刀片卡、也没有 TableMaterialCard 标签的，一律当残留销毁。
+        ///
+        /// 【为什么不"每帧清一遍重画"】
+        ///   那样会打断 ConsumeInto 的飞行动画（牌飞到罐口一半就被删），并且每帧重建贴图会抖。
+        ///   这里的调用点是"状态真的变了"的几处（出牌 / 启动 / 结束回合 / 下一回合 / 开一关），
+        ///   动画期间一次都不会被调。
         /// </summary>
         public void SyncTableVisuals()
         {
             if (cardsRoot == null) return;
+
+            DumpCardViews("SyncTableVisuals 之前");
 
             // ① 已经离场的：销毁 3D 卡（规则上它已经不在桌面了，留着会让人以为还能启动）
             for (int i = tableCards.Count - 1; i >= 0; i--)
@@ -965,7 +1011,12 @@ namespace GameJam.Prototype
                 if (t == null) { tableCards.RemoveAt(i); continue; }
                 if (t.state == null || t.state.removed || !t.state.OnTable)
                 {
-                    if (t.view != null) CardFactory.DestroySafe(t.view.gameObject);
+                    // ★ 正在飞向罐口的卡**不在这里销毁**：ConsumeInto 已经排好了自己的 Destroy，
+                    //   这里再 Destroy 一次会把"被机器吸进去"那一段动画整段砍掉
+                    //   （献祭吞噬/溶解看起来就成了"凭空消失"）。让它自己飞完再消失。
+                    if (t.view != null && !t.view.IsConsuming)
+                        CardFactory.DestroySafe(t.view.gameObject);
+
                     tableCards.RemoveAt(i);
                 }
             }
@@ -974,7 +1025,7 @@ namespace GameJam.Prototype
             for (int i = 0; i < table.Count; i++)
             {
                 MaterialState st = table[i];
-                if (st == null || st.removed) continue;
+                if (st == null || st.removed || !st.OnTable) continue;
                 if (FindTableCard(st) != null) continue;
 
                 // 先占左槽，左槽有人就占右槽；再多的往后错开（见 ③）
@@ -1000,7 +1051,15 @@ namespace GameJam.Prototype
                 t.view.SetHome(want, Vector3.zero);
             }
 
+            // ④ 残留清扫：场景里有、但谁都不认领的卡（第 4 张就是从这里抓出来的）
+            SweepUnclaimedViews("SyncTableVisuals");
+
+            // ⑤ 自检：数一遍"状态几张 / 场景几张"，对不上就打警告（回归时一眼看得见）
+            VerifyTableSync("SyncTableVisuals");
+
             ApplySelectionHighlight();
+
+            DumpCardViews("SyncTableVisuals 之后");
         }
 
         private TableMaterialCard FindTableCard(MaterialState st)
@@ -1008,6 +1067,282 @@ namespace GameJam.Prototype
             for (int i = 0; i < tableCards.Count; i++)
                 if (tableCards[i] != null && tableCards[i].state == st) return tableCards[i];
             return null;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  3D 卡清单 / 自检 / 残留清扫
+        //
+        //  【为什么要单独一节】"状态改了但画面没跟上"这一类 bug（面板 3 张、画面 4 张、
+        //  菜单上杵着上一关的卡）全都长得一样：**状态表里没有它，场景里却有它**。
+        //  按 tableCards 遍历的同步看不见这种卡，所以这里改成"以场景为准"数一遍 ——
+        //  这个清单既是权威同步的依据，也是数量对不上的报警内容。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>cardsRoot 下的 3D 卡分堆结果（<see cref="CollectCardViews"/> 填）。</summary>
+        private class CardViews
+        {
+            /// <summary>手牌（素材 + 法术，含正摆在投放区的那些）。</summary>
+            public readonly List<PlayCard> hand = new List<PlayCard>();
+
+            /// <summary>刀片卡 —— 它是这一局的友方单位，单独一份，不是桌面素材。</summary>
+            public readonly List<PlayCard> blade = new List<PlayCard>();
+
+            /// <summary>挂着桌面标签的（tableCards 认领的 + 标签还在但状态已离场的）。</summary>
+            public readonly List<TableMaterialCard> tagged = new List<TableMaterialCard>();
+
+            /// <summary>正在飞向罐口、到点自毁的（ConsumeInto）—— 不算残留，也不该被销毁。</summary>
+            public readonly List<PlayCard> flying = new List<PlayCard>();
+
+            /// <summary>谁都不认领的 —— **残留卡**，必须销毁。</summary>
+            public readonly List<PlayCard> unclaimed = new List<PlayCard>();
+        }
+
+        /// <summary>
+        /// 把 cardsRoot 下所有 PlayCard 过一遍并分堆。
+        ///
+        /// 【判据是"谁认领它"，不是"它叫什么名字"】
+        ///   手牌 ⊂ <see cref="TableSetup.hand"/>（RebuildHand 就是照着它摆的，权威同源）；
+        ///   刀片卡 = loop.bladeCard（它不在任何列表里，只能按引用认）；
+        ///   桌面卡 = 身上挂着 <see cref="TableMaterialCard"/>；
+        ///   剩下三类都不是 = 残留。
+        ///   按名字认会出错（卡面名字里带 D，D 一变名字就变，见 PlayCard.bindingMaterial 那段），
+        ///   所以这里一个名字判断都没有。
+        /// </summary>
+        private CardViews CollectCardViews()
+        {
+            CardViews v = new CardViews();
+            if (cardsRoot == null) return v;
+
+            PlayCard[] all = cardsRoot.GetComponentsInChildren<PlayCard>(true);
+
+            for (int i = 0; i < all.Length; i++)
+            {
+                PlayCard pc = all[i];
+
+                // 已经 Destroy、只是还没到帧末的卡在这里是"假 null"（Unity 的 == 重载认它），
+                // 刚被 DestroySafe 盖过章的也一样 —— 两种都必须跳过，
+                // 否则每帧都会把"刚销毁、还没到帧末"的卡当成残留再报一次。
+                if (pc == null || pc.markedForDestroy) continue;
+
+                if (loop != null && loop.setup != null && loop.setup.hand != null &&
+                    loop.setup.hand.Contains(pc))
+                {
+                    v.hand.Add(pc);
+                    continue;
+                }
+
+                if (loop != null && loop.bladeCard == pc) { v.blade.Add(pc); continue; }
+
+                if (pc.IsConsuming) { v.flying.Add(pc); continue; }
+
+                TableMaterialCard t = pc.GetComponent<TableMaterialCard>();
+                if (t != null) { v.tagged.Add(t); continue; }
+
+                v.unclaimed.Add(pc);
+            }
+
+            return v;
+        }
+
+        /// <summary>
+        /// 扫掉"谁都不认领"的残留 3D 卡。
+        ///
+        /// 【它抓的是哪一张】"面板写桌面 3 张、画面里画着 4 张"里的第 4 张：
+        ///   既不在 setup.hand（ClearHand 销毁不到它）、也没有桌面标签
+        ///   （SyncTableVisuals 的第①步也看不见它）—— 只有"扫场景"能抓到它。
+        ///   抓到就**销毁并打警告**：这是状态与画面不同步的直接证据，不该静默处理。
+        /// </summary>
+        private void SweepUnclaimedViews(string where)
+        {
+            if (cardsRoot == null) return;
+
+            CardViews v = CollectCardViews();
+
+            for (int i = 0; i < v.unclaimed.Count; i++)
+            {
+                PlayCard pc = v.unclaimed[i];
+                if (pc == null) continue;
+
+                Debug.LogWarning("[V21][残留] " + where + " 抓到一张没人认领的 3D 卡：「"
+                                 + pc.DisplayName + "」" + ViewPos(pc)
+                                 + " → 已销毁（它既不在手牌、也不是刀片卡、也没有桌面标签）");
+                CardFactory.DestroySafe(pc.gameObject);
+            }
+        }
+
+        /// <summary>
+        /// 自检（桌面侧）：table 里活着的素材张数必须 == 场景里挂着桌面标签的卡数。
+        ///
+        /// 【为什么值得常驻】数量对不上是"规则状态与 3D 卡不同步"最直接的信号，
+        ///   而这类 bug 只靠眼睛看截图很容易漏（多一张少一张都要数）。
+        ///   打的是 LogWarning：探针日志里带 Exception=0 的验收条件下也能一眼看到。
+        /// </summary>
+        private bool VerifyTableSync(string where)
+        {
+            if (cardsRoot == null) return true;
+
+            CardViews v = CollectCardViews();
+
+            int want = 0;
+            List<string> wantNames = new List<string>();
+            for (int i = 0; i < table.Count; i++)
+            {
+                MaterialState st = table[i];
+                if (st == null || st.removed || !st.OnTable) continue;
+                want++;
+                wantNames.Add(st.name);
+            }
+
+            // 同一个 state 被两张卡认领也是不同步（画面会比状态多）
+            int dup = 0;
+            for (int i = 0; i < v.tagged.Count; i++)
+            {
+                TableMaterialCard t = v.tagged[i];
+                if (t == null || t.state == null) continue;
+                for (int j = i + 1; j < v.tagged.Count; j++)
+                    if (v.tagged[j] != null && v.tagged[j].state == t.state) dup++;
+            }
+
+            bool ok = (v.tagged.Count == want) && (dup == 0) && (v.unclaimed.Count == 0);
+
+            if (!ok)
+            {
+                Debug.LogWarning("[V21][自检] " + where + " 桌面卡数量对不上："
+                                 + "状态里活着 " + want + " 张（" + Join(wantNames) + "）"
+                                 + "｜场景里挂着桌面标签 " + v.tagged.Count + " 张"
+                                 + (dup > 0 ? "（其中 " + dup + " 张是同一个素材的重复卡）" : "")
+                                 + "｜残留 " + v.unclaimed.Count + " 张"
+                                 + "｜手牌 view " + v.hand.Count + " 张"
+                                 + "｜桌上 view：" + DescribeTagged(v.tagged));
+            }
+
+            if (SyncDebug)
+            {
+                Debug.Log("[V21][自检] " + where + " 状态 " + want + " 张｜桌面标签 " + v.tagged.Count
+                          + "｜手牌 " + v.hand.Count + "｜刀片 " + v.blade.Count
+                          + "｜飞行中 " + v.flying.Count + "｜残留 " + v.unclaimed.Count);
+            }
+
+            return ok;
+        }
+
+        /// <summary>
+        /// 自检（手牌侧）：摆完手牌之后，setup.hand 的张数必须 == 规则侧手牌张数。
+        ///
+        /// 【两种错法都要抓】少一张 = "手牌数据在、3D 手牌少一张"；
+        ///   多一张 = 有卡没被销毁（ClearHand 漏了它，下一帧就会变成桌上的残留）。
+        /// </summary>
+        private bool VerifyHandSync(string where)
+        {
+            if (loop == null || loop.setup == null) return true;
+
+            int want = hand.Count + handSpells.Count;
+            int got  = loop.setup.hand != null ? loop.setup.hand.Count : -1;
+
+            // setup.hand 里的空引用（正在销毁的卡）不算
+            if (got > 0)
+            {
+                int nulls = 0;
+                for (int i = 0; i < loop.setup.hand.Count; i++)
+                    if (loop.setup.hand[i] == null) nulls++;
+                got -= nulls;
+            }
+
+            if (got == want)
+            {
+                if (SyncDebug)
+                    Debug.Log("[V21][自检] " + where + " 手牌 状态 " + want + " 张｜场景 " + got + " 张 ✓");
+                return true;
+            }
+
+            Debug.LogWarning("[V21][自检] " + where + " 手牌数量对不上："
+                             + "规则侧 " + want + " 张（素材 " + hand.Count + "｜法术 " + handSpells.Count
+                             + "：" + HandText() + "）｜3D 手牌 " + got + " 张");
+            return false;
+        }
+
+        /// <summary>
+        /// 给探针 / HUD 用的一句话自检摘要：状态几张、场景几张、手牌几张。
+        /// 口径和 <see cref="SyncTableVisuals"/> 末尾那句自检完全一样（同一个 CollectCardViews），
+        /// 所以它显示"✓"就说明两边一一对应；显示"★ 不一致"就是抓到了残留。
+        /// </summary>
+        public string ViewSyncSummary()
+        {
+            CardViews v = CollectCardViews();
+
+            int want = LiveTableCount();
+            bool ok = (v.tagged.Count == want) && (v.unclaimed.Count == 0);
+
+            return (ok ? "✓ 状态与画面一致　" : "★ 状态与画面对不上　")
+                 + "桌面状态 " + want + " 张｜桌面 view " + v.tagged.Count + " 张"
+                 + "｜手牌 view " + v.hand.Count + " 张（规则侧 " + (hand.Count + handSpells.Count) + " 张）"
+                 + "｜残留 " + v.unclaimed.Count + " 张";
+        }
+
+        /// <summary>「名字（位置）」—— 日志里认卡用，位置是判断"它是不是飘在桌外"的关键。</summary>
+        private static string ViewPos(PlayCard pc)
+        {
+            if (pc == null) return "";
+            Vector3 p = pc.transform.position;
+            return "（pos " + p.x.ToString("0.00") + ", " + p.y.ToString("0.00") + ", " + p.z.ToString("0.00") + "）";
+        }
+
+        private string DescribeTagged(List<TableMaterialCard> tagged)
+        {
+            List<string> parts = new List<string>();
+            for (int i = 0; i < tagged.Count; i++)
+            {
+                TableMaterialCard t = tagged[i];
+                if (t == null || t.view == null) { parts.Add("（空）"); continue; }
+
+                string state = (t.state == null)
+                    ? "state=null"
+                    : (t.state.removed ? "已离场" : (t.state.OnTable ? "在桌面" : "不在桌面"));
+
+                parts.Add(t.view.DisplayName + "[" + state + "]");
+            }
+            return parts.Count > 0 ? string.Join("、", parts.ToArray()) : "（无）";
+        }
+
+        private static string Join(List<string> list)
+        {
+            return list.Count > 0 ? string.Join("、", list.ToArray()) : "（空）";
+        }
+
+        /// <summary>
+        /// 3D 卡清单的**逐张诊断**输出开关：`DSH_V21_SYNC=1` 打开（默认关）。
+        ///
+        /// 【为什么不直接删掉这些诊断】下次再出"画面里多一张卡"时，
+        ///   打开这个开关跑一遍，日志里就能看出是哪一步开始多出来的 ——
+        ///   比重新加一遍打印快得多，而且它默认不出声，不会污染正常日志。
+        /// </summary>
+        private static readonly bool SyncDebug =
+            System.Environment.GetEnvironmentVariable("DSH_V21_SYNC") == "1";
+
+        /// <summary>把当前所有 3D 卡逐张打进日志（只在 <see cref="SyncDebug"/> 打开时出声）。</summary>
+        private void DumpCardViews(string where)
+        {
+            if (!SyncDebug || cardsRoot == null) return;
+
+            CardViews v = CollectCardViews();
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            sb.Append("[V21][清单] ").Append(where)
+              .Append("　状态：桌面 ").Append(LiveTableCount()).Append(" 张｜手牌 ").Append(hand.Count)
+              .Append(" 素材 + ").Append(handSpells.Count).Append(" 法术")
+              .Append("｜tableCards ").Append(tableCards.Count).Append(" 条");
+
+            sb.Append("\n　手牌 view ").Append(v.hand.Count).Append(" 张：");
+            for (int i = 0; i < v.hand.Count; i++) sb.Append('「').Append(v.hand[i].DisplayName).Append('」').Append(ViewPos(v.hand[i]));
+
+            sb.Append("\n　桌面标签 ").Append(v.tagged.Count).Append(" 张：").Append(DescribeTagged(v.tagged));
+            for (int i = 0; i < v.tagged.Count; i++)
+                if (v.tagged[i] != null && v.tagged[i].view != null) sb.Append(ViewPos(v.tagged[i].view));
+
+            sb.Append("\n　刀片 ").Append(v.blade.Count).Append(" 张｜飞行中 ").Append(v.flying.Count)
+              .Append(" 张｜**残留 ").Append(v.unclaimed.Count).Append(" 张**：");
+            for (int i = 0; i < v.unclaimed.Count; i++) sb.Append('「').Append(v.unclaimed[i].DisplayName).Append('」').Append(ViewPos(v.unclaimed[i]));
+
+            Debug.Log(sb.ToString());
         }
 
         /// <summary>
@@ -1274,7 +1609,14 @@ namespace GameJam.Prototype
             return null;
         }
 
-        /// <summary>清掉桌面（重开一关 / 退关卡 / 回开场时用）。</summary>
+        /// <summary>
+        /// 清掉桌面（重开一关 / 退关卡 / 回开场时用）。
+        ///
+        /// 【为什么末尾还要扫一遍残留】菜单类阶段是"桌面上不该有牌"的时刻：
+        ///   表里认领的那几张这张方法已经销毁了，但**没被任何列表认领**的残留
+        ///   （用户第二次截图里那张杵在牌组选择界面上的卡）只有扫场景才抓得到。
+        ///   这里销毁的是"残留"，手牌与刀片卡不归它管（刀片卡由 KillBladeCard 负责）。
+        /// </summary>
         public void ClearTable()
         {
             for (int i = 0; i < tableCards.Count; i++)
@@ -1285,6 +1627,8 @@ namespace GameJam.Prototype
             table.Clear();
             selected = null;
             selectedAuto = false;
+
+            SweepUnclaimedViews("ClearTable");
         }
 
         // ══════════════════════════════════════════════════════════════

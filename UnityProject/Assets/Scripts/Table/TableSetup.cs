@@ -324,11 +324,49 @@ namespace GameJam.Prototype
         /// <summary>
         /// 把槽位名字刻在桌面上（每个槽靠玩家这一侧）。
         /// 两个槽收的东西不一样，不写清楚玩家会往法术槽里拖素材。
+        ///
+        /// 【v2.1 与旧流程的字样不一样】见 <see cref="RefreshSlotLabels"/> ——
+        /// 这两个槽在 v2.1 里是"上桌位 / 附魔位"（落槽即生效），
+        /// 在旧流程里才是"法术槽 / 素材槽"（先摆好、再按确认）。所以这里只记住父节点，
+        /// 真正的字样由 RefreshSlotLabels 按当前模式写。
         /// </summary>
         private void BuildSlotLabels(Transform parent)
         {
+            slotLabelsParent = parent;
+            RefreshSlotLabels();
+        }
+
+        /// <summary>槽位名字的 3D 文字对象（要按规则模式重建，所以留一份引用）。</summary>
+        private readonly List<GameObject> slotLabels = new List<GameObject>();
+        private Transform slotLabelsParent;
+
+        /// <summary>
+        /// 按**当前规则模式**重写两个槽的名字。
+        ///
+        /// 【v2.1 为什么必须换字样】这两个槽在 v2.1 里已经不是"待投放区"了 ——
+        ///   它们是两个**入口**：素材拖进去 = 上桌、法术拖进去 = 附魔，落槽即生效。
+        ///   还写着"法术槽 / 素材槽"的话，玩家会照旧流程的意思去用
+        ///   （"先放进去，再按确认"），而那个中间态在 v2.1 里已经不存在了 ——
+        ///   名字和行为不一致，是这类"操作了但状态没跟上"的温床。
+        ///   旧流程（UseRulesV21 = false）保持原来的字样与行为，一个字都不动。
+        ///
+        /// 【为什么重建而不是改字】名字是烤出来的 TextMesh 贴图，
+        ///   重建最省事、也不会和旧对象的材质串味。
+        ///   调用点在开始一关时（TableTurnLoop.StartLevelWith）——
+        ///   设置面板里改模式是"重进关卡才生效"，这个名字跟规则走同一条时间线。
+        /// </summary>
+        public void RefreshSlotLabels()
+        {
+            for (int i = slotLabels.Count - 1; i >= 0; i--)
+                if (slotLabels[i] != null) CardFactory.DestroySafe(slotLabels[i]);
+            slotLabels.Clear();
+
+            if (slotLabelsParent == null || board == null) return;
+
             // 顺序跟着槽的下标走：下标 0 在左、1 在右
-            string[] names = { "法　术 槽", "素　材 槽" };
+            string[] namesV21    = { "附　魔 位", "上　桌 位" };
+            string[] namesLegacy = { "法　术 槽", "素　材 槽" };
+            string[] names = TableSettings.UseRulesV21 ? namesV21 : namesLegacy;
 
             for (int i = 0; i < board.SlotCount && i < names.Length; i++)
             {
@@ -336,13 +374,14 @@ namespace GameJam.Prototype
                            + new Vector3(0f, 0f, -(SlotSizeZ * 0.5f + 0.055f));
 
                 GameObject go = new GameObject("SlotLabel" + i);
-                go.transform.SetParent(parent, false);
+                go.transform.SetParent(slotLabelsParent, false);
                 go.transform.position = at;
 
                 // localZ = 0。这几张桌面文字只能落在负半区或原点 ——
                 // 正的 localZ 完全不渲染，原因见 TableChoiceRig 里那段说明。
                 CardFactory.AddText(go.transform, names[i], 0f, 0.0072f,
                                     new Color(0.60f, 0.56f, 0.50f), 0.0022f);
+                slotLabels.Add(go);
             }
         }
 

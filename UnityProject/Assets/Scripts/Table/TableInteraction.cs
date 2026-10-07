@@ -289,17 +289,19 @@ namespace GameJam.Prototype
         /// 左键按下：分两种情况。
         ///
         ///   点在**桌面素材**上 → 选它当"启动破壁机"的目标（正文 §三.2：启动要选一张桌面素材）
-        ///   点在**手牌法术**上 → 直接打出（正文 §2.1：法术打出无代价、不消耗行动机会）
-        ///   点在其他牌（手牌素材）→ 拿起拖动，走原来那条路
+        ///   点在**手牌**上（素材 / 法术）→ 先把它拿起来，**出牌在松手那一下判**
         ///
-        /// 【为什么这两件事必须在这里做】
-        ///   桌面素材的"被点中"和法术的"被打出"都是**鼠标事件**，而鼠标状态只有这一处权威
+        /// 【为什么手牌要等到松手】按下那一刻还不知道这一下是"单击"还是"往槽里拖"：
+        ///   在按下就出牌的话，拖进「上桌位 / 附魔位」这两条入口当场作废
+        ///   （牌已经没了，还拖什么）。所以三条入口的统一判决在
+        ///   <see cref="DropCard"/> 里：点 = 出牌，落槽 = 出牌，拖到空地 = 回手牌。
+        ///
+        /// 【桌面素材为什么可以按下就选中】它不是"打牌"，只是选个目标，
+        ///   没有第二种手势要区分，早一帧生效手感更跟手。
+        ///
+        /// 【为什么鼠标分派必须在这一处】鼠标状态只有这一处权威
         ///   （见 HandleCameraAndInspect 顶部那段说明）。放去 HUD 或 TableTurnLoop 里，
         ///   就得再读一次 Input.GetMouseButtonDown，迟早出现"点一下触发两件事"。
-        ///
-        /// 【为什么不做成"拖到某个区域再确认"】
-        ///   桌面素材已经在桌面上了（不是从手牌拖过去），再要求拖一次是多余的动作；
-        ///   法术没有桌面位置，拖它也没有落点。所以这两件事用"单击"，其余的照旧拖拽。
         /// </summary>
         private void HandleLeftClick(Ray ray, bool mayDrag)
         {
@@ -307,41 +309,31 @@ namespace GameJam.Prototype
 
             PlayCard hit = Hovered;
 
-            // ① 桌面素材 → 选目标　② 手牌法术 → 附魔（两件事都不受 CanInteract 限制，见路由里说明）
+            // ① 桌面素材 → 选为启动目标（按下即生效）
             if (RouteCardClick(hit)) return;
 
-            // 剩下的照旧进入拖拽：抬起时再按位移判断这一下是"点"还是"拖"
-            // （单击上桌那条路在 EndDrag 里，见 TryClickPlace 的说明）
+            // ② 手牌（素材 / 法术）→ 拿起来拖动；是"点"还是"拖"由松手时的位移判（见 DropCard）
             if (mayDrag && hit != null) BeginDrag(hit, ray);
         }
 
         /// <summary>
-        /// 单击一张卡的分派：桌面素材 → 选为启动目标；手牌法术 → 直接附魔。
+        /// 单击一张卡的**按下**分派：桌面素材 → 选为启动目标。
         /// **返回 true 表示这一下已经被消费掉了**，调用方不该再做别的。
         ///
-        /// 【为什么单独抽出来】玩家那条（HandleLeftClick）和探针那条（ClickCard）
-        ///   必须做**同一件事**：两份分派代码迟早会出现"探针过了、玩家那条没过"。
-        ///   剩下那种"既不是桌面卡也不是法术"的卡怎么办，交给调用方 ——
-        ///   玩家那条是"开始拖"，探针那条是"直接上桌"。
+        /// 【手牌为什么在这里返回 false】手牌的"打出去"要等松手才能判（点 / 落槽两种手势），
+        ///   统一在 <see cref="DropCard"/> → <see cref="TableTurnLoop.PlayCardV21"/> 那一条路上。
+        ///   以前这里是"点手牌法术 → 立刻附魔"，和 EndDrag 那条"拖素材进槽 → 摆着等确认"
+        ///   各记各的状态，同一次操作被两边碰过就会分叉（规则说上了桌、3D 卡还在手牌位）。
         /// </summary>
         private bool RouteCardClick(PlayCard hit)
         {
             TableRulesV21 rules = turnLoop != null ? turnLoop.rulesV21 : null;
             if (rules == null || !TableSettings.UseRulesV21 || hit == null) return false;
 
-            // ① 桌面素材 → 选中当目标（不受 CanInteract 限制：任何时候都该能看目标是谁）
+            // 桌面素材 → 选中当目标（不受 CanInteract 限制：任何时候都该能看目标是谁）
             if (rules.IsTableCard(hit))
             {
                 rules.OnTableCardClicked(hit);
-                return true;
-            }
-
-            // ② 手牌法术 → 直接打出。
-            //    ★ 但开局准备阶段不行：那时候还没进关卡（正文 §2.5 的刀片核心都还没定），
-            //      在选刀片界面上把法术打掉，等于开局前就先附了一次魔 —— 规则上说不通。
-            if (rules.IsHandSpellCard(hit) && turnLoop.phase == TablePhase.Select)
-            {
-                rules.OnSpellCardClicked(hit);
                 return true;
             }
 
@@ -390,15 +382,69 @@ namespace GameJam.Prototype
             // 【为什么在抬起时才判】按下那一刻没法知道玩家想点还是想拖：
             //   按下就上桌的话，拖拽这条路当场作废（牌已经不在手上了）。
             //   所以按下照旧进拖拽，抬起时量**从按下到抬起的鼠标位移**：
-            //   ≤ ClickSlack 像素 = 单击，> 就是拖拽。两条路**互斥**——
-            //   单击这条直接 return（不走投放区落位），拖拽那条根本不进 TryClickPlace，
-            //   所以不会出现"点一下上桌两张"或者"拖完松手又当单击再放一次"。
+            //   ≤ ClickSlack 像素 = 单击，> 就是拖拽。
             bool isClick = ((Vector2)Input.mousePosition - leftPressPos).magnitude <= ClickSlack;
             pressedCard = null;
 
-            if (isClick && TryClickPlace(card)) return;
+            DropCard(card, isClick);
+        }
 
-            int slot = board.FindDropTarget(card.transform.position, snapSlackX, snapSlackZ);
+        // ── 松手：这张牌该去哪（唯一判决）──────────────────────────────
+
+        /// <summary>
+        /// 松手时"这张牌该去哪"的**唯一判决**。返回 true = 这一下已经处理完了。
+        ///
+        /// 【v2.1 只认一件事：这张牌有没有被"打出去"】
+        ///   · 单击　　　　　　　　→ 打出去
+        ///   · 落进上桌位 / 附魔位 → 打出去（**落槽即结算**）
+        ///   · 拖到空地上　　　　　→ 回手牌原位（不算出牌）
+        ///   前两条走的是同一个函数 <see cref="TableTurnLoop.PlayCardV21"/>，
+        ///   所以"点手牌"和"拖进槽"效果逐字一致 —— 这就是那个
+        ///   "牌散开浮着、面板张数对不上"的根治点：
+        ///   原来落槽那条只是 board.Place + Stage（把牌摆在槽上等确认），
+        ///   点击那条却会真的出牌，两条路各记各的状态，同一次操作被两边碰过就分叉。
+        ///
+        /// 【落槽即结算 ⇒ 槽不会被占住】这里**不再** board.Place：
+        ///   牌一进槽就生效（素材上桌 → 3D 卡由 SyncTableVisuals 摆到桌面槽位；
+        ///   法术附魔 → 飞进罐口），槽位始终是空的，所以不存在"槽已满"这种状态。
+        ///
+        /// 【旧流程一个字都不改】投放区仍然是"先摆好、再按确认"的那个中间态。
+        /// </summary>
+        public bool DropCard(PlayCard card, bool isClick)
+        {
+            if (card == null) return false;
+
+            int slot = (board != null)
+                ? board.FindDropTarget(card.transform.position, snapSlackX, snapSlackZ)
+                : -1;
+
+            // ══ v2.1：点 / 落槽 = 出牌 ══════════════════════════════════
+            if (turnLoop != null && turnLoop.V21)
+            {
+                // 放错了槽（素材拖进附魔位、法术拖进上桌位）：说清楚，牌回手牌原位
+                if (slot >= 0 && !turnLoop.CanStageInto(slot, card))
+                {
+                    card.ReturnHome();
+                    turnLoop.RejectSlot(card, slot);
+                    return true;
+                }
+
+                if (isClick || slot >= 0)
+                {
+                    if (turnLoop.PlayCardV21(card)) return true;
+
+                    // 打不出去（阶段不对 / 已经不是手牌了）→ 至少别把它丢在半路
+                    card.ReturnHome();
+                    return true;
+                }
+
+                // 拖到空地上 = 反悔，回手牌原位
+                card.ReturnHome();
+                turnLoop.Release(card);
+                return true;
+            }
+
+            // ══ 旧流程：投放区，原样保留 ══════════════════════════════════
 
             // 槽位有归属（素材槽 / 法术槽），放错了直接退回手牌并说明原因 ——
             // 让牌停在错误的槽里，玩家会以为放对了。
@@ -406,87 +452,47 @@ namespace GameJam.Prototype
             {
                 card.ReturnHome();
                 turnLoop.RejectSlot(card, slot);
-                return;
+                return true;
             }
 
-            if (slot >= 0 && board.Place(slot, card))
+            if (slot >= 0 && board != null && board.Place(slot, card))
             {
                 card.SnapTo(board.SlotPosition(slot));
 
                 // 进了投放区 → 只是"摆好"，还没投出去。真正落子在 HUD 的确认键上。
                 if (turnLoop != null) turnLoop.Stage(card);
+                return true;
             }
-            else
-            {
-                card.ReturnHome();
 
-                // 拖回手牌等于反悔，把待投放状态一起撤掉
-                if (turnLoop != null) turnLoop.Release(card);
-            }
-        }
+            card.ReturnHome();
 
-        // ── 单击上桌（v2.1）────────────────────────────────────────────
-
-        /// <summary>
-        /// 单击一张"手里的 / 还压在投放区的"素材 = **直接上桌**。
-        /// 返回 true 表示这一下已经被消费掉（调用方别再走投放区落位那套）。
-        ///
-        /// 【为什么要这条路】v2.1 原来的链路是"拖到投放区 → 按「放置到桌面」→
-        ///   再点桌上的牌选目标"，少一步就卡死。用户就是卡在这里：
-        ///   他点的那张盐还在投放区、桌面素材 0 张，面板却写着"先在桌面上点一张素材
-        ///   当启动目标"—— 桌面上一张都没有，点空气当然没反应（原话"点了怎么没用？"）。
-        ///
-        /// 【为什么走 Stage + Confirm，而不是自己调 PlayMaterial】
-        ///   这两个就是 HUD 那个「放置到桌面」按钮按下去做的事，一个字都不差：
-        ///   规则层的事（PlayMaterial、把新上桌的自动选成启动目标、重建手牌与桌面卡）
-        ///   全在 Confirm 里面。自己拼一套的话，"点一下上桌"和"按按钮上桌"
-        ///   迟早会不一样 —— 那正是这类 bug 的老家。
-        ///   顺带：桌面上已经有目标时会被新上桌这张顶掉（Select(st, true) 的语义），
-        ///   和按按钮完全一致。
-        ///
-        /// 【投放区里那张】它本来就在 staged 里（Stage 幂等，重复调用直接返回），
-        ///   所以这一下等于"替玩家按了「放置到桌面」"，而且上桌后自动成为启动目标 ——
-        ///   正是用户想让它发生的事。
-        ///
-        /// 【只在 v2.1 生效】旧流程的上桌是"投进罐子"（另一套语义），一行都不动。
-        /// </summary>
-        private bool TryClickPlace(PlayCard card)
-        {
-            if (card == null || turnLoop == null) return false;
-            if (!turnLoop.V21) return false;                          // 旧流程不动
-            if (turnLoop.phase != TablePhase.Select) return false;    // 结算 / 关卡结束这些阶段不接
-
-            TableRulesV21 rules = turnLoop.rulesV21;
-            if (rules == null) return false;
-
-            // 只有"还在手里 / 还在投放区"的素材走这条路：
-            //   桌面上的卡已经被 PlayMaterial 移出手牌（FindHandMaterial 找不到），
-            //   法术在 RouteCardClick 里就处理掉了。
-            if (rules.FindHandMaterial(card) == null) return false;
-
-            turnLoop.Stage(card);     // 幂等：已经在投放区的卡直接返回
-            turnLoop.Confirm();       // = 「放置到桌面」
-
-            Debug.Log("[V21] 单击上桌：" + card.DisplayName
-                      + "｜桌面素材 " + rules.LiveTableCount() + " 张"
-                      + "｜启动目标 " + (rules.selected != null ? rules.selected.name : "（无）"));
+            // 拖回手牌等于反悔，把待投放状态一起撤掉
+            if (turnLoop != null) turnLoop.Release(card);
             return true;
         }
 
+        // ── 单击 = 出牌（v2.1）────────────────────────────────────────
+
         /// <summary>
-        /// 把"鼠标单击这张卡"整条路走一遍 —— **自动试玩探针用**。
+        /// 把"鼠标单击这张卡"整条路走一遍。
         ///
-        /// 【为什么需要它】探针不模拟鼠标输入，而"点一下能不能上桌"恰恰是这一轮要验的
-        ///   东西：走一遍和玩家**完全相同**的分派（桌面卡 → 选目标；手牌法术 → 附魔；
-        ///   手牌素材 / 投放区待放置 → 单击上桌）。它不新增任何规则，
-        ///   只是把"从鼠标射线认出是哪张卡"这一步换成"由探针指定"。
+        /// 【玩家那条和探针那条必须做同一件事】玩家走 HandleLeftClick（按下）+ EndDrag（松手）；
+        ///   探针不能模拟鼠标，只能把"从鼠标射线认出是哪张卡"换成"由探针指定哪张"，
+        ///   剩下的一步不差：
+        ///     桌面卡 → 选目标（RouteCardClick）
+        ///     手牌   → 松手判决 DropCard(card, isClick:true) → TableTurnLoop.PlayCardV21
+        ///   —— 和"把牌拖进上桌位 / 附魔位"是同一个函数。
         /// </summary>
         public bool ClickCard(PlayCard card)
         {
             if (PhysicsOn || card == null) return false;
 
             if (RouteCardClick(card)) return true;
-            return TryClickPlace(card);
+
+            // 旧流程不动（它的"点一下"没有语义，出牌走投放区 + 确认）
+            if (turnLoop == null || !turnLoop.V21) return false;
+
+            return DropCard(card, true);
         }
 
         // ── 卡槽高亮 ──────────────────────────────────────────────────
