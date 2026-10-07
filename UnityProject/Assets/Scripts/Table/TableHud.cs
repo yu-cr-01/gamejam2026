@@ -676,13 +676,16 @@ namespace GameJam.Prototype
         // ══════════════════════════════════════════════════════════════
         //  关卡窗口（B）
         //
-        //  【用户要的是什么】"最好单独开一个窗口给我显示关卡" —— 桌上那排 3D 关卡卡
-        //   离得远、字小、还占着桌面；窗口里一屏能看全：名字 / 目标分 / 状态，
-        //   点一行就选中。**3D 那排卡照旧保留**，两条路并存（点卡那条交互一行没动）。
+        //  【用户要的是什么】最早是"最好单独开一个窗口给我显示关卡" —— 桌上那排 3D 关卡卡
+        //   离得远、字小、还占着桌面；窗口里一屏能看全：名字 / 目标分 / 状态，点一行就选中。
+        //   后来用户直接拍板："不要关卡手牌了，就放一个 ui 就行" —— 于是 v2.1 里
+        //   这个窗口从"和 3D 卡并存的第二条路"变成**唯一**的选关方式
+        //   （TableSettings.LevelCardsOnTable；旧流程那排卡一行没动）。
         //
-        //  【和现有确认流程的关系】点一行 = `choiceRig.SelectDeck(i)`（和点 3D 卡
-        //   完全同一个入口，所以金色当前关标记、高亮都跟着走），确认键 =
-        //   `turnLoop.ConfirmLevelSelect()`（原流程）。没有另开一条捷径。
+        //  【和现有确认流程的关系】点一行 = `choiceRig.SelectDeck(i)`（和从前点 3D 卡
+        //   完全同一个入口，所以"当前关卡"的高亮、已选文案都跟着走），确认键 =
+        //   `turnLoop.ConfirmLevelSelect()`（原流程）。没有另开一条捷径 ——
+        //   v2.1 只是**不建那排卡**，选择和确认这两件事一条都没绕过。
         // ══════════════════════════════════════════════════════════════
 
         /// <summary>
@@ -753,7 +756,10 @@ namespace GameJam.Prototype
             }
             GUILayout.EndHorizontal();
 
-            GUILayout.Label("点一行选中它，再按下面的确认键 —— 和点桌上那排关卡卡是同一条路。", dimPanel);
+            GUILayout.Label(TableSettings.LevelCardsOnTable
+                                ? "点一行选中它，再按下面的确认键 —— 和点桌上那排关卡卡是同一条路。"
+                                : "点一行选中它，再按下面的确认键 —— 关卡就在这个窗口里选。",
+                            dimPanel);
             GUILayout.Space(4f);
 
             levelWindowScroll = GUILayout.BeginScrollView(levelWindowScroll, false, false,
@@ -798,8 +804,7 @@ namespace GameJam.Prototype
             if (GUILayout.Button("进入这一关", btn, GUILayout.ExpandWidth(true), GUILayout.Height(38f)))
             {
                 GUI.FocusControl(null);
-                turnLoop.ConfirmLevelSelect();
-                if (!turnLoop.IsLevelSelect) levelWindowOpen = false;   // 确认成功就把窗口收起来
+                ConfirmLevelInWindow();
             }
             GUI.enabled = oldEnabled;
             GUILayout.EndHorizontal();
@@ -815,8 +820,15 @@ namespace GameJam.Prototype
             EndPanelFrame(levelWindowDrag, box, prevMatrix);
         }
 
-        /// <summary>窗口里点了一行：选中它，并让桌上那排关卡卡的选中态跟着走。</summary>
-        private void PickLevelInWindow(int i)
+        /// <summary>
+        /// 窗口里点了一行：选中它，并让 rig 里的选中态跟着走。
+        ///
+        /// 【为什么是 public】自动试玩探针要验"点一行能选中"这件事，
+        ///   而它点不了 IMGUI 的按钮。让它调**同一个方法**（而不是自己去改
+        ///   levelWindowPick / SelectDeck），探针验的就真是按钮走的那条路 ——
+        ///   这个工程在这上面踩过坑：探针绕开鼠标那条路，界面建好了却不响应都测不出来。
+        /// </summary>
+        public void PickLevelInWindow(int i)
         {
             levelWindowPick = i;
 
@@ -825,6 +837,26 @@ namespace GameJam.Prototype
             if (turnLoop.IsLevelSelect && turnLoop.choiceRig != null)
                 turnLoop.choiceRig.SelectDeck(i);
         }
+
+        /// <summary>
+        /// 窗口底部「进入这一关」按下去要做的事 —— 按钮和探针共用这一个入口。
+        ///
+        /// 【为什么确认成功就把窗口收起来】这一屏是"翻关卡"，
+        ///   进了牌桌再挡着牌就碍事了（实机截图里它正好杵在桌子中间）。
+        /// </summary>
+        public void ConfirmLevelInWindow()
+        {
+            if (turnLoop == null) return;
+
+            turnLoop.ConfirmLevelSelect();
+            if (!turnLoop.IsLevelSelect) levelWindowOpen = false;
+        }
+
+        /// <summary>关卡窗口开着没有（探针用 —— "进关卡界面自动弹窗"这件事得能验证）。</summary>
+        public bool LevelWindowOpen { get { return levelWindowOpen; } }
+
+        /// <summary>关卡窗口里当前点中的是第几关（-1 = 还没点；探针用）。</summary>
+        public int LevelWindowPick { get { return levelWindowPick; } }
 
         /// <summary>一行末尾的状态文字。</summary>
         private string LevelStatusText(int i)
@@ -1007,8 +1039,9 @@ namespace GameJam.Prototype
         // ══════════════════════════════════════════════════════════════
 
         /// <summary>
-        /// 关卡界面：桌上一排关卡卡，点一张再确认。
-        /// 和牌组/刀片那两个环节同一个形态 —— 都是"桌上一排大卡点一张"。
+        /// 关卡界面：v2.1 = 桌上一张卡都没有，选关全在关卡窗口里做；
+        /// 旧流程 = 桌上一排关卡卡，点一张再确认。
+        /// 牌组 / 刀片那两个环节照旧是"桌上一排大卡点一张"，文案各归各的。
         /// </summary>
         private void DrawLevelSelectPanel()
         {
@@ -1030,8 +1063,14 @@ namespace GameJam.Prototype
                 picked = turnLoop.levels[sel].name;
 
             GUI.Label(new Rect(x + 18f, y + 44f, w - 240f, 24f), "已选：" + picked, bodyPanel);
+
+            // ★ 指路的话必须和桌面上真实存在的东西对上：卡已经没有了还写"点桌上的一张卡"，
+            //   玩家只会去一张空桌子上找（见 TableSettings.LevelCardsOnTable）。
             GUI.Label(new Rect(x + 18f, y + 70f, w - 240f, 44f),
-                      "点桌上的一张关卡卡选中它，再按确认。\n金色那张是你现在所在的关卡。", dimPanel);
+                      TableSettings.LevelCardsOnTable
+                          ? "点桌上的一张关卡卡选中它，再按确认。\n金色那张是你现在所在的关卡。"
+                          : "在关卡窗口里点一行选中它，再按确认。\n带「▸ 当前关卡」的那一行是你现在所在的关卡。",
+                      dimPanel);
 
             if (!string.IsNullOrEmpty(turnLoop.notice))
                 GUI.Label(new Rect(x + 18f, y + 120f, w - 240f, 24f), turnLoop.notice, dimPanel);

@@ -309,18 +309,19 @@ namespace GameJam.Prototype
         /// <summary>
         /// 级联列的 **x 锚点**（整列所在的那条竖线上的卡心）。
         ///
-        /// 【为什么是 +0.53】卡宽 0.24 → 这一列占 x ∈ [+0.41, +0.65]，四条边都是量出来的：
-        ///   · 左缘 0.41：让开「上　桌 位」框 —— 框的右缘在 x = +0.3575
-        ///     （槽心 0.23 + 半宽 SlotSizeX/2 = 0.1275），还剩 5.25 厘米空档，
-        ///     既压不到框、也压不到框上的字（槽名牌在框外侧、更靠玩家）；
-        ///   · 再往里也不行：刀片卡的右缘在 x = +0.12（刀片位在桌心，按正文不许动），
+        /// 【为什么是 +0.53】卡宽 0.24 → 这一列占 x ∈ [+0.41, +0.65]，三条边都是量出来的：
+        ///   · 左缘 0.41：让开刀片卡 —— 刀片卡的右缘在 x = +0.12（刀片位在桌心，按正文不许动），
         ///     级联压在刀片上就是上一版那个 bug；
         ///   · 右缘 0.65：破壁机整机在 x = 0.72、剪影半宽约 0.26 → 机器的左缘约 0.46。
         ///     ★ 这里**故意允许 x 上和机器重叠**：机器是立着的（高 0.53），
-        ///       桌面视角里它挡的是 z ≥ 0.26 那一片屏幕，而级联整列都在 z ≤ 0.23 之内、
+        ///       桌面视角里它挡的是 z ≥ 0.26 那一片屏幕，而级联整列都在 z ≤ 0.19 之内、
         ///       投影落在机器下沿**以下**，所以两边的画面不打架（见 TableCascadeFirstZ）。
+        ///
+        /// ★ public 是给 <see cref="TableSetup.BuildSlots"/> 用的：**「上 桌 位」的框就摆在这一列上**
+        ///   （框心 = 级联末端的落点），所以那三个字自然落在整列级联的**下方**。
+        ///   坐标只有一个来源，槽位那边不许再抄一个 0.53。
         /// </summary>
-        private const float TableCascadeX = 0.53f;
+        public const float TableCascadeX = 0.53f;
 
         /// <summary>
         /// 级联**第一张**（离玩家最远那张）的 z。整列从这里朝玩家方向长。
@@ -355,14 +356,18 @@ namespace GameJam.Prototype
         private const float TableCascadeStepMin = 0.065f;
 
         /// <summary>
-        /// 级联**最靠玩家那张**的卡心 z 下限。
+        /// 级联**最靠玩家那张**的卡心 z 下限 —— 也就是**素材槽（「上 桌 位」）框心的 z**。
         ///
         /// 【0.20 是怎么来的】手牌那一排的远沿在 z = −0.4125
         ///   （TableTurnLoop.HandZ −0.58 + 卡深一半 0.1675），再留 4.5 厘米空档
         ///   → 级联最后一卡的近缘不低于 −0.3675 → 卡心不低于 −0.20。
         ///   手牌一多，最靠玩家那张也不能压到手上那一排（用户点名的三条之一）。
+        ///
+        /// ★ public 也是给 TableSetup 用的：新上桌的卡就落在这个 z 上（级联末端），
+        ///   所以「上 桌 位」的框心取它 —— **玩家就是把牌拖到这一格上桌的**，
+        ///   落点和框心重合，级别末端那张卡正好落在框里。
         /// </summary>
-        private const float TableCascadeNearLimitZ = -0.20f;
+        public const float TableCascadeNearLimitZ = -0.20f;
 
         /// <summary>
         /// 级联里每往后一张抬高多少（世界单位）—— **让"压住"这件事在深度上真的成立**。
@@ -1452,11 +1457,16 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
-        /// 布局的**固定障碍**：刀片卡、刀片标记、两个槽位框、两块槽名牌、手牌那一排。
+        /// 布局的**固定障碍**：刀片卡、刀片标记、附魔位框、两块槽名牌、手牌那一排。
         ///
         /// 【为什么每一条都用游戏自己那份几何算】槽位框走 board.SlotPosition + TableSetup.SlotSize*，
         ///   手牌那一排走 TableTurnLoop.HandZ —— 这里一个坐标都不另抄。
         ///   抄一份的后果是"框挪了、自检还说没压到"，那自检就成了摆设。
+        ///
+        /// ★ **「上 桌 位」的框**故意不在这张清单里：它就是级联末端（新上桌那张）的落点
+        ///   （见 TableSetup.BuildSlots），最后那张卡**就该落在框里** ——
+        ///   把它当障碍量，等于每张素材上桌都报一次"压到槽位框"，那是假警。
+        ///   但它的**牌子**照样在清单里：那三个字必须一直露在整列级联的下方，不许被压住。
         /// </summary>
         private void CollectLayoutObstacles(List<string> names, List<XZRect> rects)
         {
@@ -1473,7 +1483,7 @@ namespace GameJam.Prototype
             names.Add("刀片标记「刀 片」");
             rects.Add(BladeMarkRect(bladeAt));
 
-            // ② 两个槽位框 + 框外那两块槽名牌
+            // ② 附魔位的框 + 两块槽名牌（素材框见上面那段说明，不算障碍）
             TableSetup setup = loop != null ? loop.setup : null;
             TableBoard board = setup != null ? setup.board : null;
 
@@ -1483,6 +1493,8 @@ namespace GameJam.Prototype
 
                 for (int i = 0; i < board.SlotCount; i++)
                 {
+                    if (i == TableTurnLoop.SlotMaterial) continue;   // 素材框 = 级联末端的落点，见方法说明
+
                     string label = (slotNames != null && i < slotNames.Length) ? slotNames[i] : ("槽 " + i);
                     names.Add("槽位框 " + label);
                     rects.Add(XZRect.FromCenter(board.SlotPosition(i), TableSetup.SlotSizeX, TableSetup.SlotSizeZ));
@@ -1505,16 +1517,36 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
+        /// 素材槽（「上 桌 位」）的框 —— **级联末端的落点**（见 TableSetup.BuildSlots）。
+        /// 没有 board 时返回 false（探针/纯逻辑场合）。
+        /// </summary>
+        private bool MaterialSlotRect(out XZRect rect)
+        {
+            rect = default(XZRect);
+
+            TableSetup setup = loop != null ? loop.setup : null;
+            TableBoard board = setup != null ? setup.board : null;
+            if (board == null || !board.IsValidSlot(TableTurnLoop.SlotMaterial)) return false;
+
+            rect = XZRect.FromCenter(board.SlotPosition(TableTurnLoop.SlotMaterial),
+                                     TableSetup.SlotSizeX, TableSetup.SlotSizeZ);
+            return true;
+        }
+
+        /// <summary>
         /// 级联的**四条不变式**（实机自检 / 探针报告 / 离线扫描共用这一份实现）：
         ///   ① 压对方向、只压下半截：两张重叠时靠后的那张必须更靠玩家，
         ///      而且被压那张的上缘至少露出 <see cref="TableCascadeNameNeed"/>（名字才不会被切）；
         ///   ② 最靠玩家那张（最后上桌的）完整可见：谁都不许压它 —— 它要露出 H/D/V 与插画；
-        ///   ③ 不压刀片卡 / 刀片标记 / 两个槽位框 / 两块槽名牌（都是玩家要看见或要往上拖的东西）；
-        ///   ④ 不压手牌那一排（手牌是另一个交互区，压上去就分不清哪张在手上）。
+        ///   ③ 不压刀片卡 / 刀片标记 / 附魔位框 / 两块槽名牌（都是玩家要看见或要往上拖的东西）；
+        ///   ④ 不压手牌那一排（手牌是另一个交互区，压上去就分不清哪张在手上）；
+        ///   ⑤ 级联末端要落在**素材槽的框里** —— 「上 桌 位」就是新卡上桌的那一格，
+        ///      框和落点对不上，玩家就会看到"槽跑到那一摞卡外面去了"。
         /// 违反的每一条都写进 <paramref name="bad"/>，返回"有没有问题"。
         /// </summary>
         private static bool CheckCascade(List<string> names, List<XZRect> rects,
                                          List<string> obsNames, List<XZRect> obsRects,
+                                         XZRect landing, bool hasLanding,
                                          List<string> bad)
         {
             // ① 逐对：靠后的那张必须更靠玩家，且只压下半截
@@ -1561,6 +1593,23 @@ namespace GameJam.Prototype
                 }
             }
 
+            // ⑤ 级联末端 = 「上 桌 位」的框心（新上桌那张就落在框里）
+            //    ★ 1 张时整列只有"头一张"，它待在列首而不是末端 —— 那一档不检查。
+            if (hasLanding && rects.Count >= 2)
+            {
+                XZRect last = rects[rects.Count - 1];
+                float cx = (last.xmin + last.xmax) * 0.5f;
+                float cz = (last.zmin + last.zmax) * 0.5f;
+
+                if (cx < landing.xmin || cx > landing.xmax || cz < landing.zmin || cz > landing.zmax)
+                {
+                    bad.Add("级联末端「" + names[rects.Count - 1] + "」的卡心 ("
+                            + cx.ToString("0.###") + ", " + cz.ToString("0.###")
+                            + ") 没落在「上 桌 位」的框里" + landing.Text()
+                            + " —— 素材槽的位置得跟着级联常量走（TableSetup.BuildSlots）");
+                }
+            }
+
             return bad.Count == 0;
         }
 
@@ -1578,7 +1627,10 @@ namespace GameJam.Prototype
 
             CollectCascadeRects(names, rects);
             CollectLayoutObstacles(obsNames, obsRects);
-            CheckCascade(names, rects, obsNames, obsRects, bad);
+
+            XZRect landing;
+            bool hasLanding = MaterialSlotRect(out landing);
+            CheckCascade(names, rects, obsNames, obsRects, landing, hasLanding, bad);
 
             float span = TableCascadeFirstZ - TableCascadeNearLimitZ;
             int perColumn = Mathf.Max(1, 1 + Mathf.FloorToInt(span / TableCascadeStepMin + 1e-4f));
@@ -1620,8 +1672,32 @@ namespace GameJam.Prototype
                 sb.Append('　').Append(obsNames[k]).Append(hit ? " ★有交集" : " ✓");
             }
 
+            // 素材槽（「上 桌 位」）：它就是级联末端的落点 —— 框和落点必须重合，
+            // 那三个字才会稳稳落在整列级联的下方
+            if (hasLanding)
+            {
+                sb.Append("\n   素材槽「上 桌 位」：框心 (")
+                  .Append(((landing.xmin + landing.xmax) * 0.5f).ToString("0.###")).Append(", ")
+                  .Append(((landing.zmin + landing.zmax) * 0.5f).ToString("0.###")).Append(")　")
+                  .Append(landing.Text());
+
+                if (rects.Count >= 2)
+                {
+                    XZRect last = rects[rects.Count - 1];
+                    float lx = (last.xmin + last.xmax) * 0.5f;
+                    float lz = (last.zmin + last.zmax) * 0.5f;
+                    bool inside = lx >= landing.xmin && lx <= landing.xmax && lz >= landing.zmin && lz <= landing.zmax;
+                    sb.Append("　级联末端卡心 (").Append(lx.ToString("0.###")).Append(", ").Append(lz.ToString("0.###"))
+                      .Append(") → ").Append(inside ? "✓ 落在框里（新卡就上在这一格）" : "★ 不在框里");
+                }
+                else
+                {
+                    sb.Append("　（整列只有头一张，末端为空 —— 这一档不查「落点入框」）");
+                }
+            }
+
             sb.Append("\n   结论：").Append(bad.Count == 0
-                ? "✓ 四条不变式全通过（压对方向、每张名字都露着、最靠玩家那张完整、没压刀片位/槽位框/手牌）"
+                ? "✓ 全部不变式通过（压对方向、每张名字都露着、最靠玩家那张完整、没压刀片位/附魔位框/槽名牌/手牌、末端落在「上 桌 位」框里）"
                 : ("★ " + bad.Count + " 处违反不变式："));
 
             for (int i = 0; i < bad.Count; i++) sb.Append("\n      · ").Append(bad[i]);
@@ -1641,9 +1717,17 @@ namespace GameJam.Prototype
             List<XZRect> obsRects = new List<XZRect>();
             CollectLayoutObstacles(obsNames, obsRects);
 
+            XZRect landing;
+            bool hasLanding = MaterialSlotRect(out landing);
+
             System.Text.StringBuilder sb = new System.Text.StringBuilder();
             sb.Append("级联算式扫描 n=1..").Append(maxCount)
-              .Append("（列锚点 x=").Append(TableCascadeX.ToString("0.###")).Append("）");
+              .Append("（列锚点 x=").Append(TableCascadeX.ToString("0.###"))
+              .Append("、素材槽框心 ").Append(hasLanding
+                  ? ((landing.xmin + landing.xmax) * 0.5f).ToString("0.###") + ", " +
+                    ((landing.zmin + landing.zmax) * 0.5f).ToString("0.###")
+                  : "（没有 board）")
+              .Append("）");
 
             for (int n = 1; n <= maxCount; n++)
             {
@@ -1658,7 +1742,7 @@ namespace GameJam.Prototype
                 }
 
                 List<string> bad = new List<string>();
-                CheckCascade(names, rects, obsNames, obsRects, bad);
+                CheckCascade(names, rects, obsNames, obsRects, landing, hasLanding, bad);
 
                 float firstZ = TableMaterialSlot(0, n).z;
                 float lastZ  = TableMaterialSlot(n - 1, n).z;
@@ -1693,7 +1777,10 @@ namespace GameJam.Prototype
 
             CollectCascadeRects(names, rects);
             CollectLayoutObstacles(obsNames, obsRects);
-            CheckCascade(names, rects, obsNames, obsRects, bad);
+
+            XZRect landing;
+            bool hasLanding = MaterialSlotRect(out landing);
+            CheckCascade(names, rects, obsNames, obsRects, landing, hasLanding, bad);
 
             if (bad.Count == 0) return;
 

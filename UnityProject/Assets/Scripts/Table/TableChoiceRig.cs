@@ -72,7 +72,7 @@ namespace GameJam.Prototype
         /// <summary>鼠标悬停在第几张牌组卡上（-1 = 没有）。</summary>
         public int DeckHovered { get; private set; } = -1;
 
-        /// <summary>当前选中的牌组卡（-1 = 还没选）。</summary>
+        /// <summary>当前选中的是第几项（-1 = 还没选）。牌组和关卡共用这一个槽位。</summary>
         /// <remarks>
         /// ★ 一定要初始化成 -1。默认值 0 的意思是"第 0 张已被选中"，
         /// 于是确认键一开局就是可用的、玩家什么都没点就选定了第一副牌组。
@@ -80,14 +80,55 @@ namespace GameJam.Prototype
         public int DeckSelected { get; private set; } = -1;
 
         /// <summary>
-        /// 选中第 index 张牌组卡。玩家点卡片走的是同一条路 ——
+        /// 当前这批候选项有几项（牌组 = 几副牌，关卡 = 几关）。
+        ///
+        /// 【为什么不能拿 deckCards.Count 当上界】"选了什么"和"画了什么"是两件事：
+        ///   v2.1 的关卡只在 UI 窗口里选（用户："不要关卡手牌了，就放一个 ui 就行"），
+        ///   桌上一张 3D 关卡卡都不建 —— 上界要是还跟着卡片数量走，那就成了
+        ///   "窗口里点一行没反应、确认键永远灰着"，选择和视图被绑死。
+        ///   所以项数由**这批候选**决定，谁摆出来谁登记（BuildDeckCards /
+        ///   BuildLevelCards / SetChoiceState 三个入口），建不建卡只影响画面。
+        /// </remarks>
+        private int choiceCount;
+
+        /// <summary>
+        /// 选中第 index 项。玩家点卡片、点关卡窗口里的一行走的都是同一条路 ——
         /// 自动化探针和鼠标点击共用这个入口，不另开一条捷径。
         /// </summary>
         public void SelectDeck(int index)
         {
-            if (index < 0 || index >= deckCards.Count) return;
+            if (index < 0 || index >= choiceCount) return;
             DeckSelected = index;
         }
+
+        /// <summary>
+        /// 登记"这次有几项可选、当前选中第几项"，**一张 3D 卡都不建**。
+        ///
+        /// 【给谁用】v2.1 的关卡界面：关卡只由 TableHud 的关卡窗口来选，
+        ///   桌上不再摆那排 3D 关卡卡。但"选中的是哪一关"这份状态必须还在 ——
+        ///   窗口点一行 = <see cref="SelectDeck"/>、确认 = TableTurnLoop.ConfirmLevelSelect()，
+        ///   两条路和从前一模一样，区别只是有没有视图。
+        ///
+        /// 【为什么默认就选中当前关卡】窗口进关卡界面时那一行本来就是高亮的
+        ///   （levelWindowPick 停在当前关卡上）。状态要是还停在"没选"，
+        ///   玩家按「进入这一关」就会被一句"先选一关"挡回来 ——
+        ///   界面说选了、状态说没选，这是最容易被当成"坏了"的那种不一致。
+        ///
+        /// 【旧流程不走这里】UseRulesV21 = false 时照旧 BuildLevelCards 摆 3D 卡。
+        /// </summary>
+        public void SetChoiceState(int count, int selected)
+        {
+            ClearDeckCards();
+
+            choiceCount  = Mathf.Max(0, count);
+            DeckSelected = (selected >= 0 && selected < choiceCount) ? selected : -1;
+        }
+
+        /// <summary>
+        /// 桌上现在摆着几张 3D 大卡（牌组 / 关卡共用这一个列表）。
+        /// 探针和自检用 —— "v2.1 的关卡界面桌上一张卡都没有"这句话得能量出来。
+        /// </summary>
+        public int BigCardCount { get { return deckCards.Count; } }
 
         // ══════════════════════════════════════════════════════════════
         //  建 / 拆
@@ -102,6 +143,7 @@ namespace GameJam.Prototype
             int n = choice.options.Count;
             if (n == 0) return;
 
+            choiceCount = n;                    // 选中态的合法范围（见 choiceCount 的说明）
             List<CardSpot> spots = LayoutCards(n);
 
             for (int i = 0; i < n; i++)
@@ -136,6 +178,9 @@ namespace GameJam.Prototype
         ///
         /// 和牌组卡共用同一套卡片建模 —— 两者都是"一排大卡点一张"，
         /// 只是上面的字不同。分开写两份的话，改一次卡面尺寸要改两处。
+        ///
+        /// 【只有旧流程会调它】v2.1 的关卡只在 UI 窗口里选（见 SetChoiceState）——
+        /// 那条路一张卡都不建，所以这里的方法体对 v2.1 是"用不上"而不是"被删掉"。
         /// </summary>
         public void BuildLevelCards(List<LevelData> levels, int currentIndex)
         {
@@ -146,6 +191,7 @@ namespace GameJam.Prototype
             int n = levels.Count;
             if (n == 0) return;
 
+            choiceCount = n;                    // 选中态的合法范围（见 choiceCount 的说明）
             List<CardSpot> spots = LayoutCards(n);
 
             for (int i = 0; i < n; i++)
@@ -504,6 +550,10 @@ namespace GameJam.Prototype
             deckCards.Clear();
             DeckHovered  = -1;
             DeckSelected = -1;
+
+            // 没有候选项 = 没有可选的东西。把项数一起清掉，
+            // 否则离开界面之后 SelectDeck 还能改选中态，而界面上什么都看不到。
+            choiceCount = 0;
         }
 
         /// <summary>
@@ -623,9 +673,16 @@ namespace GameJam.Prototype
         ///
         /// 选中和确认分开：点一下只是高亮，真正定下来要按「确认选择该卡组」。
         /// 和投放区那条规则保持一致 —— 玩家应该有反悔的余地。
+        ///
+        /// 【桌上一张卡都没有时直接让开】v2.1 的关卡界面就是这个样子
+        ///   （只在 UI 窗口里选，见 SetChoiceState）：没有卡可点，
+        ///   这一帧就没必要打射线 —— 但悬停状态要归位，
+        ///   否则从牌组界面切过来会留着一个旧的悬停下标。
         /// </summary>
         private void TickDeckPick()
         {
+            if (deckCards.Count == 0) { DeckHovered = -1; return; }
+
             Ray ray = cam.ScreenPointToRay(Input.mousePosition);
             DeckHovered = HitDeckIndex(ray);
 

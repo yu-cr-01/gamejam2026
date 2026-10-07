@@ -104,6 +104,19 @@ namespace GameJam.Prototype
         public static int V21TargetScore = 60;
 
         /// <summary>
+        /// 关卡是不是摆成**桌上的 3D 大卡**。
+        ///
+        /// 【为什么加这个开关】用户对关卡的要求是「不要关卡手牌了，就放一个 ui 就行」：
+        ///   那排 3D 关卡卡离得远、字小，还占着桌面正中间，而关卡窗口
+        ///   （TableHud.DrawLevelWindow）一屏就能把名字 / 目标分 / 状态列全。
+        ///   v2.1 只留窗口；**旧流程那套 3D 关卡卡一行没动**（关掉开关就原样回来）。
+        ///
+        /// 【为什么收在这里】"建不建卡"（TableTurnLoop）和"提示文案怎么写"（TableHud）
+        ///   问的是同一件事，各写各的话迟早会出现"卡已经没有了、提示还写着点桌上的卡"。
+        /// </summary>
+        public static bool LevelCardsOnTable { get { return !UseRulesV21; } }
+
+        /// <summary>
         /// 这一关在当前规则模式下**实际**的目标分 —— 界面上的"目标分"一律走这里。
         ///
         /// 【为什么要有这个函数，而不是各处直接读 lv.targetScore】

@@ -319,7 +319,8 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
-        /// 打开关卡界面：桌上一排关卡卡。
+        /// 打开关卡界面：v2.1 = 只用 UI 窗口选（TableHud 的关卡窗口自动弹出），
+        /// 旧流程 = 桌上一排 3D 关卡卡。
         ///
         /// 关卡列表从配置读（GameConfig.Levels），加一关只是配置里多写一条。
         /// </summary>
@@ -353,7 +354,18 @@ namespace GameJam.Prototype
 
             if (choiceRig != null)
             {
-                choiceRig.BuildLevelCards(levels, levelIndex);
+                // ── v2.1：关卡只在 UI 窗口里选，桌上不摆 3D 关卡卡 ──────────
+                //   用户原话：「不要关卡手牌了，就放一个 ui 就行」。
+                //   ★ 不建卡**不等于**不用登记选择态：窗口点一行 → SelectDeck(i)、
+                //     按「进入这一关」→ ConfirmLevelSelect() 读的都是 rig 里那个下标。
+                //     所以这里改成 SetChoiceState(几关, 当前这一关)：桌上干干净净，
+                //     窗口里那一行（当前关卡）默认就是选中的，确认键当场可用。
+                //   ★ 旧流程（UseRulesV21 = false）照旧 BuildLevelCards 摆那排卡，一行没动。
+                if (TableSettings.LevelCardsOnTable)
+                    choiceRig.BuildLevelCards(levels, levelIndex);
+                else
+                    choiceRig.SetChoiceState(levels.Count, levelIndex);
+
                 phase = TablePhase.LevelSelect;
                 return;
             }
@@ -361,7 +373,7 @@ namespace GameJam.Prototype
             StartDeckPick();   // 没有选关界面就直接进牌组
         }
 
-        /// <summary>在关卡界面点了一张卡、按了确认。</summary>
+        /// <summary>在关卡界面点了确认（窗口里点一行 / 按「进入这一关」）。</summary>
         public void ConfirmLevelSelect()
         {
             if (phase != TablePhase.LevelSelect) return;
@@ -369,7 +381,11 @@ namespace GameJam.Prototype
             int idx = choiceRig != null ? choiceRig.DeckSelected : levelIndex;
             if (idx < 0 || idx >= levels.Count)
             {
-                notice = "先在桌上点一张关卡卡";
+                // 提示得说清"该去哪儿选" —— v2.1 桌上一张关卡卡都没有，
+                // 还写"在桌上点一张"等于指路指到空桌子上（见 OpenLevelSelect 的分流）。
+                notice = TableSettings.LevelCardsOnTable
+                    ? "先在桌上点一张关卡卡"
+                    : "先在关卡窗口里点一行选一关";
                 return;
             }
 

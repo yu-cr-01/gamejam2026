@@ -382,6 +382,30 @@ namespace GameJam.Prototype
             //   （刀片是"友方单位"，坐镇桌面中心）。
             board.BuildGrid(2, 1, 0.46f, 0f, new Vector3(0f, 0f, -0.20f));
 
+            // ★★ 「上 桌 位」跟着**桌面素材的级联列**走（用户口径：那三个字要落在整列级联的**下方**）★★
+            //
+            //   【为什么它不能留在 −0.23】素材上桌之后不再摊在两个槽位上，而是堆成一列级联
+            //   （见 TableRulesV21 顶部那段）。如果素材槽还钉在旧的 x = +0.23，
+            //   框和名牌就会孤零零留在级联列的**左下角**、和那摞卡对不上号；
+            //   用户看到的就是"上桌位跑到整列下面去了"。
+            //
+            //   【现在它摆在哪】框心 = (TableCascadeX, TableCascadeNearLimitZ) ——
+            //   也就是**级联末端（新上桌那张）的落点**：
+            //     · 拖一张素材到这一格 = 它成为级联最靠玩家的那张，正好落在框里（落点和框心重合）；
+            //     · 槽名牌由 SlotLabelPosition 自动画在框的**近侧**（再往玩家 0.21），
+            //       于是「上 桌 位」三个字永远在整列级联的**下方**，且不会被任何一张卡压住
+            //       （TableRulesV21 的布局自检把它当障碍逐帧量，压到就打警告）。
+            //   ★ 坐标不在这里另写一份：列锚点/末端落点都由 TableRulesV21 的公开常量给，
+            //     改了级联那边，槽位自动跟着走。
+            //   ★ 这个槽两种模式共用（旧流程里它是"素材槽"，先摆好再按确认）——
+            //     旧流程的语义不受影响（框在哪儿，拖进去就落在哪儿），所以不做模式分叉：
+            //     分叉会带来"切了模式而标记块没跟着挪"的另一类不一致（标记块在 Awake 建一次）。
+            if (board.IsValidSlot(TableTurnLoop.SlotMaterial))
+            {
+                board.slots[TableTurnLoop.SlotMaterial] =
+                    new Vector3(TableRulesV21.TableCascadeX, 0f, TableRulesV21.TableCascadeNearLimitZ);
+            }
+
             // 把卡槽矩形尺寸告诉 board —— 吸附判定要用它当"框"。
             // 和下面指示块的 scale 用同一组常量，免得两边各写一个数、改一处忘一处。
             board.slotSizeX = SlotSizeX;

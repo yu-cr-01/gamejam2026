@@ -37,6 +37,12 @@ namespace GameJam.EditorTools
     ///                      每一档都出「桌面视角 + 俯视」截图并打一段布局报告
     ///                      （每张的占地、上缘露出多少、有没有压到刀片位/槽位框/手牌），
     ///                      再把中间那张拖回手牌、看级联自己收拢。默认 0 = 完全不介入。
+    ///   DSH_LEVELPROBE=1   选关探针（㉖⓪~㉖⑤）：验用户那句「不要关卡手牌了，就放一个 ui 就行」——
+    ///                      v2.1 的关卡界面应当**桌上一张 3D 关卡卡都没有**、只剩关卡窗口，
+    ///                      窗口里点一行能选中、按「进入这一关」能开局；旧流程
+    ///                      （DSH_RULES_V21=0）那排卡必须原样还在。两个模式共用同一条链，
+    ///                      每一步都把"rig 认领几张 / 场景里有几个 BigCard_*"打进日志，
+    ///                      截图一一对照。默认 0 = 完全不介入。
     ///
     /// 【★ 命令行怎么用：-executeMethod 必须指向一个**方法**】
     ///   Unity 的 -executeMethod 只认 `类.方法`，不能指向一个带 [InitializeOnLoad] 的静态类本身。
@@ -90,6 +96,7 @@ namespace GameJam.EditorTools
         private static bool   fxProbe;
         private static bool   blackProbe;
         private static bool   layoutProbe;
+        private static bool   levelProbe;
 
         static AutoPlayHarness()
         {
@@ -127,6 +134,13 @@ namespace GameJam.EditorTools
             //   也单独一条链 —— 它会把三张素材一次性铺到桌面上，混进主链会让后面
             //   "验形态变化 / 验回合推进"那几步的前提（桌面只有一张）失效。
             layoutProbe = System.Environment.GetEnvironmentVariable("DSH_LAYOUTPROBE") == "1";
+
+            // ★ 选关探针（DSH_LEVELPROBE=1，见 ㉖⓪~㉖⑤ 那一段）：
+            //   用户对关卡的要求从"最好单独开一个窗口"变成了「不要关卡手牌了，就放一个 ui 就行」——
+            //   这一条链就验这件事：v2.1 桌上一张 3D 关卡卡都不该有（只剩窗口），
+            //   而旧流程那排卡必须还在。也单独一条链，且两个模式共用 ——
+            //   "有没有少东西"要两张图并排看才算数。
+            levelProbe = System.Environment.GetEnvironmentVariable("DSH_LEVELPROBE") == "1";
 
             // ★ 每次域重载都要订阅，否则进 Play 之后就再也没人推进流程了
             EditorApplication.update += Tick;
@@ -242,7 +256,8 @@ namespace GameJam.EditorTools
                 case 32:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("level_select.png")) return;
-                    Stage = 33;
+                    // 选关探针要在这一屏多拍几张（关掉窗口看那排 3D 关卡卡还在不在）
+                    Stage = levelProbe ? 260 : 33;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -397,7 +412,8 @@ namespace GameJam.EditorTools
                 case 52:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("v21_level_select.png")) return;
-                    Stage = 97;
+                    // 选关探针要在这一屏多拍几张（关掉窗口看桌面到底有没有 3D 关卡卡）
+                    Stage = levelProbe ? 260 : 97;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -1121,6 +1137,102 @@ namespace GameJam.EditorTools
                 case 255:
                     if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
                     Finish();
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㉖⓪~㉖⑤ 选关：v2.1 只剩 UI 窗口（DSH_LEVELPROBE=1）
+                //
+                //  【它验的是用户这句话】「不要关卡手牌了，就放一个 ui 就行」——
+                //    v2.1 的关卡界面桌上一张 3D 关卡卡都不该有，选关全在关卡窗口里；
+                //    旧流程（DSH_RULES_V21=0）那排卡必须原样还在、流程照旧。
+                //    两个模式**共用这一条链**（入口分别接在 case 32 / case 52 上），
+                //    所以两边拍出来的文件名一样、位置一样，可以并排对照。
+                //
+                //  【为什么非要关掉窗口再拍一张】第一张图里窗口正好盖在桌子中间 ——
+                //    而那里正是那排关卡卡原来的位置。"看不见"和"没有"是两件事，
+                //    所以 ㉖① 把窗口收起来拍一张空桌面，并把两个数字打进日志：
+                //    rig 认领了几张大卡、场景里还有几个 BigCard_* 物体
+                //    （口径分开是因为"列表清了、物体还在"这种残留只有后一个数抓得到）。
+                //
+                //  【点一行 / 按确认走的是谁】HUD 的 PickLevelInWindow / ConfirmLevelInWindow ——
+                //    和窗口里那两个按钮**同一对方法**。IMGUI 的按钮探针点不了（它不模拟输入事件），
+                //    但"绕过按钮"不等于"绕过那条路"：选中态、确认态、窗口自动收起
+                //    全在这两个方法里，按钮和探针共用。
+                //
+                //  【为什么点第 2 行而不是第 1 行】默认选中的就是第 1 关（当前关卡）。
+                //    点第 2 行、确认之后看关卡真的变成第 2 关，才能证明
+                //    "确认用的是窗口选的那一关"，而不是"永远进第 1 关"。
+                // ══════════════════════════════════════════════════════
+
+                // ㉖⓪ 关卡界面：窗口自动弹着 —— 玩家看到的这一屏
+                case 260:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    // ★ 先截图、后量（和这一屏别处同一条规矩）：Shot 在"距上一张不到 ShotSettle"时
+                    //   会返回 false 让本阶段重试，把日志放在它前面就会同一份数据每帧打一遍（刷屏）。
+                    if (!Shot("level_ui_00_select.png")) return;
+                    LogLevelSelectState("㉖⓪ 进关卡界面");
+                    Stage = 261;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉖① 先把窗口收起来：这一张看的是"桌子中间到底有没有那排卡"
+                case 261:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetLevelWindow(false);
+                    Stage = 262;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 262:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("level_ui_01_table.png")) return;
+                    LogLevelSelectState("㉖① 关掉窗口看桌面");
+                    LogCardRow("㉖① 关卡");
+                    Stage = 263;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉖② 重新开窗口，点第 2 行（点完先记日志，图留给下一个 stage 拍 ——
+                //      同一帧里截图 + 改状态，落盘的是改完之后那一帧，这条坑文件头写过）
+                case 263:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetLevelWindow(true);
+                    Stage = 264;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 264:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    PickLevelRow(1);
+                    Stage = 265;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉖③ 点完那一行：高亮 / 「已选」「▸ 当前关卡」两处文案都该跟着走
+                case 265:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!Shot("level_ui_02_row_picked.png")) return;
+                    Stage = 266;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉖④ 按「进入这一关」（窗口底部那个按钮的同一个入口）
+                case 266:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ConfirmLevelRow();
+                    Stage = 267;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉖⑤ 进关之后：v2.1 这里应该是牌组界面 + 「状态与画面一致｜残留 0 张」。
+                //      拍完接回主链（v2.1 → 55，旧流程 → 20），后面的选牌组 / 选刀片 /
+                //      第 1 回合按原样跑完 —— 顺带证明"从窗口进的那一关真的开起来了"。
+                case 267:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
+                    if (!Shot("level_ui_03_after_confirm.png")) return;
+                    ProbeLogSync("㉖⑤ 从窗口进关之后");
+                    Stage = TableSettings.UseRulesV21 ? 55 : 20;
+                    stageTime = EditorApplication.timeSinceStartup;
                     return;
 
                 // ══════════════════════════════════════════════════════
@@ -1962,6 +2074,17 @@ namespace GameJam.EditorTools
                 return;
             }
 
+            // ★ 桌上 0 张不是"量不了"，是**本该如此**：v2.1 的关卡只在 UI 窗口里选
+            //   （用户："不要关卡手牌了，就放一个 ui 就行"），这里再报一条
+            //   "投影失败（相机没就位？）"纯属误导 —— 报个 0 张就够说明问题了。
+            if (rig.BigCardCount == 0)
+            {
+                Debug.Log("[AutoPlay/V21] " + what + "卡：桌上一张都没有（"
+                          + (TableSettings.UseRulesV21 ? "v2.1 关卡只走 UI 窗口" : "★ 旧流程不该为空")
+                          + "）。");
+                return;
+            }
+
             float x0, y0, x1, y1;
             if (!rig.CardScreenBounds(out x0, out y0, out x1, out y1))
             {
@@ -1973,10 +2096,103 @@ namespace GameJam.EditorTools
                       + "x " + x0.ToString("0.0") + " ~ " + x1.ToString("0.0")
                       + "，y " + y0.ToString("0.0") + " ~ " + y1.ToString("0.0")
                       + "　｜　屏幕 " + Screen.width + "×" + Screen.height
+                      + "　｜　张数 " + rig.BigCardCount
                       + "　｜　行数 " + rig.LastLayoutRows
                       + "　缩放 " + rig.LastLayoutScale.ToString("0.00")
                       + "　｜　右边缘余量 " + (Screen.width - x1).ToString("0.0")
                       + "，下边缘余量 " + (Screen.height - y1).ToString("0.0"));
+        }
+
+        // ── 选关探针（㉖⓪~㉖⑤，DSH_LEVELPROBE=1）用的三个口子 ──────────────
+
+        /// <summary>
+        /// 把"这一屏的选关状态"打成一行日志：模式 / 桌上大卡张数 / 选中态 / 窗口状态 / 当前关卡。
+        ///
+        /// 【为什么要分两个张数】rig 认领的（deckCards）和场景里真实存在的
+        ///   （名字以 BigCard_ 开头的物体）是两回事 —— "列表清了、物体还杵在桌上"
+        ///   这种残留只有把场景扫一遍才抓得到，而它正是"关掉 3D 卡"最容易留下的尾巴。
+        /// </summary>
+        private static void LogLevelSelectState(string what)
+        {
+            TableChoiceRig rig = Object.FindObjectOfType<TableChoiceRig>();
+            TableTurnLoop loop = Loop();
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+
+            if (rig == null || loop == null)
+            {
+                Debug.LogWarning("[AutoPlay/Level] 找不到 TableChoiceRig / TableTurnLoop，" + what + " 这次记不了。");
+                return;
+            }
+
+            int inScene = 0;
+            Transform[] all = Object.FindObjectsOfType<Transform>();
+            for (int i = 0; i < all.Length; i++)
+                if (all[i] != null && all[i].name.StartsWith("BigCard_")) inScene++;
+
+            string levelName = loop.level != null ? loop.level.Name : "（无）";
+
+            Debug.Log("[AutoPlay/Level] " + what
+                      + "｜模式 " + (TableSettings.UseRulesV21 ? "v2.1" : "旧流程")
+                      + "（桌上一排 3D 关卡卡：" + (TableSettings.LevelCardsOnTable ? "有" : "没有") + "）"
+                      + "｜大卡 rig " + rig.BigCardCount + " 张 / 场景 " + inScene + " 个"
+                      + "｜rig 选中 " + rig.DeckSelected
+                      + "｜窗口 " + (hud != null ? (hud.LevelWindowOpen ? "开" : "关") : "?")
+                      + (hud != null ? "、窗口选中 " + hud.LevelWindowPick : "")
+                      + "｜当前关卡 " + (loop.levelIndex + 1) + "/" + loop.levels.Count + "「" + levelName + "」"
+                      + "｜阶段 " + loop.phase);
+        }
+
+        /// <summary>
+        /// 关卡窗口里点一行 —— 走 HUD 的 PickLevelInWindow，
+        /// 和那个按钮是**同一个方法**（探针点不了 IMGUI 按钮，但不能绕过这条路）。
+        /// </summary>
+        private static void PickLevelRow(int i)
+        {
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            if (hud == null)
+            {
+                Debug.LogWarning("[AutoPlay/Level] 找不到 TableHud，窗口点行这次验不了。");
+                return;
+            }
+
+            hud.PickLevelInWindow(i);
+            Debug.Log("[AutoPlay/Level] 在关卡窗口里点了第 " + (i + 1) + " 行（索引 " + i + "）。");
+            LogLevelSelectState("㉖② 点完之后");
+        }
+
+        /// <summary>
+        /// 按关卡窗口底部的「进入这一关」—— 同样走 HUD 的公开口子，
+        /// 和按钮共用 ConfirmLevelInWindow（它里面就是 turnLoop.ConfirmLevelSelect()）。
+        /// </summary>
+        private static void ConfirmLevelRow()
+        {
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            TableTurnLoop loop = Loop();
+            if (hud == null || loop == null)
+            {
+                Debug.LogWarning("[AutoPlay/Level] 找不到 TableHud / TableTurnLoop，窗口确认这次验不了。");
+                return;
+            }
+
+            int beforeIdx = loop.levelIndex;
+            string beforeName = loop.level != null ? loop.level.Name : "（无）";
+
+            hud.ConfirmLevelInWindow();
+
+            string afterName = loop.level != null ? loop.level.Name : "（无）";
+
+            // 目标分从**配置里那一关**读（LevelTargetScore 收的是 LevelData）——
+            // v2.1 显示的是 60、旧流程显示 levels[].targetScore，两边都得对得上窗口里那一行。
+            GameJam.Data.LevelData ld =
+                (loop.levelIndex >= 0 && loop.levelIndex < loop.levels.Count)
+                    ? loop.levels[loop.levelIndex] : null;
+            int target = TableSettings.LevelTargetScore(ld);
+
+            Debug.Log("[AutoPlay/Level] 按「进入这一关」：确认前第 " + (beforeIdx + 1) + " 关「" + beforeName
+                      + "」→ 确认后第 " + (loop.levelIndex + 1) + " 关「" + afterName
+                      + "」｜目标分 " + target
+                      + "｜阶段 " + loop.phase
+                      + "｜窗口 " + (hud.LevelWindowOpen ? "还开着（★ 应该收起来）" : "已自动收起"));
         }
 
         /// <summary>开 / 关关卡窗口（HUD 的公开口子）。</summary>
