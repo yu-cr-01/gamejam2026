@@ -334,7 +334,7 @@ namespace GameJam.EditorTools
                 case 52:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("v21_level_select.png")) return;
-                    Stage = 53;
+                    Stage = 97;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -349,7 +349,7 @@ namespace GameJam.EditorTools
                 case 54:
                     if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
                     if (!Shot("v21_choice_deck.png")) return;
-                    Stage = 55;
+                    Stage = 96;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -505,6 +505,141 @@ namespace GameJam.EditorTools
                 case 77:
                     if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
                     SetRulesReport(false);
+                    Stage = 90;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ⑨⓪~⑨⑤ v2.1 回合面板：半透明 + 可拖动
+                //
+                //  【为什么这么拍】"透不透"必须有一张**牌在面板底下**的图才看得出来，
+                //   而面板默认钉在屏幕顶部、牌在桌子中间 —— 所以流程是
+                //   "先拍默认位置 → 把面板往下拖 260 像素压到牌上 → 再拍"。
+                //   两张一比就是用户要的对照图，同时把"拖动"这件事也验了。
+                //
+                //  【拖动是谁给的】探针不模拟鼠标输入（它只走游戏自己的公开入口），
+                //   这里调的是 HUD 的 `DragTurnPanelBy` —— 和鼠标拖动**同一条路**：
+                //   同一个 offset 字段、同一个夹取、同一个 GUI.matrix 绘制，
+                //   唯一的差别只是"位移是谁喂的"。最后一档喂一个巨大的位移，
+                //   用日志里的 TurnPanelOffset 证明夹取生效（面板没飞出去）。
+                // ══════════════════════════════════════════════════════
+
+                // ⑨⓪ 面板在默认位置（顶部中间）—— 半透明底板、字还是实心的
+                case 90:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("v21_panel_glass.png")) return;
+                    Stage = 91;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑨① 把面板往下拖到桌面上（牌在那里）
+                case 91:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    DragTurnPanel(0f, 260f);
+                    Stage = 92;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑨② 面板压在牌上 —— 这张看"能不能透出牌"
+                case 92:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("v21_panel_over_cards.png")) return;
+                    Stage = 93;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑨③ 喂一个巨大的位移：应该被夹在"还有 40 像素留在屏幕里"的位置
+                case 93:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    DragTurnPanel(5000f, 5000f);
+                    Stage = 94;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑨④ 拍"拖到天边"的样子（证明没被拖出屏幕、还能拖回来）
+                case 94:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("v21_panel_clamped.png")) return;
+                    Stage = 95;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑨⑤ 复位，后面的 stage 拍到的还是原来那块桌面
+                case 95:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ResetTurnPanel();
+                    Stage = 99;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ⑨⑥~⑨⑨ 本轮新加的三件事
+                //   ⑨⑥ 牌组一排（6 副）全在屏内        —— 任务 A
+                //   ⑨⑦ 关卡一排 + 关卡窗口             —— 任务 A / B
+                //   ⑨⑧ 卡牌图鉴（F1）                  —— 任务 C
+                //   ⑨⑨ Esc 菜单里的两个新入口           —— 任务 B / C
+                //  每个 stage 都先把**投影到屏幕上的包围盒**打进日志，
+                //  再截图 —— "有没有跑出屏幕"这件事不能靠眼睛看。
+                // ══════════════════════════════════════════════════════
+
+                // ⑨⑥ 牌组卡：量 + 拍（插在拍完牌组界面之后、选牌组之前）
+                case 96:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    LogCardRow("牌组");
+                    if (!Shot("v21_decks_layout.png")) return;
+                    Stage = 55;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑨⑦ 关卡卡：关掉窗口再量 + 拍（窗口挡着卡片测不准）
+                case 97:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetLevelWindow(false);
+                    Stage = 98;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 98:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    LogCardRow("关卡");
+                    if (!Shot("v21_levels_layout.png")) return;
+                    Stage = 53;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑨⑨ 卡牌图鉴（开 → 拍 → 关），再拍 Esc 菜单里的两个新入口
+                case 99:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetBrowser(true);
+                    Stage = 100;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 100:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("v21_card_browser.png")) return;
+                    Stage = 101;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 101:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetBrowser(false);
+                    SetPaused(true);
+                    Stage = 102;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 102:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("v21_pause_menu.png")) return;
+                    Stage = 103;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 103:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetPaused(false);
                     Stage = 67;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -817,6 +952,105 @@ namespace GameJam.EditorTools
 
             hud.ScrollRulesReportToEnd();
             Debug.Log("[AutoPlay/V21] 规则解析报告已滚到底");
+        }
+
+        /// <summary>
+        /// 把 v2.1 回合面板拖一段（走 HUD 的公开口子，和鼠标拖动同一条路）。
+        ///
+        /// 【为什么不用真鼠标】探针不模拟输入事件；面板能不能拖、拖了会不会出屏，
+        /// 只能靠"喂位移 + 截图 + 打印夹取后的结果"来看。这里打印的
+        /// TurnPanelOffset 是**夹取之后**的值，所以"巨大位移也没飞出去"这件事有据可查。
+        /// </summary>
+        private static void DragTurnPanel(float dx, float dy)
+        {
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            if (hud == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] 找不到 TableHud，面板拖动这次验不了。");
+                return;
+            }
+
+            hud.DragTurnPanelBy(new Vector2(dx, dy));
+            Debug.Log("[AutoPlay/V21] 回合面板拖 (" + dx + ", " + dy + ") → 位移现在是 "
+                      + hud.TurnPanelOffset + "（屏幕 " + Screen.width + "×" + Screen.height + "）");
+        }
+
+        /// <summary>把回合面板挪回原位（探针收尾用，后面的截图才是"正常桌面"）。</summary>
+        private static void ResetTurnPanel()
+        {
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            if (hud == null) return;
+
+            Vector2 back = hud.TurnPanelOffset;
+            hud.DragTurnPanelBy(new Vector2(-back.x, -back.y));
+            Debug.Log("[AutoPlay/V21] 回合面板已复位 → 位移 " + hud.TurnPanelOffset);
+        }
+
+        /// <summary>
+        /// 把一排大卡（牌组 / 关卡）投影到屏幕上的包围盒打进日志。
+        ///
+        /// 【为什么必须量】"6 副牌组有没有跑出屏幕"这件事，肉眼看截图只能看出
+        ///   "好像没出"，量出来才是"最右边缘 x = 1287 < 1459 − 边距"。
+        ///   投影的是卡身包围盒的八个角（不是中心点）—— 立体卡只投中心会漏掉边角。
+        /// </summary>
+        private static void LogCardRow(string what)
+        {
+            TableChoiceRig rig = Object.FindObjectOfType<TableChoiceRig>();
+            if (rig == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] 找不到 TableChoiceRig，" + what + "卡量不了。");
+                return;
+            }
+
+            float x0, y0, x1, y1;
+            if (!rig.CardScreenBounds(out x0, out y0, out x1, out y1))
+            {
+                Debug.LogWarning("[AutoPlay/V21] " + what + "卡投影失败（相机没就位？）");
+                return;
+            }
+
+            Debug.Log("[AutoPlay/V21] " + what + "卡屏幕包围盒（像素，左上原点）："
+                      + "x " + x0.ToString("0.0") + " ~ " + x1.ToString("0.0")
+                      + "，y " + y0.ToString("0.0") + " ~ " + y1.ToString("0.0")
+                      + "　｜　屏幕 " + Screen.width + "×" + Screen.height
+                      + "　｜　行数 " + rig.LastLayoutRows
+                      + "　缩放 " + rig.LastLayoutScale.ToString("0.00")
+                      + "　｜　右边缘余量 " + (Screen.width - x1).ToString("0.0")
+                      + "，下边缘余量 " + (Screen.height - y1).ToString("0.0"));
+        }
+
+        /// <summary>开 / 关关卡窗口（HUD 的公开口子）。</summary>
+        private static void SetLevelWindow(bool open)
+        {
+            TableHud hud = Object.FindObjectOfType<TableHud>();
+            if (hud == null) return;
+
+            hud.SetLevelWindowOpen(open);
+            Debug.Log("[AutoPlay/V21] 关卡窗口 " + (open ? "已打开" : "已关闭"));
+        }
+
+        /// <summary>开 / 关卡牌图鉴（走的和 Esc 菜单里那一项同一个入口）。</summary>
+        private static void SetBrowser(bool open)
+        {
+            CardBrowser b = Object.FindObjectOfType<CardBrowser>();
+            if (b == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] 找不到 CardBrowser，图鉴这次拍不到。");
+                return;
+            }
+
+            b.SetOpen(open);
+            Debug.Log("[AutoPlay/V21] 卡牌图鉴 " + (open ? "已打开" : "已关闭"));
+        }
+
+        /// <summary>开 / 关暂停菜单（拍 Esc 菜单里新增的两个入口）。</summary>
+        private static void SetPaused(bool paused)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null) return;
+
+            loop.paused = paused;
+            Debug.Log("[AutoPlay/V21] 暂停菜单 " + (paused ? "已打开" : "已关闭"));
         }
 
         private static void ProbeCorePickV21()

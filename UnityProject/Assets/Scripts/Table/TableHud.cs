@@ -30,6 +30,53 @@ namespace GameJam.Prototype
         // 面板统一走"深色底 + 浅色字"，和游戏整体调子也一致。
         private GUIStyle panelBox, panelBoxInner, panelGroup, h1Panel, bodyPanel, dimPanel, btnClose;
 
+        // ── v2.1 面板：半透明底板（用户反馈"回合数 UI 挡住上面那张牌"）──
+        // 底透、字不透：只换底板贴图的 alpha，文字样式一个像素都不动。
+        private GUIStyle panelGroupGlass, panelBoxGlass, reportBoxGlass, scrollGlass;
+
+        // ── v2.1 面板：可拖动 ──
+        private const float PanelKeepOnScreen = 40f;   // 拖到天边也至少有这么多像素留在屏幕里（见 ClampPanelOffset）
+        private const float GlassAlpha       = 0.78f;  // 回合 / 选刀片 / 结算这一档
+        private const float GlassAlphaReport = 0.88f;  // 规则报告单独更实一点（理由见 EnsureStyles）
+
+        /// <summary>
+        /// 一块面板的拖动状态。
+        ///
+        /// 【为什么每块面板各一份】位置得各记各的（把回合面板拖到左边，
+        /// 不该把结算面板一起带走），"鼠标压在哪块上"也只能按各自的矩形判断。
+        /// </summary>
+        private sealed class PanelDrag
+        {
+            /// <summary>相对"设计位置"的位移（设计位置 = 居中 / 顶部那些算出来的位置）。</summary>
+            public Vector2 offset;
+
+            /// <summary>
+            /// 上一帧面板矩形，**没有**加位移的那一份 ——
+            /// 它和 GUI.matrix 里拿到的 Event.mousePosition 处在同一个坐标系（见 HandlePanelDrag）。
+            /// </summary>
+            public Rect lastRect;
+
+            public bool dragging;
+        }
+
+        private readonly PanelDrag turnPanelDrag   = new PanelDrag();
+        private readonly PanelDrag bladePanelDrag  = new PanelDrag();
+        private readonly PanelDrag turnResultDrag  = new PanelDrag();
+        private readonly PanelDrag levelEndDrag    = new PanelDrag();
+        private readonly PanelDrag levelResultDrag = new PanelDrag();
+        private readonly PanelDrag reportDrag      = new PanelDrag();
+        private readonly PanelDrag levelWindowDrag = new PanelDrag();
+
+        // BeginCenterPanel / EndCenterPanel 之间传状态（End 时才知道面板画在哪、要还原哪个矩阵）
+        private PanelDrag centerPanelDrag;
+        private Matrix4x4 centerPanelPrevMatrix;
+
+        // 每帧记录"v2.1 面板在屏幕上的矩形"（= 设计矩形 + 位移）。
+        // Update 里拿它判断鼠标是不是压在面板上 —— 见 UpdatePanelPickBlock。
+        private readonly List<Rect> v21PanelRects = new List<Rect>();
+        private bool pickBlocked;                                          // 上一帧是不是已经关过碰撞体
+        private readonly List<Collider> pickBlockedColliders = new List<Collider>();   // 只记自己关过的，回头原样打开
+
         // ── 开场界面的大标题 ──
         private GUIStyle titleBig, titleSub, titleHint;
 
@@ -39,6 +86,18 @@ namespace GameJam.Prototype
         // ── v2.1 的规则解析报告面板（F2）──
         private bool     rulesReportOpen;
         private Vector2  rulesReportScroll;
+
+        // ── 关卡窗口（B：用户要"单独一个窗口显示关卡"）──
+        private bool     levelWindowOpen;
+        private Vector2  levelWindowScroll;
+        private int      levelWindowPick = -1;      // 窗口里点中的那一关（-1 = 还没点）
+        private bool     wasLevelSelect;            // 上一帧是不是关卡界面（用来"进关卡界面自动弹窗"）
+        // 本次运行内记下每关过没过：Level 的运行状态只对"当前这一关"有效，
+        // 换关之后就丢了 —— 窗口要显示"已通过/未通过"就得自己记一份。
+        private readonly Dictionary<int, bool> levelCleared = new Dictionary<int, bool>();
+
+        // ── 卡牌图鉴（F1，实现在 CardBrowser）──
+        private CardBrowser browser;
 
         // 报告内容的排版高度 / 滚动区可见高度。
         // 滚动到底要用它们算偏移 —— 见 ScrollRulesReportToEnd 里为什么不能
@@ -67,6 +126,7 @@ namespace GameJam.Prototype
             if (interaction == null) interaction = Object.FindObjectOfType<TableInteraction>();
             setup = Object.FindObjectOfType<TableSetup>();
             turnLoop = Object.FindObjectOfType<TableTurnLoop>();
+            browser = Object.FindObjectOfType<CardBrowser>();
         }
 
         private void Update()
@@ -84,6 +144,9 @@ namespace GameJam.Prototype
             HandleMenuKeys();
             HandleConfirmKey();
             HandleRulesKeys();
+
+            // 鼠标压在 v2.1 面板上时，把桌面卡牌的拾取先关掉（防点击穿透，见该方法说明）
+            UpdatePanelPickBlock();
         }
 
         /// <summary>
@@ -125,6 +188,36 @@ namespace GameJam.Prototype
         public void ScrollRulesReportToEnd()
         {
             rulesReportScroll.y = Mathf.Max(0f, reportContentH - reportViewH);
+        }
+
+        /// <summary>
+        /// 把 v2.1 回合面板整体挪一段 —— **自动试玩探针用**（玩家用鼠标拖）。
+        ///
+        /// 【为什么需要它】探针不模拟鼠标输入（它只走游戏自己的公开入口），
+        ///   而"面板能拖走、拖了不会出屏"这两件事只能靠截图看。这里喂的是
+        ///   **和鼠标拖动完全相同**的那条路：同一个 offset 字段、
+        ///   同一个 ClampPanelOffset 夹取、同一个 GUI.matrix 绘制。
+        ///   换句话说，除了"位移是谁给的"，其余全是玩家那条路。
+        /// </summary>
+        public void DragTurnPanelBy(Vector2 delta)
+        {
+            turnPanelDrag.offset = ClampPanelOffset(turnPanelDrag.offset + delta, turnPanelDrag.lastRect);
+        }
+
+        /// <summary>
+        /// 回合面板当前的位移（探针拿它验证"夹取生效了没有" —— 喂一个巨大的 delta 之后，
+        /// 这个值应该停在"面板还有 40 像素留在屏幕里"的那个位置，而不是真的飞出去）。
+        /// </summary>
+        public Vector2 TurnPanelOffset { get { return turnPanelDrag.offset; } }
+
+        /// <summary>
+        /// 开关关卡窗口 —— 自动试玩探针用（玩家走 Esc 菜单那一项，同一条路）。
+        /// 打开时把选中停在当前关卡上，和菜单里点开的行为一致。
+        /// </summary>
+        public void SetLevelWindowOpen(bool open)
+        {
+            levelWindowOpen = open;
+            if (open && turnLoop != null) levelWindowPick = turnLoop.levelIndex;
         }
 
         /// <summary>
@@ -171,6 +264,11 @@ namespace GameJam.Prototype
             }
 
             if (turnLoop.settingsOpen) { turnLoop.settingsOpen = false; return; }
+
+            // 关卡窗口 / 卡牌图鉴也在"一层一层退"的链子上：它们在暂停菜单之上，
+            // 所以要先关它们，不然按 Esc 会跳过一层（面板还在，人以为没反应）。
+            if (browser != null && browser.IsOpen) { browser.SetOpen(false); return; }
+            if (levelWindowOpen) { levelWindowOpen = false; return; }
 
             // 开场、开局准备、总结算没有"暂停"这回事
             if (turnLoop.IsTitle || turnLoop.IsPreparing) return;
@@ -240,6 +338,37 @@ namespace GameJam.Prototype
                     margin = new RectOffset(0, 0, 0, 0)
                 };
 
+                // ── v2.1 面板：半透明底板 ──
+                // 【为什么不直接用 GUI.color 罩一层】GUI.color 会把这块区域里画的
+                //   **所有东西**（包括文字）一起乘上 alpha —— 面板是透了，字也跟着糊了。
+                //   要"底透、字不透"，只能让底板贴图自己带 alpha（见 TintAlpha）。
+                //
+                // 【两档 alpha】回合 / 选刀片 / 结算走 0.78：能透出后面的牌，字仍然清楚。
+                //   规则报告走 0.88 更实一点 —— 那上面是几百行密排的中文，
+                //   桌子透过来太多会明显影响读字，报告是"查资料"，可读性优先。
+                //
+                // 复制失败（拿不到那张贴图）时**保持不透明**：宁可不透，
+                // 也不能把面板整个画没了（new GUIStyle(panelBox) 自带那张不透明底）。
+                Texture2D glassMid    = TintAlpha(ProceduralArt.PanelBackdrop(), GlassAlpha);
+                Texture2D glassReport = TintAlpha(ProceduralArt.PanelBackdrop(), GlassAlphaReport);
+
+                panelGroupGlass = new GUIStyle(panelGroup);
+                panelBoxGlass   = new GUIStyle(panelBox);
+                reportBoxGlass  = new GUIStyle(panelBox);
+
+                if (glassMid != null)
+                {
+                    panelGroupGlass.normal.background = glassMid;
+                    panelBoxGlass.normal.background   = glassMid;
+                }
+                if (glassReport != null) reportBoxGlass.normal.background = glassReport;
+
+                // 滚动区的底板也得跟着透：不然面板中间会被它盖回不透明，
+                // 半透明就只剩边框那一圈了（回合结算的日志区、报告正文区都是它）。
+                // 除了背景，其它（padding / margin）照抄皮肤里那份，滚动区几何不变。
+                scrollGlass = new GUIStyle(GUI.skin.scrollView);
+                scrollGlass.normal.background = null;
+
                 h1Panel   = new GUIStyle(h1)   { fontSize = 21 };
                 bodyPanel = new GUIStyle(body) { fontSize = 15 };
                 dimPanel  = new GUIStyle(dim)  { fontSize = 13 };
@@ -291,10 +420,228 @@ namespace GameJam.Prototype
             }
         }
 
+        /// <summary>
+        /// 把一张贴图整张**乘一个 alpha** 复制一份（原图不动）。
+        ///
+        /// 【为什么是"复制 ProceduralArt 那张"而不是另画一张半透明底】
+        ///   底板是 32×32 + 9 宫格拉伸（border 8）：圆角、描边、填充全在那张图里。
+        ///   照它改 alpha，v2.1 面板的形状就和别的面板**完全一致**；
+        ///   以后谁调了那张底图，这边自动跟着变，不会长出第二套"长得不太一样"的面板。
+        ///
+        /// 【为什么不能直接改原图】那张是 ProceduralArt 全局缓存的，暂停菜单 / 设置 /
+        ///   检视窗口都在用；就地改 alpha 会把旧流程面板一起变透明（用户没让改那些）。
+        /// </summary>
+        private static Texture2D TintAlpha(Texture2D src, float alpha)
+        {
+            if (src == null) return null;
+
+            Color32[] px;
+            try { px = src.GetPixels32(); }
+            catch { return null; }   // 贴图不可读时退化成"不透明"，绝不抛出去把 OnGUI 打死
+
+            for (int i = 0; i < px.Length; i++)
+                px[i].a = (byte)Mathf.Clamp(Mathf.RoundToInt(px[i].a * alpha), 0, 255);
+
+            Texture2D tex = new Texture2D(src.width, src.height, TextureFormat.RGBA32, false);
+            tex.SetPixels32(px);
+            tex.Apply(false, false);
+            tex.hideFlags = HideFlags.HideAndDontSave;   // 别在场景卸载时被销毁（和 HeaderStyle 同一处理）
+            return tex;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  v2.1 面板：拖动 + 防"点击穿透"
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>位移矩阵：把面板整体挪到 offset 处。布局代码一行都不用改。</summary>
+        private static Matrix4x4 OffsetMatrix(Vector2 offset)
+        {
+            return Matrix4x4.TRS(new Vector3(offset.x, offset.y, 0f), Quaternion.identity, Vector3.one);
+        }
+
+        /// <summary>IMGUI 的鼠标坐标：**左上原点**（和 Event.mousePosition 同一套）。</summary>
+        private static Vector2 ScreenMouse()
+        {
+            return new Vector2(Input.mousePosition.x, Screen.height - Input.mousePosition.y);
+        }
+
+        /// <summary>面板在屏幕上的矩形 = 设计矩形 + 位移。</summary>
+        private static Rect ScreenRect(Rect rect, Vector2 offset)
+        {
+            return new Rect(rect.x + offset.x, rect.y + offset.y, rect.width, rect.height);
+        }
+
+        /// <summary>
+        /// 处理一块面板的拖动，并把它这一帧的矩形记下来。
+        ///
+        /// 【为什么必须在**内容画完之后**调用】IMGUI 的事件是"先画的先拿"：
+        ///   面板上的按钮 / 滚动条先画、先消费掉按下的那一下，所以点按钮不会变成拖面板；
+        ///   只有落在没人消费的地方（标题、空白、文字）才会走到这里开始拖 ——
+        ///   正好就是"标题栏 / 空白处可拖"，不用再自己划一块拖动区。
+        ///
+        /// 【为什么用 Event.delta 而不是"鼠标位置 − 按下位置"】拖动时面板自己也在动，
+        ///   用绝对位置算会互相追、发飘；delta 是事件自带的位移，跟手。
+        ///
+        /// 【★ 几何判定用 Input.mousePosition 而不是 Event.mousePosition】
+        ///   面板的位移是拿 GUI.matrix 做的，而"矩阵里的 Event.mousePosition 到底是
+        ///   矩阵内坐标还是屏幕坐标"这件事依赖 Unity 内部的 clip/matrix 处理，
+        ///   一旦猜错，面板拖走之后就再也按不中它（差一个 offset）。
+        ///   这里换成一条没有歧义的路：**几何一律用 Input.mousePosition 换算的屏幕坐标**
+        ///   （左上原点），和面板的屏幕矩形比；事件对象只回答另一个问题 ——
+        ///   "按下的这一下有没有被别的控件吃掉"（被按钮 Use 掉时 type 会变成 Used）。
+        ///   屏幕坐标和"面板画在哪"是同一套数，矩阵怎么变都不会算错。
+        /// </summary>
+        private void HandlePanelDrag(PanelDrag d)
+        {
+            Rect rect = d.lastRect;   // PanelFrameEnd 刚记下的那一份
+
+            Event e = Event.current;
+            if (e == null) return;
+
+            if (!d.dragging)
+            {
+                if (e.type == EventType.MouseDown && e.button == 0 &&
+                    ScreenRect(rect, d.offset).Contains(ScreenMouse()))
+                {
+                    d.dragging = true;
+                    e.Use();
+                }
+                return;
+            }
+
+            if (e.type == EventType.MouseDrag && e.button == 0)
+            {
+                d.offset = ClampPanelOffset(d.offset + e.delta, rect);
+                e.Use();
+            }
+            else if (e.type == EventType.MouseUp)
+            {
+                d.dragging = false;
+                e.Use();
+            }
+        }
+
+        /// <summary>
+        /// 把位移夹住，保证面板至少有 <see cref="PanelKeepOnScreen"/> 像素留在屏幕里。
+        ///
+        /// 【为什么是"留 40 像素"而不是"完全不许出屏"】面板比窗口还大的时候
+        ///   （小窗口 + 报告面板）"完全不出屏"根本无解，硬夹会把面板弹回中间、
+        ///   拖起来像卡住。留 40 像素的意思很明确：**任何情况下都还能抓住它拖回来**。
+        /// </summary>
+        private static Vector2 ClampPanelOffset(Vector2 offset, Rect rect)
+        {
+            float minX = PanelKeepOnScreen - rect.width  - rect.x;
+            float maxX = Screen.width  - PanelKeepOnScreen - rect.x;
+            float minY = PanelKeepOnScreen - rect.height - rect.y;
+            float maxY = Screen.height - PanelKeepOnScreen - rect.y;
+
+            // 面板比屏幕还宽/还高时 min 会跑到 max 后面去，夹取就没有意义了 ——
+            // 取中点（= 让它居中），至少不会左右乱跳。
+            if (minX > maxX) { float mid = (minX + maxX) * 0.5f; minX = mid; maxX = mid; }
+            if (minY > maxY) { float mid = (minY + maxY) * 0.5f; minY = mid; maxY = mid; }
+
+            offset.x = Mathf.Clamp(offset.x, minX, maxX);
+            offset.y = Mathf.Clamp(offset.y, minY, maxY);
+            return offset;
+        }
+
+        /// <summary>把面板这一帧的屏幕矩形记下来（UpdatePanelPickBlock 要用）。</summary>
+        private static void RecordPanelRect(List<Rect> into, Rect rect, Vector2 offset)
+        {
+            into.Add(ScreenRect(rect, offset));
+        }
+
+        /// <summary>
+        /// 鼠标是不是压在 v2.1 面板上 —— **给拾取那一路用的钩子**（TableInteraction 现在还没读它）。
+        ///
+        /// 【为什么会有点击穿透】卡牌拾取走的是 `Input.mousePosition` + 全场景
+        ///   `Physics.Raycast`（见 TableInteraction.RaycastCard），它**完全不看 IMGUI**：
+        ///   在面板上按一下，底下的牌照样会被选中、被拿起，甚至把手牌法术直接打出去。
+        ///   正解是拾取那一路开头加一行 `if (TableHud.PointerOverPanel) return;`，
+        ///   但那个文件不归这里改 —— 所以我也做了一层自带的兜底，见 UpdatePanelPickBlock。
+        /// </summary>
+        public static bool PointerOverPanel { get; private set; }
+
+        /// <summary>
+        /// 鼠标压在 v2.1 面板上时，把桌面卡牌的碰撞体临时关掉 —— 兜底防"点击穿透"。
+        ///
+        /// 【为什么是关碰撞体，而不是在 IMGUI 里拦事件】拾取读的是 `Input` + `Physics.Raycast`，
+        ///   和 IMGUI 的事件系统没有关系，Event.Use() 拦不住它；全场景射线里唯一能
+        ///   "说话"的东西就是碰撞体本身（JuicerRig 那边也写过：机器艺术件故意不带碰撞体，
+        ///   否则会挡住拾取）。这里只是**临时**关掉，鼠标一离开面板就原样打开。
+        ///
+        /// 【为什么用上一帧的面板矩形就够】按下鼠标那一帧，鼠标早就已经在面板上了
+        ///   （不然怎么会点到面板），所以碰撞体在前一帧就关掉了，这一下自然不会落到牌上。
+        ///   反过来"鼠标刚进面板的同一帧就按下"人做不到。
+        ///
+        /// 【只动自己关过的那些】关过谁记在 pickBlockedColliders 里，恢复时逐个打开；
+        ///   被吞掉的卡（ConsumeInto 自己关了碰撞体）不抢着开，免得把它的动画搅了。
+        ///
+        /// 【旧流程的面板不在这个名单里】它们还是老样子（那几块用户没让动）——
+        ///   要一起治的话，把它们的矩形也 RecordPanelRect 进来就行。
+        /// </summary>
+        private void UpdatePanelPickBlock()
+        {
+            Vector2 m = ScreenMouse();   // 和拖动命中判定用同一套屏幕坐标
+
+            bool over = false;
+            for (int i = 0; i < v21PanelRects.Count; i++)
+            {
+                if (v21PanelRects[i].Contains(m)) { over = true; break; }
+            }
+
+            PointerOverPanel = over;
+
+            if (over == pickBlocked) return;   // 状态没变就别去翻碰撞体（每帧翻一遍纯浪费）
+            pickBlocked = over;
+
+            if (over)
+            {
+                PlayCard[] cards = Object.FindObjectsOfType<PlayCard>();
+                for (int i = 0; i < cards.Length; i++)
+                {
+                    if (cards[i] == null) continue;
+
+                    Collider[] cols = cards[i].GetComponentsInChildren<Collider>();
+                    for (int c = 0; c < cols.Length; c++)
+                    {
+                        if (cols[c] == null || !cols[c].enabled) continue;   // 本来就关着的不是我们关的
+                        cols[c].enabled = false;
+                        pickBlockedColliders.Add(cols[c]);
+                    }
+                }
+            }
+            else
+            {
+                for (int i = 0; i < pickBlockedColliders.Count; i++)
+                {
+                    Collider col = pickBlockedColliders[i];
+                    if (col == null) continue;   // 卡已经被销毁/吞掉了
+
+                    PlayCard card = col.GetComponentInParent<PlayCard>();
+                    if (card != null && card.IsConsuming) continue;
+
+                    col.enabled = true;
+                }
+                pickBlockedColliders.Clear();
+            }
+        }
+
         private void OnGUI()
         {
             EnsureStyles();
             if (setup == null || interaction == null) return;
+
+            // 这一趟画了哪些 v2.1 面板（拖动后的真实屏幕矩形）——每趟重记，
+            // Update 里拿最后一次的结果判断鼠标压在哪（见 UpdatePanelPickBlock）
+            v21PanelRects.Clear();
+
+            // ── 图鉴开着的时候，HUD 整帧让开 ──
+            //   图鉴是"翻开查资料"的一整屏，而它的 OnGUI 跑在 TableHud **前面**
+            //   （实测：回合条、卡牌信息条会浮在图鉴上面，左边那排卡面被挡掉一半）。
+            //   抢执行顺序没用（[DefaultExecutionOrder] 影响不到 OnGUI），
+            //   所以改成这里让位：开着图鉴时这一层什么都不画。
+            if (browser != null && browser.IsOpen) return;
 
             DrawViewButtons();
 
@@ -317,9 +664,170 @@ namespace GameJam.Prototype
             // 规则解析报告盖在弹窗之上（它是"查资料"，任何时候都该能翻）
             if (rulesReportOpen) DrawRulesReportPanel();
 
+            // 关卡窗口：进关卡界面自动弹，Esc 菜单里也能随时开关
+            TrackLevelWindow();
+            if (levelWindowOpen) DrawLevelWindow();
+
             // 检视面板和划过信息条是同一个位置，二选一
             if (interaction.Inspected != null) DrawInspectPanel();
             else                               DrawCardInfo();
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  关卡窗口（B）
+        //
+        //  【用户要的是什么】"最好单独开一个窗口给我显示关卡" —— 桌上那排 3D 关卡卡
+        //   离得远、字小、还占着桌面；窗口里一屏能看全：名字 / 目标分 / 状态，
+        //   点一行就选中。**3D 那排卡照旧保留**，两条路并存（点卡那条交互一行没动）。
+        //
+        //  【和现有确认流程的关系】点一行 = `choiceRig.SelectDeck(i)`（和点 3D 卡
+        //   完全同一个入口，所以金色当前关标记、高亮都跟着走），确认键 =
+        //   `turnLoop.ConfirmLevelSelect()`（原流程）。没有另开一条捷径。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 进入关卡界面（LevelSelect）时自动把窗口打开；离开就留着状态不强制关
+        /// （玩家可能正拖着它看）。另外顺手记一下每关过没过。
+        /// </summary>
+        private void TrackLevelWindow()
+        {
+            if (turnLoop == null) return;
+
+            RecordLevelOutcome();
+
+            bool nowLevelSelect = turnLoop.IsLevelSelect;
+            if (nowLevelSelect && !wasLevelSelect)
+            {
+                levelWindowOpen = true;
+                levelWindowPick = turnLoop.levelIndex;   // 默认停在当前关卡上
+            }
+            wasLevelSelect = nowLevelSelect;
+        }
+
+        /// <summary>
+        /// 把"这一关过没过"记进本次运行的账本。
+        ///
+        /// 【为什么要自己记】`Level.state` 是**当前这一关**的运行状态，
+        ///   `NextLevel()` 一换关就换成新对象了 —— 窗口要显示"已通过 / 未通过"
+        ///   就必须在它还活着的时候抄一份（只在内存里，重启即忘，够用）。
+        /// </summary>
+        private void RecordLevelOutcome()
+        {
+            if (turnLoop == null || turnLoop.level == null) return;
+            if (turnLoop.levelIndex < 0) return;
+
+            GameJam.Data.LevelState st = turnLoop.level.state;
+            if (st == GameJam.Data.LevelState.Cleared)        levelCleared[turnLoop.levelIndex] = true;
+            else if (st == GameJam.Data.LevelState.Failed)    levelCleared[turnLoop.levelIndex] = false;
+        }
+
+        /// <summary>关卡窗口：一屏列出全部关卡，点一行选中、按确认进入。</summary>
+        private void DrawLevelWindow()
+        {
+            if (turnLoop == null || turnLoop.levels == null || turnLoop.levels.Count == 0) return;
+
+            // 尺寸照报告面板那一套：跟着屏幕走，小窗口收缩（列表用滚动区，永远放得下）
+            float w = Mathf.Max(360f, Mathf.Min(620f, Screen.width - 32f));
+            float h = Mathf.Max(220f, Mathf.Min(560f, Screen.height - 32f));
+            Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+
+            Matrix4x4 prevMatrix = GUI.matrix;
+            GUI.matrix = OffsetMatrix(levelWindowDrag.offset) * prevMatrix;
+
+            GUI.Box(box, GUIContent.none, panelBoxGlass);
+            GUILayout.BeginArea(new Rect(box.x + 14f, box.y + 12f, w - 28f, h - 24f));
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("关　卡", h1Panel, GUILayout.ExpandWidth(true));
+            if (GUILayout.Button("关闭", btn, GUILayout.Width(72f), GUILayout.Height(28f)))
+            {
+                GUI.FocusControl(null);
+                levelWindowOpen = false;
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.Label("点一行选中它，再按下面的确认键 —— 和点桌上那排关卡卡是同一条路。", dimPanel);
+            GUILayout.Space(4f);
+
+            levelWindowScroll = GUILayout.BeginScrollView(levelWindowScroll, false, false,
+                                                          GUI.skin.horizontalScrollbar,
+                                                          GUI.skin.verticalScrollbar,
+                                                          scrollGlass,
+                                                          GUILayout.ExpandHeight(true));
+
+            for (int i = 0; i < turnLoop.levels.Count; i++)
+            {
+                LevelData lv = turnLoop.levels[i];
+                if (lv == null) continue;
+
+                int target = TableSettings.UseRulesV21 && TableSettings.V21TargetScore > 0
+                    ? TableSettings.V21TargetScore
+                    : lv.targetScore;
+
+                string row = lv.name + "　　目标分 " + target + "　　" + LevelStatusText(i);
+
+                bool picked = (i == levelWindowPick);
+                if (GUILayout.Button(row, picked ? btnOn : btn, GUILayout.ExpandWidth(true), GUILayout.Height(30f)))
+                {
+                    GUI.FocusControl(null);
+                    PickLevelInWindow(i);
+                }
+            }
+
+            GUILayout.Space(14f);
+            GUILayout.EndScrollView();
+
+            // ── 确认 ──
+            //   必须在关卡界面（LevelSelect）才能确认 —— 打到一半点"进入这一关"
+            //   等于中途换关（规则状态会串）。按钮灰着的时候一定要写清为什么，
+            //   不然玩家只会以为坏了。
+            bool canConfirm = turnLoop.IsLevelSelect && levelWindowPick >= 0;
+
+            GUILayout.Space(4f);
+            GUILayout.BeginHorizontal();
+
+            bool oldEnabled = GUI.enabled;
+            GUI.enabled = canConfirm;
+            if (GUILayout.Button("进入这一关", btn, GUILayout.ExpandWidth(true), GUILayout.Height(38f)))
+            {
+                GUI.FocusControl(null);
+                turnLoop.ConfirmLevelSelect();
+                if (!turnLoop.IsLevelSelect) levelWindowOpen = false;   // 确认成功就把窗口收起来
+            }
+            GUI.enabled = oldEnabled;
+            GUILayout.EndHorizontal();
+
+            if (!canConfirm)
+                GUILayout.Label(turnLoop.IsLevelSelect ? "先在上面点一行选一关" 
+                                                       : "现在不在关卡界面 —— 窗口只是查看；"
+                                                         + "回关卡界面（Esc → 退出关卡，或打完这一关）才能进关",
+                                dimPanel);
+
+            GUILayout.EndArea();
+
+            EndPanelFrame(levelWindowDrag, box, prevMatrix);
+        }
+
+        /// <summary>窗口里点了一行：选中它，并让桌上那排关卡卡的选中态跟着走。</summary>
+        private void PickLevelInWindow(int i)
+        {
+            levelWindowPick = i;
+
+            // ★ 只在关卡界面同步给 rig：其它阶段那排卡是**牌组卡**，
+            //   这时候调 SelectDeck 等于偷偷改掉牌组选择（界面上看不出来，很坑）。
+            if (turnLoop.IsLevelSelect && turnLoop.choiceRig != null)
+                turnLoop.choiceRig.SelectDeck(i);
+        }
+
+        /// <summary>一行末尾的状态文字。</summary>
+        private string LevelStatusText(int i)
+        {
+            if (turnLoop.levelIndex == i) return "▸ 当前关卡";
+
+            bool cleared;
+            if (levelCleared.TryGetValue(i, out cleared)) return cleared ? "已通过" : "未通过";
+
+            return "未打过";
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -328,7 +836,10 @@ namespace GameJam.Prototype
 
         private void DrawPausePanel()
         {
-            const float w = 400f, h = 312f;
+            // 312 → 396：多了「关卡」和「卡牌图鉴」两项，面板跟着长高。
+            // ★ 高度必须 = 66（标题）+ 6×(40+6)（六个按钮）+ 两条说明的 44 ——
+            //   第一版只加到 358，最后一个「退出游戏」正好压在下面两行说明上。
+            const float w = 400f, h = 396f;
             Rect r = CenterBox(w, h);
             GUI.Box(r, GUIContent.none, panelBox);
 
@@ -349,6 +860,27 @@ namespace GameJam.Prototype
             {
                 GUI.FocusControl(null);
                 turnLoop.settingsOpen = true;
+            }
+            by += bh + gap;
+
+            // ── 关卡窗口 / 卡牌图鉴 ──
+            //   用户原话："最好单独开一个窗口给我显示关卡"、图鉴"入口做明显"。
+            //   两项都做成"从这里开"，不再只靠一个没人知道的快捷键。
+            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh),
+                           levelWindowOpen ? "关卡（已打开）" : "关　　卡", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.paused = false;      // 让开位置：窗口是独立一层，别和暂停菜单叠着
+                levelWindowOpen = !levelWindowOpen;
+                if (levelWindowOpen) levelWindowPick = turnLoop.levelIndex;
+            }
+            by += bh + gap;
+
+            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "卡牌图鉴（F1）", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.paused = false;
+                if (browser != null) browser.Toggle();
             }
             by += bh + gap;
 
@@ -680,7 +1212,7 @@ namespace GameJam.Prototype
                 ? turnLoop.bladeCoreCard
                 : r.CoreCandidate();
 
-            BeginCenterPanel(660f);
+            BeginCenterPanel(660f, bladePanelDrag);
 
             GUILayout.Label("选择你的刀片核心", h1Panel);
 
@@ -733,27 +1265,47 @@ namespace GameJam.Prototype
         /// 【上下留白怎么来的】外面套一层"占满屏幕的 Area + 上下两个 FlexibleSpace"，
         ///   内容矮的时候面板自然居中；内容比屏幕还高时两个留白双双收成 0，
         ///   面板从屏幕顶端开始排（不会像"居中"那样把上下两头都切掉）。
+        ///
+        /// 【可拖动】整块面板的位移走 `GUI.matrix`（见 OffsetMatrix）：
+        ///   里面这套按内容长高的布局一行不用改，鼠标命中也会跟着矩阵走。
+        ///   位移存在面板自己那份 <see cref="PanelDrag"/> 里，所以各面板互不影响。
         /// </summary>
-        private void BeginCenterPanel(float designW)
+        private void BeginCenterPanel(float designW, PanelDrag drag)
         {
             // 宽度跟着屏幕收缩：设计宽度是给大窗口的，小窗口下按屏幕减 32 ——
             // 少了这个 Min，面板右边会伸出屏幕，按钮看得见点不到。
             centerPanelW = Mathf.Max(280f, Mathf.Min(designW, Screen.width - 32f));
 
+            centerPanelDrag = drag;
+            centerPanelPrevMatrix = GUI.matrix;
+            GUI.matrix = OffsetMatrix(drag.offset) * GUI.matrix;
+
             GUILayout.BeginArea(new Rect(0f, 0f, Screen.width, Screen.height));
             GUILayout.FlexibleSpace();
             GUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
-            GUILayout.BeginVertical(panelGroup, GUILayout.Width(centerPanelW));
+            GUILayout.BeginVertical(panelGroupGlass, GUILayout.Width(centerPanelW));
         }
 
         private void EndCenterPanel()
         {
             GUILayout.EndVertical();
+
+            // 组矩形 = 面板这一帧画在哪。★ 必须在 EndArea **之前**取：
+            //   EndArea 之后 GetLastRect 拿到的是那个占满屏幕的 Area，不是面板。
+            //   （EndVertical 之后取是合法的：父组里最后一项就是刚关掉的这个组；
+            //     反过来"刚 Begin 就取"才非法，那个坑在报告面板那边踩过。）
+            Rect rect = GUILayoutUtility.GetLastRect();
+
             GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
             GUILayout.FlexibleSpace();
             GUILayout.EndArea();
+
+            PanelFrameEnd(centerPanelDrag, rect);
+
+            GUI.matrix = centerPanelPrevMatrix;
+            centerPanelDrag = null;
         }
 
         /// <summary>
@@ -804,8 +1356,8 @@ namespace GameJam.Prototype
                 GUI.Label(new Rect(16f, y + 88f, w, 22f), "每回合 5 次行动、每关 4 回合；本回合最后一次启动会献祭吞噬目标", dim);
                 GUI.Label(new Rect(16f, y + 108f, w, 22f), "刀片 H 归零 = 爆刀，关卡结束、当前分数 ×2", dim);
                 GUI.Label(new Rect(16f, y + 128f, w, 22f), "右键单击卡牌 → 查看完整数据　｜　右键拖动 → 转头", dim);
-                GUI.Label(new Rect(16f, y + 148f, w, 22f), "F2 → 卡牌规则解析报告（哪些规则没实现看这里）", dim);
-                GUI.Label(new Rect(16f, y + 168f, w, 22f), "Esc → 菜单（继续 / 设置 / 退出关卡 / 退出游戏）", dim);
+                GUI.Label(new Rect(16f, y + 148f, w, 22f), "F1 → 卡牌图鉴（素材 / 法术全在这）　｜　F2 → 卡牌规则解析报告", dim);
+                GUI.Label(new Rect(16f, y + 168f, w, 22f), "Esc → 菜单（继续 / 设置 / 关卡 / 卡牌图鉴 / 退出关卡 / 退出游戏）", dim);
 
                 if (TableSettings.ShowDebugInfo)
                     GUI.Label(new Rect(16f, y + 190f, w, 22f),
@@ -822,7 +1374,7 @@ namespace GameJam.Prototype
             GUI.Label(new Rect(16f, y + 88f, w, 22f), "右键单击卡牌 → 查看完整数据（Esc 关闭）", dim);
             GUI.Label(new Rect(16f, y + 108f, w, 22f), "右键拖动 / 中键拖动 → 原地转头（活动范围 120° 锥）", dim);
             GUI.Label(new Rect(16f, y + 128f, w, 22f), "1 / 2 / 3 固定视角　　4 自由视角　　G 开关物理", dim);
-            GUI.Label(new Rect(16f, y + 148f, w, 22f), "Esc → 菜单（继续 / 设置 / 返回开场 / 退出游戏）", dim);
+            GUI.Label(new Rect(16f, y + 148f, w, 22f), "F1 → 卡牌图鉴　｜　Esc → 菜单（继续 / 设置 / 关卡 / 卡牌图鉴 / 返回开场 / 退出游戏）", dim);
 
             if (TableSettings.ShowDebugInfo)
                 GUI.Label(new Rect(16f, y + 170f, w, 22f),
@@ -933,8 +1485,17 @@ namespace GameJam.Prototype
             //   现在整块交给 GUILayout.BeginVertical(panelGroup)：组的底是
             //   **内容排完之后**才按组矩形画的，内容多高面板就多高，
             //   既不裁字、也不会在底部留一块空（先量高度再画底要维护两遍文字，不要）。
+            //
+            // ★ 半透明 + 可拖动：底板换 panelGroupGlass（0.78，能透出后面的牌，
+            //   文字样式没动所以字还是实心的）；整块位移走 GUI.matrix，
+            //   下面这套按内容长高的布局一行都不用改。
+            //   报告面板开着的时候**不接拖动**：它是画在这块上面的（见 OverlayOnTop），
+            //   鼠标点在报告上却把回合面板拖走就太怪了。
+            Matrix4x4 prevMatrix = GUI.matrix;
+            GUI.matrix = OffsetMatrix(turnPanelDrag.offset) * prevMatrix;
+
             GUILayout.BeginArea(new Rect(x, y, w, Mathf.Max(60f, Screen.height - y - 14f)));
-            GUILayout.BeginVertical(panelGroup);
+            GUILayout.BeginVertical(panelGroupGlass);
 
             // ── ① 模式 + 回合 / 行动机会 / 分数（最关键的一行放最上面）──
             GUILayout.Label("第 " + r.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel + " 回合"
@@ -1022,7 +1583,36 @@ namespace GameJam.Prototype
             GUILayout.EndHorizontal();
 
             GUILayout.EndVertical();
+
+            // 组矩形 = 面板这一帧画在哪。★ 必须在 EndArea **之前**取，
+            //   而且它是 Area 内的相对坐标，要加回 Area 自己的原点 (x, y)；
+            //   这一份 rect 是"没加位移"的（和 GUI.matrix 里的鼠标坐标同一套，见 HandlePanelDrag）。
+            Rect panelRect = GUILayoutUtility.GetLastRect();
+            panelRect.x += x;
+            panelRect.y += y;
+
             GUILayout.EndArea();
+
+            PanelFrameEnd(turnPanelDrag, panelRect);
+
+            GUI.matrix = prevMatrix;
+        }
+
+        /// <summary>
+        /// 这块面板上面是不是还盖着别人（报告 / 设置 / 暂停 / 右键检视窗口）。
+        ///
+        /// 【为什么要问这一句】IMGUI 的事件是"先画的先拿"，而我这些 v2.1 面板
+        ///   **都画在那些弹窗前面**：鼠标点在弹窗上，底下这块却先一步把这一下消费掉 ——
+        ///   结果是在报告上拖一下、动的是底下的回合面板，更糟的是弹窗上的按钮
+        ///   会因为拿不到 MouseDown 而点不动（按钮是按下时记 hotControl、抬起时才触发）。
+        ///   所以只要上面还有别人，就不接拖动。矩形照记（防穿透那件事跟谁在最上面无关）。
+        /// </summary>
+        private bool OverlayOnTop(PanelDrag self)
+        {
+            if (rulesReportOpen && self != reportDrag) return true;
+            if (turnLoop != null && (turnLoop.settingsOpen || turnLoop.paused)) return true;
+            if (interaction != null && interaction.Inspected != null) return true;
+            return false;
         }
 
         /// <summary>
@@ -1147,7 +1737,7 @@ namespace GameJam.Prototype
                 // 【★ 布局】不再写死 520×176：结束原因是引擎写的中文句子
                 //   （"刀片 H 归零，爆刀"、"4 回合用完了"…长度不定），
                 //   写死高度时一折行就被裁。现在高按内容长、宽按屏幕收缩。
-                BeginCenterPanel(520f);
+                BeginCenterPanel(520f, levelEndDrag);
 
                 GUILayout.Label(r.bursted ? "爆　刀 —— 关卡结束" : "关卡结束", h1Panel);
 
@@ -1304,7 +1894,11 @@ namespace GameJam.Prototype
             float h = Mathf.Max(220f, Mathf.Min(560f, Screen.height - 32f));
             Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
 
-            GUI.Box(box, GUIContent.none, panelBox);
+            // 半透明底板 + 可拖动（位移走 GUI.matrix，矩形只有 box 一处要跟着变）
+            Matrix4x4 prevMatrix = GUI.matrix;
+            GUI.matrix = OffsetMatrix(turnResultDrag.offset) * prevMatrix;
+
+            GUI.Box(box, GUIContent.none, panelBoxGlass);
             GUILayout.BeginArea(new Rect(box.x + 14f, box.y + 12f, w - 28f, h - 24f));
 
             GUILayout.Label("第 " + r.turnIndex + " 回合" + (r.levelOver ? "（关卡已结束）" : "进行中"), h1Panel);
@@ -1328,6 +1922,9 @@ namespace GameJam.Prototype
             GUILayout.Label("── 上一次结算的引擎日志 ──", bodyPanel);
 
             turnResultLogScroll = GUILayout.BeginScrollView(turnResultLogScroll, false, false,
+                                                            GUI.skin.horizontalScrollbar,
+                                                            GUI.skin.verticalScrollbar,
+                                                            scrollGlass,
                                                             GUILayout.ExpandHeight(true));
 
             List<string> tail = r.LastLogTail(12);
@@ -1364,7 +1961,10 @@ namespace GameJam.Prototype
             }
 
             GUILayout.EndHorizontal();
+
             GUILayout.EndArea();
+
+            EndPanelFrame(turnResultDrag, box, prevMatrix);
         }
 
         /// <summary>
@@ -1379,7 +1979,7 @@ namespace GameJam.Prototype
             TableRulesV21 r = turnLoop.rulesV21;
             if (r == null) return;
 
-            BeginCenterPanel(660f);
+            BeginCenterPanel(660f, levelResultDrag);
 
             GUILayout.Label(turnLoop.level.Name + "　总分 " + r.score + " / 目标分 " + r.targetScore
                             + "　" + (turnLoop.Passed ? "通过" : "未通过"), h1Panel);
@@ -1458,7 +2058,12 @@ namespace GameJam.Prototype
             float h = Mathf.Max(160f, Mathf.Min(640f, Screen.height - 32f));
             Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
 
-            GUI.Box(box, GUIContent.none, panelBox);
+            GUI.Box(box, GUIContent.none, reportBoxGlass);
+
+            // 半透明（报告是 0.88，比别的面板实一点：上面是几百行密排中文，可读性优先）
+            // + 可拖动：位移走 GUI.matrix，下面那套排版一行都不用改。
+            Matrix4x4 prevMatrix = GUI.matrix;
+            GUI.matrix = OffsetMatrix(reportDrag.offset) * prevMatrix;
 
             // 14 / 12 对的是 panelBox 的 padding(12) 与边框(8)：内容从"框里面"起，
             // 不压在圆角边框上。★ 高度这里只减面板自己的内边距，
@@ -1482,6 +2087,7 @@ namespace GameJam.Prototype
                 GUILayout.Label("⚠ 报告没建出来 —— 现在**无法确认**哪些规则没实现。"
                                 + "先看 Console 里 [V21] 那条警告。", bodyPanel);
                 GUILayout.EndArea();
+                EndPanelFrame(reportDrag, box, prevMatrix);
                 return;
             }
 
@@ -1510,6 +2116,9 @@ namespace GameJam.Prototype
             float scrollTop = GUILayoutUtility.GetRect(0f, 0f).y;
 
             rulesReportScroll = GUILayout.BeginScrollView(rulesReportScroll, false, false,
+                                                          GUI.skin.horizontalScrollbar,
+                                                          GUI.skin.verticalScrollbar,
+                                                          scrollGlass,
                                                           GUILayout.ExpandHeight(true));
 
             ReportSection("未识别清单（这些句子不会生效 —— 必须给策划确认）", UnrecognizedLines(r));
@@ -1535,6 +2144,32 @@ namespace GameJam.Prototype
             reportViewH = Mathf.Max(0f, (h - 24f) - scrollTop);
 
             GUILayout.EndArea();
+
+            EndPanelFrame(reportDrag, box, prevMatrix);
+        }
+
+        /// <summary>
+        /// 一块面板画完之后统一收尾：记矩形 → 接拖动 → 记屏幕矩形（防穿透用）。
+        ///
+        /// 【为什么"记矩形"和"接拖动"要分开】`d.lastRect` 不只是拖动命中判定用的，
+        ///   出屏夹取（ClampPanelOffset）和探针喂位移都靠它。上面盖着别人时**不接拖动**，
+        ///   但矩形必须照记 —— 不然那段时间 lastRect 一直是 (0,0,0,0)，
+        ///   夹取会退化成"以屏幕左上角当面板"来算（实测：喂 (0,260) 得到的是 (40,260)，
+        ///   面板被顶到左上角、之后连复位都回不去）。这个坑踩过一次，别再合并回去。
+        /// </summary>
+        private void PanelFrameEnd(PanelDrag d, Rect rect)
+        {
+            d.lastRect = rect;
+
+            if (!OverlayOnTop(d)) HandlePanelDrag(d);
+            RecordPanelRect(v21PanelRects, rect, d.offset);
+        }
+
+        /// <summary>GUI.Box + BeginArea 那种面板的收尾：接上面那套，再把矩阵还原。</summary>
+        private void EndPanelFrame(PanelDrag drag, Rect box, Matrix4x4 prevMatrix)
+        {
+            PanelFrameEnd(drag, box);
+            GUI.matrix = prevMatrix;
         }
 
         /// <summary>

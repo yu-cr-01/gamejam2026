@@ -85,6 +85,17 @@ namespace GameJam.Prototype
 
             HandlePhysicsToggle();
 
+            // ★ 鼠标压在 v2.1 面板（半透明、可拖动的那种）上时，别让点击穿透到桌面。
+            //   拾取走的是 Physics.Raycast，它看不见 IMGUI 面板 —— 不挡的话，
+            //   拖面板会顺手把底下的牌选中/拖走。
+            //   只挡"新发起的交互"：正在拖的牌、正在转的视角都要让它走完，
+            //   否则鼠标划过面板的那一刻牌会卡在半空、镜头也会顿住。
+            if (TableHud.PointerOverPanel && Dragging == null && !rightDragging && !middleDragging)
+            {
+                SetHovered(null);
+                return;
+            }
+
             Ray ray = cam.ScreenPointToRay(Input.mousePosition);
 
             // 转视角时不刷新悬停 —— 一边转头一边有牌弹起来很干扰。

@@ -5,7 +5,7 @@ using GameJam.Data;
 namespace GameJam.Prototype
 {
     /// <summary>
-    /// 卡牌总览（开发/验收用界面）：把 `cards_v21.json` 里的**素材与法术全列出来**，
+    /// 卡牌图鉴（开发/验收用界面）：把 `cards_v21.json` 里的**素材与法术全列出来**，
     /// 每张都带卡面 —— 有美术就用美术，没有就退到程序化占位卡面。
     ///
     /// 【为什么单独一个组件，不塞进 TableHud】
@@ -17,7 +17,15 @@ namespace GameJam.Prototype
     ///   素材用 CardArt（正式美术 + 元素映射），法术没有美术，走 ProceduralArt 的程序化卡面。
     ///   两条路都返回 Texture2D，这里只负责画 —— 美术到位后这里一行都不用改。
     ///
-    /// 按键：F1 开关（在 Inspector 里可以改）。
+    /// 按键：F1 开关（在 Inspector 里可以改）。**Esc 菜单里也有入口** ——
+    /// 光有快捷键等于没入口：用户反馈"其实已经有了，但没人发现"。
+    ///
+    /// 【★ 和 HUD 的前后关系】OnGUI 的先后由脚本执行顺序决定，实测这个组件的 OnGUI
+    ///   跑在 TableHud **前面**，于是回合条 / 卡牌信息条会浮在图鉴上面，
+    ///   左边那排卡面被挡掉一半，看起来像界面坏了。
+    ///   （先试过 [DefaultExecutionOrder] 把本组件排到最后 —— 对 OnGUI 不起作用。）
+    ///   现在的做法是反过来：**图鉴开着时 TableHud 整帧不画**（见 TableHud.OnGUI），
+    ///   一整屏的"查资料"界面本来就该独占屏幕。
     /// </summary>
     public class CardBrowser : MonoBehaviour
     {
@@ -25,9 +33,11 @@ namespace GameJam.Prototype
 
         private bool open;
         private string filter = "";
+        private string seriesJump = "";      // 按系列跳转（见 DrawSeriesJump）
         private bool showMaterials = true;
         private bool showSpells = true;
         private Vector2 scroll;
+        private Vector2 seriesScroll;
 
         // 卡片尺寸
         private const float CardW = 96f;
@@ -41,12 +51,35 @@ namespace GameJam.Prototype
 
         private void Update()
         {
-            if (Input.GetKeyDown(toggleKey))
+            if (Input.GetKeyDown(toggleKey)) Toggle();
+        }
+
+        /// <summary>
+        /// 开 / 关图鉴 —— **给 HUD 的 Esc 菜单用**。
+        ///
+        /// 【为什么要有这个方法】图鉴原来只有 F1 一个入口，用户根本没发现它存在
+        ///   （原话："其实已经有了，用户没发现"）。菜单里那一项要能直接开，
+        ///   就不能让 HUD 去伪造一个 F1 按键 —— 那和"只有快捷键"没区别。
+        ///   Esc 关面板也走它（见 TableHud.HandleMenuKeys 的一层层退）。
+        /// </summary>
+        public void Toggle()
+        {
+            SetOpen(!open);
+        }
+
+        /// <summary>直接指定开关（Esc 链上用）。打开时会把 v2.1 的卡并进图鉴。</summary>
+        public void SetOpen(bool want)
+        {
+            open = want;
+            if (open)
             {
-                open = !open;
-                if (open) CardSpecs.EnsureRegistered();   // 打开时把 v2.1 的卡并进图鉴
+                CardSpecs.EnsureRegistered();   // 打开时把 v2.1 的卡并进图鉴
+                filter = "";                    // 每次打开都从"全部"开始，免得上次的筛选把人绕晕
             }
         }
+
+        /// <summary>图鉴现在开着吗（HUD 的 Esc 链要问）。</summary>
+        public bool IsOpen { get { return open; } }
 
         private void OnGUI()
         {
@@ -65,7 +98,7 @@ namespace GameJam.Prototype
             GUILayout.BeginArea(new Rect(18f, 12f, w - 36f, 44f));
             GUILayout.BeginHorizontal();
 
-            GUILayout.Label("卡牌总览 v2.1", title);
+            GUILayout.Label("卡牌图鉴 v2.1", title);
             GUILayout.Space(12f);
 
             showMaterials = GUILayout.Toggle(showMaterials, " 素材 ", showMaterials ? btnOn : btn, GUILayout.Width(70f));
@@ -83,11 +116,16 @@ namespace GameJam.Prototype
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
 
+            // ── 系列跳转行 ────────────────────────────────────────────
+            //   素材有 30 多张、按系列分组；只靠滚动条找人太慢，给一排"跳到某系列"。
+            //   和上面的文字筛选是**与**关系（都满足才显示），点「全部」清掉。
+            DrawSeriesJump(new Rect(18f, 62f, w - 36f, 32f));
+
             // ── 列表 ──────────────────────────────────────────────────
             List<Ingredient> materials = showMaterials ? CardSpecs.Materials() : null;
             List<Spell> spells = showSpells ? CardSpecs.Spells() : null;
 
-            GUILayout.BeginArea(new Rect(18f, 64f, w - 36f, h - 82f));
+            GUILayout.BeginArea(new Rect(18f, 102f, w - 36f, h - 120f));
             scroll = GUILayout.BeginScrollView(scroll, false, true);
 
             string lastSeries = "";
@@ -97,6 +135,7 @@ namespace GameJam.Prototype
                 {
                     Ingredient ing = materials[i];
                     if (ing == null || !Match(ing.name, ing.id)) continue;
+                    if (!MatchSeries(ing.series)) continue;
 
                     if (ing.series != lastSeries)
                     {
@@ -136,6 +175,58 @@ namespace GameJam.Prototype
             return false;
         }
 
+        /// <summary>系列跳转的过滤。和文字筛选是"与"关系。</summary>
+        private bool MatchSeries(string series)
+        {
+            if (string.IsNullOrEmpty(seriesJump)) return true;
+            return series == seriesJump;
+        }
+
+        /// <summary>
+        /// 一排"跳到某系列"的按钮。
+        ///
+        /// 【为什么要它】素材三十多张、按系列分组，滚动条翻半天才能到"火药"那一组。
+        ///   系列名从卡表现取（不写死），以后加系列这里自动多一个按钮。
+        /// </summary>
+        private void DrawSeriesJump(Rect area)
+        {
+            List<Ingredient> all = CardSpecs.Materials();
+            if (all == null || all.Count == 0) return;
+
+            // 去重（卡表按系列连排，顺序保留）
+            List<string> series = new List<string>();
+            for (int i = 0; i < all.Count; i++)
+            {
+                Ingredient ing = all[i];
+                if (ing == null || string.IsNullOrEmpty(ing.series)) continue;
+                if (!series.Contains(ing.series)) series.Add(ing.series);
+            }
+            if (series.Count == 0) return;
+
+            GUILayout.BeginArea(area);
+            seriesScroll = GUILayout.BeginScrollView(seriesScroll, false, false);
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("系列：", dim, GUILayout.Width(46f));
+
+            bool allOn = string.IsNullOrEmpty(seriesJump);
+            if (GUILayout.Button("全部", allOn ? btnOn : btn, GUILayout.Width(56f))) seriesJump = "";
+
+            for (int i = 0; i < series.Count; i++)
+            {
+                string s = series[i];
+                bool on = (seriesJump == s);
+                if (GUILayout.Button(s, on ? btnOn : btn, GUILayout.Width(88f)))
+                    seriesJump = on ? "" : s;   // 再点一下 = 取消
+            }
+
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+
+            GUILayout.EndScrollView();
+            GUILayout.EndArea();
+        }
+
         // ── 一行一张卡 ────────────────────────────────────────────────
 
         private void DrawMaterial(Ingredient ing)
@@ -147,6 +238,17 @@ namespace GameJam.Prototype
 
             GUILayout.BeginVertical();
             GUILayout.Label(ing.name + "（" + ing.id + "）　" + AttrText(ing.attrs), title);
+
+            // ── v2.1 的 H / D / V ──
+            //   这是 v2.1 玩法真正在用的三个数（H 硬度、D 耐久、V 计分倾向），
+            //   和上面那行旧属性（硫性/汞性…）是**两套口径**，所以分开显示、写清名字，
+            //   不能混成一行 —— 混了策划会拿着旧数值去对 v2.1 的账。
+            //   V=0 的卡在卡表里就是"数值还没定"，这里照实说，不写 0（写 0 会被当成"价值是 0"）。
+            GUILayout.Label("H 硬度 " + ing.h + "　D 耐久 " + ing.d + "　"
+                            + (ing.v == 0
+                               ? "V 数值未定"
+                               : "V 计分 " + ing.v + (string.IsNullOrEmpty(ing.vGrade) ? "" : "（" + ing.vGrade + "）")),
+                            ing.v == 0 ? dim : body);
 
             string kind = ing.FormAndTags();
             if (!string.IsNullOrEmpty(kind)) GUILayout.Label(kind, body);
