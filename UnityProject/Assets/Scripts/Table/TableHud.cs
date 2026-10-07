@@ -701,6 +701,13 @@ namespace GameJam.Prototype
                 levelWindowOpen = true;
                 levelWindowPick = turnLoop.levelIndex;   // 默认停在当前关卡上
             }
+            else if (!nowLevelSelect && wasLevelSelect)
+            {
+                // 选完关就自动收起来 —— 这一屏是"翻关卡"，进了牌桌再挡着牌就碍事了。
+                // （玩家自己在中途从 Esc 菜单开出来的那份不受影响：没有阶段切换就不走这里。）
+                // 上一版只"自动开、手动关"，实机截图里开局后它还杵在屏幕中间挡着桌子。
+                levelWindowOpen = false;
+            }
             wasLevelSelect = nowLevelSelect;
         }
 
@@ -1354,8 +1361,8 @@ namespace GameJam.Prototype
                 // 第一行会顶到 y 上面去、和别的 HUD 叠在一起。
                 float yv = Screen.height - 240f - 14f;
 
-                GUI.Label(new Rect(16f, yv, w, 24f), "把素材拖到桌面中间的投放区 → 按「放置到桌面」", h1);
-                GUI.Label(new Rect(16f, yv + 28f, w, 22f), "点手牌里的素材 = 直接上桌（点投放区里的卡 = 上桌并选为目标）", dim);
+                GUI.Label(new Rect(16f, yv, w, 24f), "点手牌里的素材 = 直接上桌（拖到「上桌位」再点「上　桌」也行）", h1);
+                GUI.Label(new Rect(16f, yv + 28f, w, 22f), "点「上桌位」里待上桌的卡 = 上桌并选为目标", dim);
                 GUI.Label(new Rect(16f, yv + 48f, w, 22f), "点桌面上的素材 = 选它当「启动破壁机」的目标（会抬起来）", dim);
                 GUI.Label(new Rect(16f, yv + 68f, w, 22f), "点手牌里的法术 = 直接附魔到刀片（不消耗行动机会）", dim);
                 GUI.Label(new Rect(16f, yv + 88f, w, 22f), "「启动破壁机」消耗 1 行动机会 + 1 点刀片 H", dim);
@@ -1535,9 +1542,13 @@ namespace GameJam.Prototype
             GUILayout.Label("启动目标：" + r.TargetText, r.selected != null ? bodyPanel : dimPanel);
 
             // ── ⑤ 手牌 / 桌面 ──
+            // ★ 刀片卡要单独点名：它和素材卡长得一模一样（同尺寸、同卡面路数，
+            //   盐和水连 H/D/V 都可能完全相同），不点出来玩家就会数出
+            //   "面板写桌面素材 3 张、画面里 4 张卡"。卡上那个「刀片」字样就是它。
             GUILayout.Label("手牌：素材 " + r.hand.Count + " 张｜法术 " + r.handSpells.Count + " 张"
                             + "　桌面素材 " + r.LiveTableCount() + " 张"
-                            + (turnLoop.StagedCount > 0 ? "　投放区待放置 " + turnLoop.StagedText : ""),
+                            + (turnLoop.bladeCard != null ? " ＋ 刀片卡 1 张（桌上前方带「刀片」字样的那张）" : "")
+                            + (turnLoop.StagedCount > 0 ? "　待上桌 " + turnLoop.StagedText : ""),
                             dimPanel);
 
             bool canActivate = r.CanActivate && r.selected != null && !r.selected.removed;
@@ -1569,7 +1580,8 @@ namespace GameJam.Prototype
 
             GUI.enabled = oldEnabled;
 
-            if (GUILayout.Button("放置到桌面", btn, GUILayout.ExpandWidth(true), GUILayout.Height(34f)))
+            if (GUILayout.Button(TableSettings.UseRulesV21 ? "上　桌" : "放置到桌面",
+                                 btn, GUILayout.ExpandWidth(true), GUILayout.Height(34f)))
             {
                 GUI.FocusControl(null);
                 turnLoop.Confirm();     // v2.1 下这一条 = 出牌（不消耗行动机会）
@@ -1646,13 +1658,15 @@ namespace GameJam.Prototype
             int table = r.LiveTableCount();
 
             // ③ 投放区压着牌、桌上却空着：先把那张放上去（这正是用户卡住的那一步）
+            //   ★ 提示里不再写旧按钮名「放置到桌面」——v2.1 那个按钮已经叫「上　桌」，
+            //     而且现在点那张牌本身就能上桌，指路要指向玩家眼前的东西。
             if (table <= 0 && turnLoop.StagedCount > 0)
-                return "⚠ 投放区还压着 " + turnLoop.StagedCount + " 张没上桌："
-                       + "点它一下（或点「放置到桌面」）就上桌，上桌后自动选为启动目标";
+                return "⚠ 待上桌还压着 " + turnLoop.StagedCount + " 张："
+                       + "点它一下（或点「上　桌」）就上桌，上桌后自动选为启动目标";
 
-            // ④ 桌上空、投放区也空：告诉玩家"点手牌"这条更省事的路
+            // ④ 桌上空、待上桌也空：告诉玩家"点手牌"这条更省事的路
             if (table <= 0)
-                return "⚠ 桌面还没有素材：点手牌里的素材直接上桌（也可以拖到投放区再点「放置到桌面」）";
+                return "⚠ 桌面还没有素材：点手牌里的素材直接上桌（也可以拖到「上桌位」再点「上　桌」）";
 
             // ⑤ 桌上有牌但没选目标
             return "⚠ 桌面上有 " + table + " 张素材，但还没选目标：点其中一张把它选为启动目标";
@@ -2510,11 +2524,28 @@ namespace GameJam.Prototype
             GUILayout.Label("拖动标题栏移动窗口　｜　右键空白处或 Esc 关闭", dimPanel);
         }
 
-        /// <summary>卡牌现在在哪 —— 检视面板上要显示。</summary>
+        /// <summary>
+        /// 卡牌现在在哪 —— 检视面板 / 划过信息条上要显示。
+        ///
+        /// 【v2.1 的说法和旧流程不一样】v2.1 把两个槽位的语义换了（素材槽 = 上桌位、
+        ///   法术槽 = 附魔位，桌子上的牌子由 TableSetup.RefreshSlotLabels 改的），
+        ///   所以这里也得跟着说同一套词 —— 否则玩家看着桌上的「上桌位」牌子，
+        ///   检视面板却写着"投放区（待确认）"，又是一句对不上的旧话。
+        ///   旧流程（UseRulesV21 = false）那句原样保留。
+        /// </summary>
         private string PositionText(PlayCard card)
         {
             if (card.IsDragging) return "拿在手上";
-            if (card.slotIndex >= 0) return "投放区（待确认）";
+
+            if (card.slotIndex >= 0)
+            {
+                if (!TableSettings.UseRulesV21) return "投放区（待确认）";
+
+                if (card.slotIndex == TableTurnLoop.SlotSpell)    return "附魔位（法术槽）";
+                if (card.slotIndex == TableTurnLoop.SlotMaterial) return "上桌位（素材槽）";
+                return "上桌位 / 附魔位";
+            }
+
             return "手牌";
         }
 

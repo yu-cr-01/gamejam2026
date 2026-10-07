@@ -541,6 +541,7 @@ namespace GameJam.Prototype
 
                 bladeCard = CardFactory.Create(Card.Of(core.card), setup.cardsRoot,
                                                TableChoiceRig.BladeSpot, Vector3.zero);
+                MarkBladeCard(bladeCard);
                 return;
             }
 
@@ -549,6 +550,35 @@ namespace GameJam.Prototype
 
             bladeCard = CardFactory.Create(c, setup.cardsRoot,
                                            TableChoiceRig.BladeSpot, Vector3.zero);
+        }
+
+        /// <summary>
+        /// 给刀片卡挂一个「刀片」标记 —— 让它在桌上一眼能和素材卡分开。
+        ///
+        /// 【为什么必须有】v2.1 的刀片卡和桌面素材卡**长得一模一样**：同尺寸、同卡面路数，
+        ///   盐和水连 H/D/V 都可能完全相同（皮肤由物态决定）。于是玩家数牌时会说
+        ///   "面板写桌面素材 3 张、画面里却有 4 张卡"—— 那第 4 张其实是刀片卡。
+        ///   上一轮修的是"刀片卡用错了卡面"，这一轮补的是"认不出它是刀片"。
+        ///
+        /// 【为什么是一段平贴桌面的 3D 文字，而不是贴纸/描边】
+        ///   ① 俯视和桌面视角都得看得见 → 平贴在桌面上、和卡面用同一个朝向约定
+        ///      （CardFactory.AddText 那套 LookRotation，见那里的推导），从任何机位看都不变形；
+        ///   ② **不能挡住卡面的名字和 H/D/V** → 挂在卡的**近侧之外**（localZ 负方向，
+        ///      卡面自己的名字在 +0.126、属性在 −0.112，卡身到 ±0.16 为止，
+        ///      所以 −0.225 已经在卡外、落在桌面上），而且高度只有 2 毫米，不遮任何东西；
+        ///   ③ 挂在卡的 transform 下 → 卡被拖走/销毁时标记跟着走，不用单独维护生命周期。
+        ///
+        /// 【字号】按 CardFactory 那段实测标定（world 字高 ≈ size × 3.4）取 0.0105，
+        ///   字高约 0.036（卡宽 0.24 的 15%，比卡面属性行 0.0038 大一档），
+        ///   在俯视机位下也读得清；颜色用暖金（和"当前关卡"同一个色系），
+        ///   在深色木桌上是唯一的亮点，不靠形状认。
+        /// </summary>
+        private void MarkBladeCard(PlayCard card)
+        {
+            if (card == null) return;
+
+            CardFactory.AddText(card.transform, "刀 片", -0.225f, 0.0105f,
+                                new Color(0.98f, 0.76f, 0.32f), 0.002f);
         }
 
         /// <summary>

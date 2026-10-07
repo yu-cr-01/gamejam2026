@@ -257,6 +257,30 @@ namespace GameJam.EditorTools
                 case 24:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("turn_start.png")) return;
+                    Stage = 160;                      // 先拍一张"旧流程的槽位文案"，再继续原来的流程
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ⑬⓪/⑬①/⑬② **旧流程**的槽位文案对照
+                //   v2.1 把「投放区（待确认）」改成了"上桌位"，这里要证明旧流程那句话
+                //   一个字都没变：把一张牌摆进槽里、打开检视面板拍一张。
+                case 160:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    LegacyStageAndInspect();
+                    Stage = 161;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 161:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("legacy_slot_wording.png")) return;
+                    Stage = 162;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 162:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeCloseInspectAndRelease();
                     Stage = 25;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -561,6 +585,66 @@ namespace GameJam.EditorTools
                 case 116:
                     if (EditorApplication.timeSinceStartup - stageTime < 1.4) return;
                     if (!Shot("v21_click_activate.png")) return;
+                    Stage = 147;                      // 先拍刀片标记，再走原来那条"拖拽"路径
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ⑪⑦~⑫③ 刀片标记 + 槽位新说法（这一轮的收尾改动）
+                //   ⑪⑦/⑪⑧ 切俯视拍一张、⑪⑨/⑫⓪ 切回桌面视角再拍一张
+                //           —— 用户要求"俯视和桌面视角都看得见"，两种机位各一张才算验过
+                //   ⑫①~⑫③ 把一张牌摆进上桌位并打开检视面板：那里的「位置：…」
+                //           在 v2.1 下应该写"上桌位（素材槽）"而不是旧的"投放区（待确认）"
+                // ══════════════════════════════════════════════════════
+
+                case 147:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    // ★ 机位名要用 TableSetup.ViewNames 里的**内部名**（"board"/"hand"/"top"…），
+                    //   不是按钮上那个中文标签 —— 传中文会静默什么都不做
+                    //   （第一版就踩了：俯视那张和桌面视角那张一模一样）。
+                    GoToView("top");
+                    Stage = 148;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 148:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("v21_blade_marker_top.png")) return;
+                    Stage = 149;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 149:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    GoToView("board");
+                    Stage = 150;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 150:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("v21_blade_marker_table.png")) return;
+                    Stage = 151;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 151:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeStageAndInspectV21();
+                    Stage = 152;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 152:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("v21_slot_wording.png")) return;
+                    Stage = 153;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 153:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeCloseInspectAndRelease();
                     Stage = 60;                       // 接着走原来那条"拖拽"路径，两条都过一遍
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -1225,6 +1309,101 @@ namespace GameJam.EditorTools
 
             loop.paused = paused;
             Debug.Log("[AutoPlay/V21] 暂停菜单 " + (paused ? "已打开" : "已关闭"));
+        }
+
+        /// <summary>切机位（走游戏自己的公开入口 CameraRig.GoTo）。</summary>
+        private static void GoToView(string name)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null || setup.rig == null)
+            {
+                Debug.LogWarning("[AutoPlay] 找不到 CameraRig，切机位跳过（" + name + "）。");
+                return;
+            }
+
+            setup.rig.GoTo(name);
+            Debug.Log("[AutoPlay] 切到机位：" + name);
+        }
+
+        /// <summary>
+        /// v2.1：把一张手牌素材摆进"上桌位"并打开检视面板 —— 拍那里的「位置：…」说法。
+        /// </summary>
+        private static void ProbeStageAndInspectV21()
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+
+            if (setup == null || it == null || loop == null || setup.board == null) return;
+
+            PlayCard card = FirstHandMaterial(setup);
+            if (card == null)
+            {
+                Debug.LogWarning("[AutoPlay/V21] 手牌里没有素材，槽位文案这张拍不到。");
+                return;
+            }
+
+            int slot = TableTurnLoop.SlotMaterial;
+            if (!setup.board.Place(slot, card)) return;
+
+            card.SnapTo(setup.board.SlotPosition(slot));
+            loop.Stage(card);
+            it.Inspect(card);
+
+            Debug.Log("[AutoPlay/V21] 把 " + card.DisplayName + " 摆进上桌位（" + slot
+                      + " 号槽）并打开检视面板：位置应显示「上桌位（素材槽）」");
+        }
+
+        /// <summary>**旧流程**：同样的动作（用来对照旧文案「投放区（待确认）」一个字没变）。</summary>
+        private static void LegacyStageAndInspect()
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+
+            if (setup == null || it == null || loop == null || setup.board == null) return;
+
+            PlayCard card = null;
+            for (int i = 0; i < setup.hand.Count; i++)
+            {
+                PlayCard c = setup.hand[i];
+                if (c != null) { card = c; break; }
+            }
+            if (card == null)
+            {
+                Debug.LogWarning("[AutoPlay] 手牌是空的，旧流程槽位文案这张拍不到。");
+                return;
+            }
+
+            const int slot = 0;   // 旧流程的投放位就从 0 号开始（StageAndConfirm 用的是同一个）
+            if (!setup.board.Place(slot, card)) return;
+
+            card.SnapTo(setup.board.SlotPosition(slot));
+            loop.Stage(card);
+            it.Inspect(card);
+
+            Debug.Log("[AutoPlay] 旧流程：把 " + card.DisplayName + " 摆进 " + slot
+                      + " 号投放位并打开检视面板：位置应显示「投放区（待确认）」（旧文案不变）");
+        }
+
+        /// <summary>收起检视面板 + 把那张牌退回手牌（两个流程共用）。</summary>
+        private static void ProbeCloseInspectAndRelease()
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+
+            if (it != null) it.Inspect(null);
+
+            if (setup == null || loop == null || setup.board == null) return;
+
+            // 把还在槽里的牌退回去（FindObjectsOfType 找 PlayCard：两个流程都适用）
+            PlayCard[] all = Object.FindObjectsOfType<PlayCard>();
+            for (int i = 0; i < all.Length; i++)
+            {
+                if (all[i] == null || all[i].slotIndex < 0) continue;
+                loop.Release(all[i]);
+            }
         }
 
         private static void ProbeCorePickV21()
