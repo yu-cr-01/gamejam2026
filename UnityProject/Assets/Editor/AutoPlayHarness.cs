@@ -6960,6 +6960,195 @@ namespace GameJam.EditorTools
                       + "已回开场并重开到「选刀片」那一屏｜阶段 " + loop.phase);
         }
 
+        /// <summary>
+        /// 把**这一次启动**的引擎日志原文按证据形状重排一遍（㊵①~㊷⓪ 那一段用）。
+        ///
+        /// 【为什么不直接翻 [V21] 启动那一大坨】那一段是"启动（…）\n【启动】…① ② ③ ④ ⑤…"，
+        ///   要证的那三条（"本回合最后一次启动"标记 / ⑤ 判定 / 并入刀片那一行）夹在中间，
+        ///   而且每一步都有一堆中间行；验收的人得自己在几百行里找。
+        ///   这里**只挑那三条 + 第 ⑤ 步的每一行**（顺序原样保留），
+        ///   加上"第几行/共几行"的坐标 —— 拿这一行就能对着 lastLog 原文复核。
+        /// 【为什么判据用 StartsWith 而不是 Contains】⑤ 那一行原文本身就带换行 + 步骤号，
+        ///   用 Contains 会把别处的引用一起捞进来（比如 HUD 提示里那句"最后一次启动会触发献祭吞噬"）。
+        /// </summary>
+        private static void ProbeSacDumpLastActivate(string what)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null)
+            {
+                Debug.LogWarning("[AutoPlay/献祭] " + what + "：找不到规则侧，最后一次启动的日志没法打。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+
+            Debug.Log("[AutoPlay/献祭] ㊵① " + what + "｜本次启动日志共 " + r.lastLog.Count + " 行"
+                      + "｜下面只抄①「本回合最后一次启动」那一行、②⑤ 判定的每一行、③ 并入刀片那一行：");
+
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+            for (int i = 0; i < r.lastLog.Count; i++)
+            {
+                string s = r.lastLog[i];
+                if (string.IsNullOrEmpty(s)) continue;
+
+                bool tail = s.StartsWith("　　本次不是")               // ← 修前会写这一句
+                         || s.StartsWith("　　目标已因")
+                         || s.StartsWith("　　目标 D 已耗尽")
+                         || s.StartsWith("　　「");                      // ← 修后应当写这一句（并入刀片）
+
+                // 【启动】那一行就是"这一次算不算最后一次"的判词（isLastStart 的那个 true/false）
+                if (s.StartsWith("【启动】") || s.StartsWith("　· 检查") || tail || s.Contains("← 本回合最后一次启动"))
+                {
+                    sb.Append("\n   第 ").Append(i).Append(" 行｜").Append(s);
+                }
+            }
+
+            Debug.Log("[AutoPlay/献祭] ㊵① 抄完（原文见上一条 [V21] 启动日志）" + sb);
+            Debug.Log("[AutoPlay/献祭] ㊵① 抄完之后的数字：" + ProbeSacNumbers());
+        }
+
+        /// <summary>
+        /// 这一帧"桌面与破壁机之间"到底有没有卡（㊷①~㊷⑨ 的飞行帧用）。
+        ///
+        /// 【为什么把 IsConsuming 和"计数"分开打】
+        ///   `ProbeSacFlightText()` 已经给了每张飞行卡的**坐标 + 离罐口多远 + 缩放**，
+        ///   那是"它在路上"的连续证据；这里再补两个**计数**（IsConsuming 张数、
+        ///   TableSetup.hand 里的空引用数）—— 前者是"有几张在飞"，
+        ///   后者能区分"卡被销毁了"和"卡被摘出列表了"（ClearHand 跳过飞行卡之后，
+        ///   列表里会留下还没销毁的空引用，那个数正好是"我放走了一张正在飞的卡"的指纹）。
+        /// </summary>
+        private static string ProbeSacFlyingCountText(string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+
+            int consuming = 0;
+            PlayCard[] all = Object.FindObjectsOfType<PlayCard>();
+            for (int i = 0; i < all.Length; i++)
+                if (all[i] != null && all[i].IsConsuming) consuming++;
+
+            int nulls = 0;
+            if (setup != null && setup.hand != null)
+                for (int i = 0; i < setup.hand.Count; i++)
+                    if (setup.hand[i] == null) nulls++;
+
+            string head = "[" + what + "] PlayCard.IsConsuming = " + consuming
+                        + " 张｜3D 手牌表里 " + (setup != null && setup.hand != null ? setup.hand.Count : -1)
+                        + " 个格（其中空引用 " + nulls + " 个）";
+
+            return consuming > 0
+                ? head + "　✓ 有卡在桌面与罐口之间"
+                : head + "　（这一帧没有卡在飞）";
+        }
+
+        /// <summary>
+        /// 把桌面上**点名的那张**素材拖回手牌（走玩家那条 TableInteraction.DropCard）——
+        /// ㊷⑦⑧ 用：一次要被收下、一次要被拒（同一张卡、同一个入口，只有"本回合启动过没有"不同）。
+        ///
+        /// 【为什么不复用 ProbeWithdrawTableMaterial】它抓的是"桌面第一张"（FirstTableCard），
+        ///   而这两帧要点的必须是**指定的那一张**；而且它把被判词写死成 [AutoPlay/Black]，
+        ///   混进献祭链之后分不清哪条链在说话。
+        /// </summary>
+        private static void ProbeSacWithdrawNamed(string namePart, string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            TableInteraction it = Object.FindObjectOfType<TableInteraction>();
+            TableTurnLoop loop = Loop();
+
+            if (setup == null || it == null || loop == null || loop.rulesV21 == null)
+            {
+                Debug.LogWarning("[AutoPlay/献祭] " + what + "：找不到 TableSetup / TableInteraction，跳过。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+
+            PlayCard pick = null;
+            GameJam.Rules.MaterialState st = null;
+
+            PlayCard[] all = Object.FindObjectsOfType<PlayCard>();
+            for (int i = 0; i < all.Length; i++)
+            {
+                if (all[i] == null) continue;
+
+                GameJam.Rules.MaterialState s = r.FindTable(all[i]);
+                if (s == null || s.removed || !s.OnTable) continue;
+
+                if (string.IsNullOrEmpty(namePart) || (s.name != null && s.name.Contains(namePart)))
+                { pick = all[i]; st = s; break; }
+            }
+
+            if (pick == null)
+            {
+                Debug.LogWarning("[AutoPlay/献祭] " + what + "：桌面上没有「" + namePart + "」（现在桌面 "
+                                 + r.LiveTableCount() + " 张：" + r.TableText() + "），跳过。");
+                return;
+            }
+
+            // 先把**规则自己的判词**问出来（这一段要证的正是"本回合启动过的不能收"）
+            string reason;
+            bool can = r.CanWithdraw(st, out reason);
+
+            int tableBefore = r.LiveTableCount();
+            int handBefore  = setup.hand != null ? setup.hand.Count : -1;
+
+            // 玩家的鼠标把卡拖到手牌那一片（比 HandZoneZ 再往玩家一侧 0.15，避免压线）
+            pick.Teleport(new Vector3(pick.transform.position.x, 0.022f,
+                                      TableInteraction.HandZoneZ - 0.15f),
+                          pick.homeEuler);
+            bool handled = it.DropCard(pick, false);
+
+            Debug.Log("[AutoPlay/献祭] ★" + what + "：把桌面上的「" + pick.DisplayName + "」拖回手牌区"
+                      + "｜CanWithdraw=" + can + "（" + (can ? "应当被收下" : "应当被拒：" + reason) + "）"
+                      + "｜被处理 " + handled
+                      + "｜桌面素材 " + tableBefore + " → " + r.LiveTableCount() + " 张"
+                      + "｜3D 手牌 " + handBefore + " → " + (setup.hand != null ? setup.hand.Count : -1) + " 张"
+                      + "｜notice " + loop.notice);
+        }
+
+        /// <summary>
+        /// 木纹那一项回归（用户报过"桌子的木质表面纹理不见了"）：把**木纹材质**现在挂的是哪个 shader
+        /// 直接打出来。
+        ///
+        /// 【为什么要读回 shader 名而不是看截图】"纹理丢了"在截图里有三种一样的样子：
+        ///   ① shader 被换掉（打包版 Standard 被剥 → 退到内建兜底）；
+        ///   ② _MainTex 丢了（帖图引用被释放）；
+        ///   ③ 光没了。三条各打一个数，才能一眼分清是哪一条。
+        /// </summary>
+        private static void ProbeSacWoodShader(string what)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null) { Debug.LogWarning("[AutoPlay/献祭] " + what + "：找不到 TableSetup。"); return; }
+
+            Renderer[] all = Object.FindObjectsOfType<Renderer>();
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            int shown = 0;
+
+            for (int i = 0; i < all.Length && shown < 6; i++)
+            {
+                Renderer rd = all[i];
+                if (rd == null || rd.sharedMaterial == null) continue;
+
+                string n = rd.gameObject.name;
+                string mn = rd.sharedMaterial.name;
+                bool wood = (n != null && (n.Contains("Table") || n.Contains("Board") || n.Contains("桌")))
+                         || (mn != null && (mn.Contains("Wood") || mn.Contains("wood") || mn.Contains("Table")));
+                if (!wood) continue;
+
+                Shader sh = rd.sharedMaterial.shader;
+                Texture tex = rd.sharedMaterial.HasProperty("_MainTex") ? rd.sharedMaterial.mainTexture : null;
+
+                sb.Append("\n   · ").Append(n).Append("｜材质 ").Append(mn)
+                  .Append("｜shader=").Append(sh != null ? sh.name : "（null）")
+                  .Append("｜_MainTex=").Append(tex != null ? (tex.name + " " + tex.width + "×" + tex.height) : "（无）");
+
+                shown++;
+            }
+
+            Debug.Log("[AutoPlay/献祭] " + what + "：木纹材质 " + (shown == 0 ? "（一个都没找到）" : "") + sb
+                      + (shown == 0 ? "" : (sb.ToString().Contains("shader=Standard") ? "　✓ shader=Standard" : "　★ 不是 Standard")));
+        }
+
         /// <summary>现在还能不能启动 / 不能的话原因是什么（HUD 上就是这两句）。</summary>
         private static string ProbeSacCanActivateText()
         {

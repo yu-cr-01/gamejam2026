@@ -668,21 +668,52 @@ namespace GameJam.Prototype
         ///   （只建新对象、不碰现有状态），拿它来试一下最合适 —— 试完什么都不留。
         ///
         /// ★ 规则侧还没装好（极早期）时退回"只看语法"：那时点「继续」本来也没有可恢复的对象。
+        ///
+        /// ★★ **三条日志一条都不能省**：这个方法决定了「继续」那块牌子是亮是灰，
+        ///   而"牌子为什么是灰的"以前在日志里一个字都没有 —— 打包版实测踩到：
+        ///   把存档改坏之后按钮灰了、点下去也没反应、日志里什么都查不到，
+        ///   只能猜是"没档？路径不对？还是解析坏了？"。所以三种情形各打一行。
+        ///   它只在开场 <see cref="Build"/> 时被调一次（不是每帧），不会刷屏。
         /// </summary>
         public bool CanContinueFromSave(out string summary, out string error)
         {
             summary = "";
             error = "";
 
+            string path = TableSaveIO.Path;
+
             SaveFileDto file;
-            if (!TableSaveIO.TryLoad(out file, out error)) return false;
+            if (!TableSaveIO.TryLoad(out file, out error))
+            {
+                // 文件在、但读不出来 = 存档坏了（含 JSON 语法错、版本不符、字段缺失）。
+                // 用 LogWarning：它是"玩家的档出问题了"，不是正常路径。
+                if (TableSaveIO.Exists)
+                    Debug.LogWarning("[V21][存档] 存档损坏/无法解析：" + error +
+                                     "　→「继续」置灰（牌子仍在开场，点了也不会进关卡）｜文件 " + path);
+                else
+                    Debug.Log("[V21][存档] 「继续」置灰：还没有存档文件（" + path + "）");
 
-            summary = file.Describe();
+                return false;
+            }
 
-            if (loop == null || loop.rulesV21 == null) return true;
+            summary = file.ShortLine();
+
+            if (loop == null || loop.rulesV21 == null)
+            {
+                Debug.Log("[V21][存档] 「继续」可读：" + summary + "（规则侧还没装好，这里只按语法判）｜文件 " + path);
+                return true;
+            }
 
             BuiltSaveState built;
-            return loop.rulesV21.TryBuildSaveState(file.state, out built, out error);
+            if (!loop.rulesV21.TryBuildSaveState(file.state, out built, out error))
+            {
+                Debug.LogWarning("[V21][存档] 存档读不出来（JSON 没问题，但状态建不出来）：" + error +
+                                 "　→「继续」置灰｜文件 " + path);
+                return false;
+            }
+
+            Debug.Log("[V21][存档] 「继续」可读：" + summary + "｜文件 " + path);
+            return true;
         }
 
         // ══════════════════════════════════════════════════════════════

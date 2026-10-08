@@ -207,8 +207,17 @@ namespace GameJam.Prototype
 
             SaveFileDto f;
             string error;
-            if (!TryLoad(out f, out error)) cachedLine = "存档位：" + FileName + "（★ 读不出来：" + Trim(error, 40) + "）";
-            else                            cachedLine = "存档位：" + FileName + "（" + f.ShortLine() + "）";
+            if (!TryLoad(out f, out error))
+            {
+                // "存档文件解析失败："这半句在菜单里是废话（读的就是这个文件），去掉它；
+                // 但 JSON 那句报错**原样留着** ——"第 N 行第 M 列：…"是唯一能照着修的信息。
+                // 日志里那一份仍带全前缀（见 TableTitleRig.CanContinueFromSave），两边各司其职。
+                cachedLine = "存档位：" + FileName + "（★ 读不出来：" + Trim(TrimPrefix(error), 60) + "）";
+            }
+            else
+            {
+                cachedLine = "存档位：" + FileName + "（" + f.ShortLine() + "）";
+            }
 
             return cachedLine;
         }
@@ -218,6 +227,15 @@ namespace GameJam.Prototype
         {
             if (string.IsNullOrEmpty(s)) return "";
             return s.Length <= max ? s : s.Substring(0, max) + "…";
+        }
+
+        /// <summary>去掉 "存档文件解析失败：" 这个前缀（菜单里那行没必要重复"读的就是这个文件"）。</summary>
+        private static string TrimPrefix(string s)
+        {
+            const string prefix = "存档文件解析失败：";
+            if (!string.IsNullOrEmpty(s) && s.StartsWith(prefix, System.StringComparison.Ordinal))
+                return s.Substring(prefix.Length);
+            return s;
         }
 
         /// <summary>存档路径的一行说明（日志里打，回报里也要写清落盘在哪）。</summary>
