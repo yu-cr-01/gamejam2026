@@ -86,6 +86,7 @@ namespace GameJam.Tools
                 Scenario10_HeatColdOverwrite(cards);
                 Scenario11_Explode(cards);
                 Scenario12_SaveLoad(cards);
+                Scenario13_LastStartByActionPoints(cards);
                 Report_NoSilentLoss(cards);
 
                 Console.WriteLine();
@@ -1161,6 +1162,62 @@ namespace GameJam.Tools
                 before.table[0].D + "/" + before.table[1].D + "/" + before.table[2].D + "）｜手牌 " +
                 (before.handMaterials.Count + before.handSpells.Count) + " 张｜被动 " + before.blade.passives.Count +
                 " 条｜JSON " + json.Length + " 字符");
+        }
+
+        /// <summary>
+        /// 场景 13：**用掉最后一个行动机会的那一次**就是"本回合实际使用的最后一次启动"
+        /// （正文 §三.5 / §四.5；口径说明还补了一句"最后一次启动不一定是第 5 次行动"）。
+        ///
+        /// 【为什么必须有这一条】行动机会只有 5 次，而一个回合里要启动的清单（order）可以更长：
+        ///   第 5 次启动把行动机会打到 0，第 6 次只会被引擎拒掉（"行动机会已用尽 → 不能启动"）——
+        ///   真正常用的最后一次是**第 5 次**。把它判成"不是最后一次"，第 ⑤ 步就会写
+        ///   "本次不是本回合实际使用的最后一次启动 → 不吞噬"，目标卡带着 D 留在桌上；
+        ///   而这一下之后本回合再也启动不了（行动机会 0），等于玩家白丢一张卡。
+        ///   实机那条链（AutoPlayHarness ㊵/㊶）就是这么复现的，这一条把判据钉在离线断言里。
+        ///
+        /// 【这一条同时钉住两档边界】
+        ///   · 第 4 次（行动机会 2 → 1）：之后还能再启动 → **不是**最后一次（不许提前吞）；
+        ///   · 第 5 次（行动机会 1 → 0）：之后谁也启动不了 → **是**最后一次（必须当场吞）。
+        /// </summary>
+        private static void Scenario13_LastStartByActionPoints(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            LevelRun s = NewLevel(cards, "铁刀片", 20, 0);
+            TurnEngine e = new TurnEngine(ProbeRules(), cards);
+
+            // 水 D=99：拿它当"不是最后一次"那几次的靶子 —— 多打几次也不会 D 耗尽，
+            // 局面就只由行动机会决定（换成 D=3 的水，第 3 次就把自己打没了）。
+            MaterialState water = Put(cards, s, "水", 99);
+            MaterialState gold  = Put(cards, s, "黄金", 3);   // 第 5 次的目标：D 3→2 仍有剩余 → 该被吞噬
+
+            List<MaterialState> order = new List<MaterialState>();
+            for (int i = 0; i < 4; i++) order.Add(water);     // 第 1~4 次：行动机会 5 → 1
+            order.Add(gold);                                  // 第 5 次：行动机会 1 → 0（本回合实际使用的最后一次）
+            order.Add(water);                                 // 第 6 次：行动机会已用尽 → 引擎拒掉
+
+            RoundResult round = e.RunRound(s, order);
+
+            Check("AP 用完那一次：order 6 项全部跑过（RoundResult.starts 含被拒那次）", 6, round.starts.Count);
+            Check("AP 用完那一次：第 6 次启动被引擎拒绝（行动机会已 0）", true, round.starts[5].rejected);
+            Check("AP 用完那一次：真正结算掉的启动是 5 次（前 5 次都没被拒）",
+                  true, !round.starts[0].rejected && !round.starts[1].rejected && !round.starts[2].rejected &&
+                        !round.starts[3].rejected && !round.starts[4].rejected);
+            Check("AP 用完那一次：行动机会打到 0", 0, s.actionPoints);
+
+            Check("AP 边界：第 4 次（行动机会 2→1）之后还能再启动 → 不是最后一次",
+                  true, round.starts[3].LogContains("本次不是本回合实际使用的最后一次启动"));
+            Check("AP 边界：第 5 次（行动机会 1→0）按「最后一次」记（标题行写明）",
+                  true, round.starts[4].LogContains("本回合最后一次启动（结算后判定献祭吞噬）"));
+            CheckLog("AP 边界：第 5 次的目标被吞噬（并入刀片）", round.starts[4], "并入刀片");
+            Check("AP 边界：第 5 次的目标确实移出了桌面", true, gold.removed);
+            Check("AP 边界：刀片 H 20 - 5 次启动 + 黄金H 5 = 20", 20, s.blade.H);
+            Check("AP 边界：刀片 V 0 + 黄金V 5 = 5（吞噬把它加进来了）", 5, s.blade.V);
+            Check("AP 边界：黄金带「献祭」标签 → 献祭效果 30 分照常结算", 43, s.score);
+
+            ScenarioEnd("场景13 用掉最后一个行动机会的那一次 = 最后一次启动", mark,
+                "行动机会 5 次、order 6 项：前 4 次不吞、第 5 次（1→0）把 黄金 并进刀片 → 刀片 H=20 V=5、总分 " +
+                s.score + "；第 6 次被拒（行动机会已用尽）");
         }
 
         // ══════════════════════════════════════════════════════════════

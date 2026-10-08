@@ -440,6 +440,11 @@ namespace GameJam.Rules
         ///   正文 §四 说明："最后一次启动不一定是第 5 次行动" —— 所以这里不做"第 5 次"的判断，
         ///   而是**把 order 的最后一项当作实际最后一次启动**（行动机会提前用尽的话，结束的那次就是最后一次）。
         ///   这样加行动机会的卡牌延后最后一次启动时，献祭判定自动跟着走。
+        ///
+        /// ★ 判据的第二半（"行动机会提前用尽"）必须**当场认**，见下面那一行的说明：
+        ///   只判 `i == list.Count - 1` 的话，"把行动机会打到 0 的那一次"拿到的是 false，
+        ///   第 ⑤ 步就会写"本次不是本回合实际使用的最后一次启动 → 不吞噬"，
+        ///   而它后面那些 order 项全都会被拒（"行动机会已用尽"）—— 真正常用的最后一次漏判了。
         /// </summary>
         public RoundResult RunRound(LevelRun state, List<MaterialState> order)
         {
@@ -455,7 +460,13 @@ namespace GameJam.Rules
             List<MaterialState> list = order != null ? order : new List<MaterialState>();
             for (int i = 0; i < list.Count; i++)
             {
-                bool isLast = (i == list.Count - 1);
+                // ★ "本回合实际使用的最后一次启动" = order 的最后一项，**或者**这一次会把
+                //   最后一个行动机会用掉（actionPoints == 1 → 扣完 = 0，之后 StartBlade 直接拒）。
+                //   行动机会在整条结算链里只减不增（没有任何效果会加它，回合开始那一次重置
+                //   已经在上面 BeginTurn 走过了），所以"扣之前 == 1"就是"扣完 == 0"、
+                //   也就是"本回合不会再有启动"——**当场能确定**，不必等循环自己走到尽头
+                //   （order 比行动机会长时，走到尽头的那一项只会被拒，什么都不会吞）。
+                bool isLast = (i == list.Count - 1) || state.actionPoints <= 1;
                 TurnResult st = StartBlade(state, list[i], isLast);
                 round.starts.Add(st);
                 Append(round, st);

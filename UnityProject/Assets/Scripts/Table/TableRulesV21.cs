@@ -473,7 +473,10 @@ namespace GameJam.Prototype
 
             // 整份卡表的解析报告：HUD 要拿它报"几条规则没实现"。
             // 只建一次 —— 31 素材 + 8 法术全解析一遍不便宜，而且运行期卡表不会变。
-            if (report == null) BuildReport();
+            // ★ 走 EnsureReport：**读档那条路也要建**（它不经过 BeginLevel，
+            //   实测踩到过"开机直接按继续读档 → 报告是 null → 顶栏写『无法确认哪些规则没实现』、
+            //   F2 也是空的"，见 EnsureReport 的说明）。
+            EnsureReport();
 
             // ★★ 必须在这里就把手牌摆出来 ★★
             //   正文 §2.5 的刀片核心是**玩家从初始手牌里点一张**选的 ——
@@ -483,6 +486,23 @@ namespace GameJam.Prototype
             RebuildHand();
 
             Debug.Log("[V21] 开一关｜" + DescribeHud().Replace("\n", "　｜　"));
+        }
+
+        /// <summary>
+        /// 兜底把整份卡表的解析报告建出来（幂等）。报告是只读的卡表快照，运行期不会变，
+        /// 所以建过一次就够。
+        ///
+        /// 【为什么单独抽出来，而不是只留在 BeginLevel 里】
+        ///   报告原来只在 `BeginLevel`（开一关）里建。而**读档那条路不经过 BeginLevel** ——
+        ///   打包版实测：开机停在开场、直接按「继续」读档，`report` 一直是 null，
+        ///   于是 HUD 顶栏写着"卡表解析报告没建出来 —— 无法确认哪些规则没实现"，
+        ///   按 F2 也是一片空白。玩法与存读档本身都没错，但玩家/策划会以为卡表坏了。
+        ///   所以"谁需要谁先确保它有"：BeginLevel 与读档落地（CommitSaveState）各叫一次。
+        /// </summary>
+        public void EnsureReport()
+        {
+            if (report != null) return;
+            BuildReport();
         }
 
         /// <summary>
@@ -763,7 +783,8 @@ namespace GameJam.Prototype
         /// 【isLastStart 怎么定】
         ///   正文 §四说明："最后一次启动不一定是第 5 次行动"，所以**不做次数判断** ——
         ///   玩家每一次启动都可能是最后一次（他随时能点"结束回合"）。
-        ///   只有三种情况是确定的：行动机会用完 / 手牌空了 / 已到目标分。
+        ///   只有三种情况是确定的：**这一次会用掉最后一个行动机会（AP 1 → 0）** / 手牌空了 / 已到目标分
+        ///   （判据的边界逐条写在 IsLastStartForSure 上）。
         ///   那时这一次必然是本回合最后一次，献祭吞噬必须当场生效，否则玩家白丢一张卡。
         /// </summary>
         public TurnResult TryActivate(MaterialState target)
@@ -844,10 +865,39 @@ namespace GameJam.Prototype
                       (view != null ? "｜卡面辉光挂在该卡上" : "｜（桌面卡找不到，用破壁机罐口兜底）"));
         }
 
-        /// <summary>这一次启动之后行动机会归零 / 手牌空了 / 已达标 → 必然是本回合最后一次启动。</summary>
+        /// <summary>
+        /// 这一次启动会不会**用掉本回合最后一个行动机会**（或之后根本没牌可打 / 已达标）
+        /// → 是的话它必然是本回合**实际使用的**最后一次启动（正文 §三.5 / §四.5）。
+        ///
+        /// 【为什么第一条判据是"这一次会消耗掉最后一个行动机会"（== 1），而不是"行动机会已用完"（&lt;= 0）】
+        ///   这个方法是在 <see cref="TryActivate"/> 里、**扣行动机会之前**问的，
+        ///   而走到这里只有两条路：玩家点「启动破壁机」→ TableTurnLoop.ActivateJuicer
+        ///   先过 <see cref="CanActivate"/>（它要求 actionPoints &gt; 0）；或者探针/工具直接调 TryActivate。
+        ///   两条路上 actionPoints 都不可能是 0 —— 原来那句 `if (actionPoints &lt;= 0) return true;`
+        ///   是**死条件**，永远不会命中。后果正是实跑日志里抓到的那一条：
+        ///   **把最后一个行动机会用掉的那一次启动（1 → 0）不被认作"最后一次"**，
+        ///   第 ⑤ 步写"本次不是本回合实际使用的最后一次启动 → 不吞噬"，
+        ///   目标卡带着 D 留在桌上；而这一下之后 CanActivate 当场变 false、
+        ///   本回合再也点不动启动 —— 那一次事实上就是最后一次，献祭吞噬漏判了。
+        ///   改成"这一次会把最后一个行动机会扣掉"就对了：扣完 AP = 0，
+        ///   引擎第①步之后（行动机会已用尽）谁都不可能再启动 → **当场就能确定**，
+        ///   不用等回合真的结束（玩家的原话是"结束回合"随时可点，等不起）。
+        ///
+        /// 【边界表（当前工程里只有"回合开始重置为 5"和"启动 -1"两处会动 actionPoints）】
+        ///   · actionPoints ≥ 2：这一次只扣到 ≥ 1，回合里**还能再启动** → 不是最后一次（false）。
+        ///     （多认这一档会让"还能继续打"的回合提前把目标吞掉，那是另一种漏判。）
+        ///   · actionPoints == 1：扣完 = 0，之后 CanActivate=false → **是**最后一次（true）。
+        ///   · actionPoints ≤ 0：只有绕开 CanActivate 直接调 TryActivate 才到得了，
+        ///     引擎会在第①步之前就拒掉这次启动（"行动机会已用尽 → 不能启动"），
+        ///     拒绝路径走不到第 ⑤ 步，所以**不会重复触发吞噬**；这里仍然返回 true ——
+        ///     "本回合再也不会有启动了"这件事在当时是真的，判据本身没有说谎。
+        ///   · 以后真有卡牌效果加行动机会（正文 §四 说明里留的那个设计空间）：
+        ///     判据要跟着换成"这次扣完之后仍然是 0"（即把这一处换成读扣完之后的值）；
+        ///     现在没有任何效果会加行动机会，所以"扣之前 == 1"与"扣完 == 0"完全等价。
+        /// </summary>
         private bool IsLastStartForSure()
         {
-            if (actionPoints <= 0) return true;
+            if (actionPoints <= 1) return true;      // 1 → 0：这一次会把最后一个行动机会用掉
             if (HandCount == 0) return true;
             if (targetScore > 0 && score >= targetScore) return true;
             return false;
@@ -2502,13 +2552,32 @@ namespace GameJam.Prototype
         {
             // ① 已经离场的素材：先播一段"被吸进机器"再销毁。
             //    走 ConsumeInto 的卡会在这段动画里自毁，SyncTableVisuals 之后不会重复销毁。
-            for (int i = 0; i < table.Count; i++)
+            //
+            // ★ 这里遍历的必须是 **tableCards（表现层那份"谁在桌上有卡"）**，不能遍历 table（规则侧的表）。
+            //   【为什么】引擎让素材离场时是 `RemoveFromTable(state, m)` → `state.table.Remove(m)` ——
+            //     它是把 state **从列表里摘掉**，不只是把 m.removed 置 true；而 BuildState 传进引擎的
+            //     就是这个 table（同一个 List 引用，见 Absorb 那段"桌面状态是权威"的说明）。
+            //     于是"刚离场的那张"在启动返回时已经不在 table 里了 —— 按 table 遍历的循环
+            //     **永远进不去**（这就是"卡在桌面与破壁机之间"的中间态一次都没出现过、
+            //     日志里"正在飞的卡：0 张"的原因），紧接着 SyncTableVisuals 的第①步
+            //     看到 removed==true && IsConsuming==false 就直接 DestroySafe ——
+            //     那段"让它自己飞完再消失"的守卫恒为真、等于没有。
+            //   tableCards 是**表现侧**的清单，引擎一个字都不动它：离场那张的 TableMaterialCard
+            //     一直都在（要到 SyncTableVisuals 第①步才从表里摘掉）——
+            //     拿它当依据，才找得到"该飞的那张卡"。
+            //   ★ 判据和 SyncTableVisuals 第①步**逐字一致**（同一句 removed / OnTable）：
+            //     那一步"会销毁谁"，这一步就"先让谁飞" —— 两份判据只要有一处不同，
+            //     就会出现"该飞的被直接删了"或"飞了的又被删一次"。
+            //   ★ 不采用"启动前拍快照、启动后逐个比对"的写法：那要求把"谁离场"记在额外的字段里、
+            //     并且每次新增一条离场路径都要记得维护它；而表现层本来就有权威清单，用它更稳。
+            //     （顺带一提：以后引擎若改成"只置 removed、不摘列表"，按 tableCards 遍历照样成立。）
+            for (int i = 0; i < tableCards.Count; i++)
             {
-                MaterialState st = table[i];
-                if (st == null || !st.removed) continue;
+                TableMaterialCard tc = tableCards[i];
+                if (tc == null || tc.view == null) continue;
+                if (tc.state != null && !tc.state.removed && tc.state.OnTable) continue;   // 还在桌上 → 不飞
 
-                TableMaterialCard tc = FindTableCard(st);
-                if (tc != null && tc.view != null && !tc.view.IsConsuming)
+                if (!tc.view.IsConsuming)
                     tc.view.ConsumeInto(JuicerMouth(tc.view), 0.55f);
             }
 
@@ -2844,6 +2913,11 @@ namespace GameJam.Prototype
             // 结算日志属于"上一把"的，别和读回来的局面混在一起
             lastLog.Clear();
             lastSummary = "";
+
+            // ── 卡表解析报告：读档这条路也可能是一次全新的运行（开机 → 直接按「继续」）──
+            //   不在这里建的话，顶栏那行会写"报告没建出来 —— 无法确认哪些规则没实现"、
+            //   F2 也是空的（打包版实测踩到）。报告是只读快照，建一次就够，幂等。
+            EnsureReport();
 
             Debug.Log("[V21][存档] 状态已落地（未做任何 3D 操作）：" + DescribeHud().Replace("\n", "　｜　") +
                       "｜刀片被动 " + engine.BladePassiveCount + " 条");

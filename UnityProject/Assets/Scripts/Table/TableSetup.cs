@@ -663,7 +663,25 @@ namespace GameJam.Prototype
         public void ClearHand()
         {
             for (int i = hand.Count - 1; i >= 0; i--)
-                if (hand[i] != null) CardFactory.DestroySafe(hand[i].gameObject);
+            {
+                if (hand[i] == null) continue;
+
+                // ★ 正在飞向罐口的卡**不在这里销毁**：它已经排好了自己的 Destroy
+                //   （PlayCard.ConsumeInto → Destroy(gameObject, lifeSeconds)），
+                //   这里再 Destroy 一次会把"被机器吸进去"那一段整段砍掉。
+                //   【为什么这条会踩到】法术卡是**先 ConsumeInto、紧接着就整副重建手牌**的
+                //   （TableRulesV21.OnSpellCardClicked：ConsumeInto → RebuildHand → 这里），
+                //   而它此刻还在 setup.hand 里 —— 无条件销毁就等于"法术打完瞬间从手里消失"，
+                //   截图里一次都拍不到它在桌面与罐口之间（献祭/溶解那张走的是桌面那条路，
+                //   见 TableRulesV21.SyncVisualsAfterActivate ① 的说明）。
+                //   跳过它不等于泄漏：那张卡自己会在寿命到了之后销毁，
+                //   而在那之前 CollectCardViews 把它归到"飞行中"（IsConsuming），
+                //   SweepUnclaimedViews 的残留清扫不会误杀它。
+                PlayCard pc = hand[i].GetComponent<PlayCard>();
+                if (pc != null && pc.IsConsuming) continue;
+
+                CardFactory.DestroySafe(hand[i].gameObject);
+            }
 
             hand.Clear();
         }
