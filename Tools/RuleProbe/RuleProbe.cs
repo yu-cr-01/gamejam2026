@@ -394,6 +394,22 @@ namespace GameJam.Tools
         //  三、附魔规则表
         // ══════════════════════════════════════════════════════════════
 
+        /// <summary>
+        /// 卡表里的 H/D/V（**卡表的真值**，不是夹具值）。
+        ///
+        /// 【为什么断言一律改成读这里，而不是写死数字】
+        ///   v3.0 定稿（2026-10-08）把每张卡的 H/D/V 全改了一遍（H 收成 5/10/20 三档、
+        ///   V 也复了一遍）。断言里写死"期望 8"这种数字，卡表一改就红一片，
+        ///   而红的原因不是规则错了、是**策划改了数** —— 这时候人会本能地去改断言，
+        ///   改着改着就把"规则本身对不对"这件事改没了。
+        ///   所以数值类断言一律**从卡表取值算期望**（下面的 ProbeValues）；
+        ///   规则类断言照旧写死（那才是断言的意义）。
+        /// </summary>
+        private static CardValues ProbeValues(JsonCards cards, string name)
+        {
+            return cards != null ? cards.ValuesOf(name) : new CardValues(0, 3, 0);
+        }
+
         private static void Table_MatchCases(JsonCards cards)
         {
             int mark = ScenarioStart();
@@ -468,11 +484,22 @@ namespace GameJam.Tools
             Check("规则表：白磷（固体+易燃）仍命中优先级1（燃烧）", 1, mh.priority);
             Check("规则表：白磷的燃烧产物仍是火焰", "火焰", mh.productName);
 
-            // 卡表用「遇酸 + 酸 → 无变化（不溶于酸）」声明"规则命中，但这张卡没有这个形态"
-            // （黄金就是这种写法）：既不该变形，也不该算成"忘了写产物"
+            // 「遇酸 + 酸 → 无变化（原因）」这种"声明式"写法：既不该变形，也不该算成"忘了写产物"。
+            //
+            // ★ v3.0 数据变化：定稿里**没有一张卡**用这个写法了（黄金的形态转换只剩「可熔 + 热」，
+            //   定稿把"遇酸不反应"改由标签体现）。所以这一条改成**合成卡**来验机制本身 ——
+            //   机制是解析器/规则表的能力，不该被某一版卡表文案的取舍带走。
+            //   （v2.1 时代这里用的是黄金；它的旧写法在 docs/卡牌数值_v3.0_差异报告.md 里有记录。）
+            Ingredient declared = cards.Synthetic("声明无变化测试卡", "固体", new string[] { "固体", "金属" });
+            declared.transitions = new FormChange[]
+            {
+                new FormChange("遇酸 + 酸", "无变化（不溶于酸）"),
+            };
+            cards.RegisterSynthetic("声明无变化测试卡", declared);
+
             BladeState bi = new BladeState("b", "刀片", 10, 0);
             bi.layers.Add(LayerKind.Acid, 1);
-            EnchantMatch mi = MatchCase(cards, bi, cards.Material("黄金"), "黄金", LayerKind.Acid);
+            EnchantMatch mi = MatchCase(cards, bi, declared, "声明无变化测试卡", LayerKind.Acid);
             Check("声明无变化：规则仍然算命中（优先级1 金属→溶液）", 1, mi.priority);
             Check("声明无变化：标记为 declaredNoChange", true, mi.declaredNoChange);
             Check("声明无变化：不算数据缺口", false, mi.productMissing);
@@ -531,7 +558,8 @@ namespace GameJam.Tools
             Check("白磷·燃烧：燃烧产物「火焰」进手牌", 1, r.ProducedCount("火焰"));
             CheckKind("白磷·燃烧：火焰是法术卡", ProduceKind.Spell, r.KindOfProduced("火焰"));
             Check("白磷·燃烧：形态变化不再走 D 耗尽 → 火焰只产出一次", 1, r.ProducedCount("火焰"));
-            Check("白磷·燃烧：得分 = 目标V 3 + 刀片V 5", 8, r.activationScore);
+            Check("白磷·燃烧：得分 = 目标V " + ProbeValues(cards, "白磷").V + " + 刀片V 5",
+                  ProbeValues(cards, "白磷").V + 5, r.activationScore);
             Check("白磷·燃烧：启动消耗 1 层附魔（规则表 F）", 0, s.blade.layers.Count(LayerKind.Heat));
             CheckLog("白磷·燃烧：日志有「形态变化」", r, "形态变化");
             CheckLog("白磷·燃烧：日志有「素材结算结束」的顺序说明", r, "不再检查后续附魔");
@@ -558,7 +586,8 @@ namespace GameJam.Tools
             CheckKind("水·液体→气态：水蒸气是素材卡", ProduceKind.Material, r.KindOfProduced("水蒸气"));
             Check("水·液体→气态：旧卡移出桌面", true, water.removed);
             Check("水·液体→气态：热 2 → 启动消耗 1 层 → 1", 1, s.blade.layers.Count(LayerKind.Heat));
-            Check("水·液体→气态：得分用启动时的原始卡 V（2 + 5）", 7, r.activationScore);
+            Check("水·液体→气态：得分用启动时的原始卡 V（" + ProbeValues(cards, "水").V + " + 5）",
+                  ProbeValues(cards, "水").V + 5, r.activationScore);
 
             ScenarioEnd("场景2 水·液体→气态", mark,
                 "水 → " + r.ProducedText() + "，热剩 " + s.blade.layers.Count(LayerKind.Heat) + "，得分 " + r.ScoreDelta);
@@ -607,34 +636,47 @@ namespace GameJam.Tools
             TurnEngine e = new TurnEngine(ProbeRules(), cards);
             TurnResult r = e.StartBlade(s, glass, true);
 
+            // ★ 卡表数值化：H/V 从卡表读（v3.0 把玻璃改成 H5 D1 V1、黄金改成 H20 D2 V5）
+            int gH = ProbeValues(cards, "玻璃").H, gV = ProbeValues(cards, "玻璃").V;
+
             Check("顺序①：消耗 1 次行动机会（5→4）", 4, s.actionPoints);
-            Check("顺序②：酸≥2 + 固体 → 目标 H-1（5→4）", 4, glass.H);
+            Check("顺序②：酸≥2 + 固体 → 目标 H-1（" + gH + "→" + (gH - 1) + "）", gH - 1, glass.H);
             Check("顺序②：仅改属性 → 没有变形（日志说明继续检查下一类）", true, r.LogContains("仅改属性、未发生形态变化"));
             Check("顺序②：D-1（3→2）", 2, glass.D);
             Check("顺序②：启动消耗 1 层酸（触发的那一类）", 1, s.blade.layers.Count(LayerKind.Acid));
-            Check("顺序③：得分 = 目标V 2 + 刀片V 5 = 7", 7, r.activationScore);
+            Check("顺序③：得分 = 目标V " + gV + " + 刀片V 5 = " + (gV + 5), gV + 5, r.activationScore);
             Check("顺序④：H=5 > 0 未爆刀", false, r.bursted);
-            Check("顺序⑤：最后一次启动 + D 剩余 → 并入刀片，刀片 H 5-1(启动)+4 = 8", 8, s.blade.H);
-            Check("顺序⑤：刀片 V 5+2=7", 7, s.blade.V);
+            // ★ 吞噬加的是**被吞噬那一刻的 H**：玻璃 v3.0 H=5，被酸蚀先扣 1 → 吞噬时 H=4。
+            //   所以刀片 H = 5（初始）- 1（启动）× 1（只是最后一次启动）+ 4 = 8。
+            //   （这个"4"不是卡表的 5 —— 基线那版正好也是 4，因为 v2.1 的玻璃 H 就是 4。
+            //     两版同值纯属巧合，所以这里改成用**吞噬时实测的 H** 表达，别写死。）
+            int absorbH = glass.H;
+            Check("顺序⑤：最后一次启动 + D 剩余 → 并入刀片，刀片 H 5-1(启动)+" + absorbH + " = " + (4 + absorbH),
+                  4 + absorbH, s.blade.H);
+            Check("顺序⑤：刀片 V 5+" + gV + "=" + (5 + gV), 5 + gV, s.blade.V);
             Check("顺序⑤：被吞噬的卡移出桌面", true, glass.removed);
-            Check("顺序⑤：玻璃的献祭文本「刀片每次启动，获得1分」能解析 → 不报未识别警告", 0, r.warnings.Count);
-            Check("顺序⑤：这条「每次启动」登记成刀片被动（不当场结算）", 1, e.BladePassiveCount);
-            CheckLog("顺序⑤：日志说明登记为被动、从下一次启动生效", r, "登记为刀片被动");
+            // ★ v3.0 数据变化：玻璃的献祭文本从「刀片每次启动，获得1分」换成
+            //   「每次消耗H时，获得1分」—— 那是**反应式触发**（解析器认不出），
+            //   所以这里会报 1 条未识别警告，而且**不再登记刀片被动**。
+            //   这两条按 v3.0 数据钉住（不是把断言删掉），缺口报告里单列一条。
+            Check("顺序⑤：玻璃的献祭文本「每次消耗H时，获得1分」是反应式触发 → 会报 1 条未识别警告", 1, r.warnings.Count);
+            Check("顺序⑤：这条「每次消耗H时」不登记为刀片被动（v2.1 的『每次启动』才有触发点）", 0, e.BladePassiveCount);
             CheckLog("顺序⑤：日志说明这是最后一次启动", r, "最后一次启动");
             CheckLog("顺序⑤：日志说明已移出桌面", r, "移出桌面");
             CheckLog("顺序⑤：日志说明\"并入刀片\"", r, "并入刀片");
 
-            // (b) 只触发最高优先级一条：酸层再多，H 也只掉 1 点
+            // (b) 只触发最高优先级一条：酸层再多，H 也只掉 1 点（这个数也要跟卡表走）
             LevelRun s2 = NewLevel(cards, "铁刀片", 5, 5);
             s2.blade.layers.Add(LayerKind.Acid, 4);
             MaterialState glass2 = Put(cards, s2, "玻璃", 3);
             TurnEngine e2 = new TurnEngine(ProbeRules(), cards);
             e2.StartBlade(s2, glass2, false);
 
-            Check("只触发一条：酸4 时 H 仍只 -1（不是 -2/-4）", 4, glass2.H);
+            Check("只触发一条：酸4 时 H 仍只 -1（不是 -2/-4）", gH - 1, glass2.H);
 
             ScenarioEnd("场景4 启动②③④⑤ + 献祭吞噬", mark,
-                "玻璃 H 5→4、D 3→2、得分 7，末次启动被吞噬 → 刀片 H=" + s.blade.H + " V=" + s.blade.V +
+                "玻璃 H " + gH + "→" + (gH - 1) + "、D 3→2、得分 " + (gV + 5) + "，末次启动被吞噬 → 刀片 H=" + s.blade.H + " V=" + s.blade.V +
+                "（诊断：玻璃被吞噬时的 H=" + glass.H + "，期望刀片 H = 5-1+" + glass.H + " = " + (4 + glass.H) + "）" +
                 "；酸4 时 H 也只 -1（只触发最高优先级一条）");
         }
 
@@ -652,7 +694,8 @@ namespace GameJam.Tools
             Check("溶解：旧卡移出桌面", true, powder.removed);
             Check("溶解：不产生副产物", 0, r.produced.Count);
             Check("溶解：手牌没有变化", 0, s.hand.Count);
-            Check("溶解：得分仍按启动时的原始卡 V（2 + 5）", 7, r.activationScore);
+            Check("溶解：得分仍按启动时的原始卡 V（" + ProbeValues(cards, "硫磺粉").V + " + 5）",
+                  ProbeValues(cards, "硫磺粉").V + 5, r.activationScore);
             CheckLog("溶解：日志有「溶解移除」", r, "溶解移除");
             CheckLog("溶解：目标已被移除 → 献祭不生效", r, "本次献祭不生效");
 
@@ -676,7 +719,8 @@ namespace GameJam.Tools
             Check("D耗尽：产物「空白卡」进手牌", 1, r.ProducedCount("空白卡"));
             Check("D耗尽：空白卡计数 +1", 1, s.blankCount);
             Check("D耗尽：原卡移出桌面", true, ice.removed);
-            Check("D耗尽：得分用启动时的原始卡 V（3 + 5）", 8, r.activationScore);
+            Check("D耗尽：得分用启动时的原始卡 V（" + ProbeValues(cards, "冰").V + " + 5）",
+                  ProbeValues(cards, "冰").V + 5, r.activationScore);
             Check("D耗尽：目标已移除 → 献祭不生效", true, r.LogContains("本次献祭不生效"));
 
             // (b) D=2：只掉 1 点，不触发 D 耗尽
@@ -714,13 +758,18 @@ namespace GameJam.Tools
             TurnEngine e = new TurnEngine(ProbeRules(), cards);
             RoundResult round = e.RunRound(s, new List<MaterialState> { wp, gold });
 
+            // ★ 卡表数值化：黄金 v3.0 = H20 D2 V5（v2.1 是 H5 D3 V5），白磷 V=2（v2.1 是 3）
+            int auH = ProbeValues(cards, "黄金").H, auV = ProbeValues(cards, "黄金").V;
+            int pV  = ProbeValues(cards, "白磷").V;
+
             Check("献祭时机：这个回合启动了 2 次", 2, round.StartCount);
             Check("献祭时机：第一次启动的目标没被吞噬（还在桌面）", false, wp.removed);
             Check("献祭时机：最后一次启动的目标被吞噬", true, gold.removed);
-            Check("献祭时机：刀片 H 10 - 2 次启动 + 黄金H 5 = 13", 13, s.blade.H);
-            Check("献祭时机：刀片 V 0 + 黄金V 5 = 5", 5, s.blade.V);
-            Check("献祭时机：两次启动的 V 得分 = 白磷3 + 黄金5 = 8", 8, round.starts[0].activationScore + round.starts[1].activationScore);
-            Check("献祭时机：黄金带「献祭」标签 → 献祭效果 30 分也结算", 38, s.score);
+            Check("献祭时机：刀片 H 10 - 2 次启动 + 黄金H " + auH + " = " + (10 - 2 + auH), 10 - 2 + auH, s.blade.H);
+            Check("献祭时机：刀片 V 0 + 黄金V " + auV + " = " + auV, auV, s.blade.V);
+            Check("献祭时机：两次启动的 V 得分 = 白磷" + pV + " + 黄金" + auV + " = " + (pV + auV),
+                  pV + auV, round.starts[0].activationScore + round.starts[1].activationScore);
+            Check("献祭时机：黄金带「献祭」标签 → 献祭效果 30 分也结算", pV + auV + 30, s.score);
             Check("献祭时机：黄金的献祭效果产出 3 张催化术", 3, round.starts[1].ProducedCount("催化术"));
             Check("献祭时机：桌面只剩白磷", 1, s.table.Count);
             CheckLog("献祭时机：日志说明第一次不是最后一次", round, "本次不是本回合实际使用的最后一次启动");
@@ -729,7 +778,7 @@ namespace GameJam.Tools
             Check("献祭时机：回合结束附魔衰减跑过了", true, round.LogContains("附魔衰减"));
 
             ScenarioEnd("场景7 献祭只在最后一次启动", mark,
-                "白磷不被吞噬；黄金被吞噬 → 刀片 H=13 V=5，献祭再给 30 分 + 3 张催化术，总分 " + s.score);
+                "白磷不被吞噬；黄金被吞噬 → 刀片 H=" + s.blade.H + " V=" + auV + "，献祭再给 30 分 + 3 张催化术，总分 " + s.score);
         }
 
         /// <summary>场景 8：爆刀 —— H≤0 立即爆刀、关卡结束、当前分数 ×2；主动结束不双倍。</summary>
@@ -742,13 +791,16 @@ namespace GameJam.Tools
             TurnEngine e = new TurnEngine(ProbeRules(), cards);
             TurnResult r = e.StartBlade(s, glass, false);
 
+            // ★ 卡表数值化：玻璃 v3.0 = H5 D1 V1（v2.1 是 H5 D3 V2）
+            int gV = ProbeValues(cards, "玻璃").V;
+
             Check("爆刀：启动消耗把 H 打到 0", 0, s.blade.H);
             Check("爆刀：爆刀成立", true, r.bursted);
             Check("爆刀：关卡结束", true, s.levelOver);
-            Check("爆刀：本次启动得分 = 2 + 5 = 7", 7, r.activationScore);
-            Check("爆刀：当前分数 ×2 → 14", 14, s.score);
+            Check("爆刀：本次启动得分 = " + gV + " + 5 = " + (gV + 5), gV + 5, r.activationScore);
+            Check("爆刀：当前分数 ×2 → " + (gV + 5) * 2, (gV + 5) * 2, s.score);
             Check("爆刀：倍率是正文写的 ×2", 2, r.burstMultiplier);
-            Check("爆刀：翻倍带来的增量是 7", 7, r.burstBonus);
+            Check("爆刀：翻倍带来的增量是 " + (gV + 5), gV + 5, r.burstBonus);
             CheckLog("爆刀：日志写明爆刀并结束关卡", r, "爆刀，关卡结束");
             Check("爆刀：爆刀后不再吞噬（关卡已结束）", false, glass.removed);
 
@@ -763,32 +815,63 @@ namespace GameJam.Tools
             CheckLog("主动结束：日志说明不双倍", r2, "不触发爆刀双倍");
 
             ScenarioEnd("场景8 爆刀 ×2", mark,
-                "H 1→0 → 得分 7 后总分翻倍为 " + s.score + "；主动结束则原样 " + s2.score);
+                "H 1→0 → 得分 " + (gV + 5) + " 后总分翻倍为 " + s.score + "；主动结束则原样 " + s2.score);
         }
 
-        /// <summary>场景 9：得分 = 目标素材 V + 刀片 V；吞噬素材会抬高刀片 V。</summary>
+        /// <summary>
+        /// 场景 9：得分 = 目标素材 V + 刀片 V；吞噬素材会抬高刀片 V；刀片被动在下一次启动生效。
+        ///
+        /// 【v3.0 数据变化对这一条的连带影响（★ 数值断言随卡表走）】
+        ///   ① 玻璃 v3.0 = H5 D1 **V1**（v2.1 是 V2）→ 期望值从卡表取，不写死；
+        ///   ② **玻璃的献祭文本 v3.0 换成了「每次消耗H时，获得1分」**（v2.1 曾被改写成
+        ///      「刀片每次启动，获得1分」）—— 那是"每次消耗H时"的**反应式触发**，
+        ///      解析器认不出（见缺口报告 ⚠），所以吞噬玻璃**不再登记刀片被动**。
+        ///      于是这一条拆成两半：
+        ///        (a) 用卡表的真实文本跑 吞噬 → 得分/V 的计算（数值部分）；
+        ///        (b) 用**存档里保存的那句旧原文**走 ImportBladePassives 造一条真被动，
+        ///            验"每次启动 +1 分"这条机制本身没坏（机制是引擎的，不该被卡表文案带走）。
+        /// </summary>
         private static void Scenario9_ScoreFormula(JsonCards cards)
         {
             int mark = ScenarioStart();
+
+            int gV = ProbeValues(cards, "玻璃").V;
+            int pV = ProbeValues(cards, "白磷").V;
+
             LevelRun s = NewLevel(cards, "铁刀片", 20, 2);
 
-            MaterialState glass = Put(cards, s, "玻璃", 3);   // V=2（夹具）
+            MaterialState glass = Put(cards, s, "玻璃", 3);
             TurnEngine e = new TurnEngine(ProbeRules(), cards);
 
             TurnResult r1 = e.StartBlade(s, glass, true);
-            Check("计分公式：目标V 2 + 刀片V 2 = 4", 4, r1.activationScore);
-            Check("计分公式：吞噬后刀片 V = 2 + 2 = 4", 4, s.blade.V);
-            Check("计分公式：吞噬登记了玻璃的被动（每次启动 +1 分）", 1, e.BladePassiveCount);
-            Check("计分公式：被动的 +1 不当场结算（第一次启动仍是 4 分）", 0, r1.ruleScore);
+            Check("计分公式：目标V " + gV + " + 刀片V 2 = " + (gV + 2), gV + 2, r1.activationScore);
+            Check("计分公式：吞噬后刀片 V = 2 + " + gV + " = " + (2 + gV), 2 + gV, s.blade.V);
+            Check("计分公式：玻璃 v3.0 的献祭是反应式（每次消耗H时）→ 不登记刀片被动", 0, e.BladePassiveCount);
 
-            MaterialState wp = Put(cards, s, "白磷", 3);      // V=3（卡表）
+            // (b) 造一条真被动（原文用存档里那句有触发的写法）—— 验机制，不依赖卡表文案
+            List<SaveBladePassive> recs = new List<SaveBladePassive>();
+            recs.Add(new SaveBladePassive
+            {
+                cardId = "glass",
+                cardName = "玻璃",
+                text = "刀片每次启动，获得1分",
+                sentence = "刀片每次启动，获得1分",
+            });
+            string impErr;
+            Check("计分公式：按原文重建刀片被动成功（机制本身没坏）", 1, e.ImportBladePassives(recs, out impErr));
+            Check("计分公式：重建没有报错", "", impErr);
+
+            MaterialState wp = Put(cards, s, "白磷", 3);
             TurnResult r2 = e.StartBlade(s, wp, false);
-            Check("计分公式：刀片 V 涨了以后，下一次启动 = 3 + 4 = 7", 7, r2.activationScore);
+            Check("计分公式：刀片 V 涨了以后，下一次启动 = " + pV + " + " + (2 + gV) + " = " + (pV + 2 + gV),
+                  pV + 2 + gV, r2.activationScore);
             Check("计分公式：刀片被动「每次启动，获得1分」这次生效 +1", 1, r2.ruleScore);
-            Check("计分公式：总分累加 4 + 7 + 1(被动) = 12", 12, s.score);
+            Check("计分公式：总分累加 " + (gV + 2) + " + " + (pV + 2 + gV) + " + 1(被动) = " + (gV + 2 + pV + 2 + gV + 1),
+                  gV + 2 + pV + 2 + gV + 1, s.score);
 
-            ScenarioEnd("场景9 得分 = 目标V + 刀片V（+ 吞噬来的刀片被动）", mark,
-                "第一次 2+2=4；吞噬后刀片 V=4 且登记被动 +1；第二次 3+4=7 + 被动 1 = 8；总分 " + s.score);
+            ScenarioEnd("场景9 得分 = 目标V + 刀片V（+ 重建出来的刀片被动）", mark,
+                "第一次 " + gV + "+2=" + (gV + 2) + "；吞噬后刀片 V=" + (2 + gV) +
+                "；第二次 " + pV + "+" + (2 + gV) + "=" + (pV + 2 + gV) + " + 被动 1；总分 " + s.score);
         }
 
         /// <summary>场景 10：冷热冲突 —— 后附魔覆盖先附魔，清空对方全部层数。</summary>
@@ -938,12 +1021,26 @@ namespace GameJam.Tools
             iron.fullD = 3;                               // D 与满值不同 → 两个数都必须存住
             salt.H = 4;                                   // 场上被扣过 H 的卡
 
-            // 第 4 张用来被吞噬：登记一条**真实的**刀片被动（被动列表非空）
+            // 第 4 张用来被吞噬：走完"启动 → 献祭吞噬"这条真路径
             MaterialState glass = Put(cards, s, "玻璃", 3);
             TurnEngine e = new TurnEngine(rules, cards);
             e.StartBlade(s, glass, true);
 
-            Check("存档：先造出一条真实的刀片被动（玻璃被吞噬）", 1, e.BladePassiveCount);
+            // ★ v3.0 数据变化：玻璃的献祭文本换成「每次消耗H时，获得1分」（反应式触发，解析器认不出），
+            //   所以**吞噬玻璃不再自动登记刀片被动**。这一条要验的是"被动能存能读"，
+            //   所以按存档的口径（SaveBladePassive 保存"原文"）现造一条真被动进去 ——
+            //   被动列表非空这一前提不能靠卡表文案碰运气。
+            List<SaveBladePassive> seedPassives = new List<SaveBladePassive>();
+            seedPassives.Add(new SaveBladePassive
+            {
+                cardId = "glass",
+                cardName = "玻璃",
+                text = "刀片每次启动，获得1分",
+                sentence = "刀片每次启动，获得1分",
+            });
+            string seedErr;
+            Check("存档：先造出一条真实的刀片被动（按原文重建）", 1, e.ImportBladePassives(seedPassives, out seedErr));
+            Check("存档：重建那条被动没有报错", "", seedErr);
             Check("存档：被吞噬那张已离场，桌面正好 3 张", 3, s.table.Count);
 
             // 刀片层数：热 2 衰退 + 热 1 不衰退（★ 两份分开存）
@@ -1210,14 +1307,22 @@ namespace GameJam.Tools
             Check("AP 边界：第 5 次（行动机会 1→0）按「最后一次」记（标题行写明）",
                   true, round.starts[4].LogContains("本回合最后一次启动（结算后判定献祭吞噬）"));
             CheckLog("AP 边界：第 5 次的目标被吞噬（并入刀片）", round.starts[4], "并入刀片");
+            // ★ 卡表数值化：黄金 v3.0 = H20 D2 V5（v2.1 是 H5 D3 V5）；
+            //   水 v3.0 的启动带「不消耗刀片H」→ 前 4 次水启动不扣刀片 H（引擎按失效写法跳过）。
+            int auH2 = ProbeValues(cards, "黄金").H, auV2 = ProbeValues(cards, "黄金").V;
+
             Check("AP 边界：第 5 次的目标确实移出了桌面", true, gold.removed);
-            Check("AP 边界：刀片 H 20 - 5 次启动 + 黄金H 5 = 20", 20, s.blade.H);
-            Check("AP 边界：刀片 V 0 + 黄金V 5 = 5（吞噬把它加进来了）", 5, s.blade.V);
-            Check("AP 边界：黄金带「献祭」标签 → 献祭效果 30 分照常结算", 43, s.score);
+            // ★ 每一次启动都扣 1 点刀片 H（5 次启动 = -5；水的「不消耗刀片H」在 v3 是失效写法，
+            //   引擎跳过它并打警告，所以**不产生豁免**）；再叠加被吞噬的黄金 H。
+            Check("AP 边界：刀片 H 20 - 5 次启动 + 黄金H " + auH2 + " = " + (15 + auH2),
+                  15 + auH2, s.blade.H);
+            Check("AP 边界：刀片 V 0 + 黄金V " + auV2 + " = " + auV2 + "（吞噬把它加进来了）", auV2, s.blade.V);
+            // 分数 = 前 4 次水的启动分（每次 命中卡表 V=2）+ 黄金那次（激活 5 + 献祭 30）
+            Check("AP 边界：黄金带「献祭」标签 → 献祭效果 30 分照常结算", 8 + 5 + 30, s.score);
 
             ScenarioEnd("场景13 用掉最后一个行动机会的那一次 = 最后一次启动", mark,
-                "行动机会 5 次、order 6 项：前 4 次不吞、第 5 次（1→0）把 黄金 并进刀片 → 刀片 H=20 V=5、总分 " +
-                s.score + "；第 6 次被拒（行动机会已用尽）");
+                "行动机会 5 次、order 6 项：前 4 次不吞、第 5 次（1→0）把 黄金 并进刀片 → 刀片 H=" + s.blade.H +
+                " V=" + auV2 + "、总分 " + s.score + "；第 6 次被拒（行动机会已用尽）");
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -1228,33 +1333,56 @@ namespace GameJam.Tools
         {
             int mark = ScenarioStart();
 
-            RuleReport rep = RuleReport.BuildAll(cards.materials, cards.spells, cards);
+            RuleReport rep = RuleReport.BuildAll(cards.reportMaterials, cards.spells, cards);
 
             Check("解析报告：句子账目全部对得上（clauses + 未识别 == 句子数）", 0, rep.UnbalancedFields);
             Check("解析报告：没有字段静默丢失（有文本却切不出句子）", 0, rep.silentFields.Count);
 
-            // ★ 金丝雀（数据侧改 cards_v21.json 就要盯这四个数，目标全是 0）：
-            //    未识别 0 / 规则表接不上 0 / v3 已失效写法 0 / 可疑产出 0
-            //   断言红了 = 卡表里出现了引擎读不懂或接不上的写法，去把报告后半段那份清单发给策划。
-            Check("解析报告：未识别句子数（金丝雀）", 0, rep.unrecognized.Count);
-            Check("解析报告：规则表接不上的卡（金丝雀）", 0, rep.tableGaps.Count);
-            Check("解析报告：v3 已失效写法（金丝雀）", 0, rep.superseded.Count);
-            Check("解析报告：可疑产出（卡表里没有这张卡）（金丝雀）", 0, rep.unknownProducts.Count);
+            // ★ 金丝雀（数据侧改 cards_v21.json 就要盯这四个数）：v2.1 时代四个数都是 0，
+            //   意思是"卡表里每一句引擎都认得、都接得上"。
+            //
+            //   ★★ v3.0 定稿（2026-10-08）之后这四个数**不再可能是 0**，原因不是回归、
+            //      是**卡表先落地、引擎算子下一阶段才做**（本次任务明确：本阶段只转写数据 + 出报告）。
+            //      所以断言改成"钉住当前的账"，而不是放宽成 `>= 0`（那等于把金丝雀放飞）：
+            //        · 未识别 8：木头/法术卷轴/熔融金/固态汞/熔融玻璃/玻璃/催化术/结晶 的新写法；
+            //        · 规则表接不上 22：v3.0 把"遇热/遇酸"这类**重复的形态转换行**删掉了，
+            //          而标签（遇热/金属/可溶/液体…）还在，AuditProducts 就会按标签去要产物；
+            //        · v3 失效写法 8：v3.0 把「不消耗刀片H」写回了 8 张卡（引擎按失效处理并打警告）；
+            //        · 可疑产出 1：法术卷轴的形态转换产物「灰烬」不在 v3.0 卡表里（定稿只列了 32 张）。
+            //      这四个数一旦变化，说明卡表又被改过 —— 请同步更新 docs/卡牌数值_v3.0_缺口报告.md。
+            Check("解析报告：未识别句子数（v3.0 卡表 = 8，见缺口报告）", 8, rep.unrecognized.Count);
+            Check("解析报告：规则表接不上的卡（v3.0 卡表 = 22，见缺口报告）", 22, rep.tableGaps.Count);
+            Check("解析报告：v3 已失效写法（v3.0 卡表 = 8 张卡的『不消耗刀片H』）", 8, rep.superseded.Count);
+            Check("解析报告：可疑产出（v3.0 卡表 = 1，法术卷轴产出的「灰烬」不在 32 张里）", 1, rep.unknownProducts.Count);
 
-            // 数据侧这两轮的实际修法，逐条钉住（哪条被改回旧写法了，这里会红）
-            Check("卡表契约：熔融金的『额外增加10V』已改掉（v3 里 V 只能靠吞噬素材加）", true, !HasUnrecognized(rep, "熔融金", "V"));
-            Check("卡表契约：法术卷轴的『指定手牌中的1张法术卡』已改掉（引擎无法自动结算选牌）", true, !HasUnrecognized(rep, "法术卷轴", "复制"));
-            Check("卡表契约：水的『不消耗刀片H』已从卡表删掉（v3 没有豁免）", true, !HasSuperseded(rep, "水·启动"));
-            Check("卡表契约：玻璃的『每次消耗H时』已改写成『刀片每次启动，获得1分』（有触发点）", true, HasEachStartupSacrifice(rep, "玻璃"));
+            // 数据侧前几轮修好的写法，**v3.0 定稿又改回去了** —— 逐条按定稿钉住。
+            // （这几条以前是"已改掉"，现在反过来：定稿怎么写、卡表就怎么写，
+            //   引擎接不住的部分进缺口报告，不是偷偷把卡表改回引擎喜欢的写法。）
+            Check("卡表契约：熔融金的『额外增加10V』按 v3.0 定稿写回来了（引擎当前认不出 → 缺口报告 ⚠）",
+                  true, HasUnrecognized(rep, "熔融金", "V"));
+            Check("卡表契约：法术卷轴的『指定手牌中的1张法术卡，复制2张』按 v3.0 定稿写回来了（要选牌 → 缺口报告 ⚠）",
+                  true, HasUnrecognized(rep, "法术卷轴", "复制"));
+            Check("卡表契约：水的『不消耗刀片H』按 v3.0 定稿写回来了（引擎标为失效写法 → 缺口报告 ⚠）",
+                  true, HasSuperseded(rep, "水·启动"));
+            Check("卡表契约：玻璃的献祭按 v3.0 定稿是『每次消耗H时，获得1分』（反应式触发，不再是『每次启动』）",
+                  true, !HasEachStartupSacrifice(rep, "玻璃"));
 
-            // 新写法：卡表用「→ 无变化（原因）」声明"规则命中但这张卡没有这个形态"
-            Check("新写法：黄金的『遇酸 + 酸 → 无变化（不溶于酸）』被认成声明，不是未识别", true,
+            // 「→ 无变化（原因）」这种声明式写法：v3.0 定稿里没有一张卡这么写
+            // （定稿用的是「形态转换 无」+ 标签里标「(不响应热/冷/酸)」），
+            // 所以这两条断言改成"当前卡表里没有这种声明" —— 写法本身仍然被解析器支持
+            // （Parser/规则表那边有专门用例，见 Table_MatchCases 的 declaredNoChange 段）。
+            Check("v3.0 卡表：没有『无变化（原因）』式声明（定稿用的是『形态转换 无』）", false,
                   HasDeclaredNoChange(rep, "黄金"));
-            Check("新写法：声明了无变化的卡不再算『规则表接不上』（黄金已从缺口清单消失）", true, !HasGap(rep, "黄金："));
+            Check("v3.0 卡表：黄金有『酸规则会命中但没写产物』的缺口（定稿删掉了『遇酸 + 酸 → 无变化』那一行）",
+                  true, HasGap(rep, "黄金："));
 
             Check("解析报告：没有『执行不了』的条目（v3 里素材有 H 了，v2.1 的『其他素材H』也能落地）",
                  0, rep.unsupported.Count);
-            Check("解析报告：占位数值至少 3 处（一定分数 / 没给每层分值）", true, rep.placeholders.Count >= 3);
+            // ★ v3.0 数据变化：定稿把"每层多少分"写实了（汞蒸气/熔融玻璃/结晶 各给了 2 分），
+            //   所以占位数值从 4 处掉到 **1 处**（只剩酸爆的"每层多少分"没写）。
+            //   这一条断言改成"钉住这 1 处是酸爆"（>= 0 那种写法等于没断言）。
+            Check("解析报告：占位数值 = 1 处，且只剩酸爆那一条（v3.0 把其它每层分值都写实了）",
+                  true, rep.placeholders.Count == 1 && rep.placeholders[0].Contains("酸爆"));
             Check("解析报告：矛盾清单至少 8 条（启动消耗层/爆炸/献祭两义/…；含已按意图修正的爆炸）", true, rep.conflicts.Count >= 8);
 
             ScenarioEnd("报告·不静默失效", mark,
@@ -1357,6 +1485,17 @@ namespace GameJam.Tools
             public readonly List<Ingredient> materials = new List<Ingredient>();
             public readonly List<SpellSpec> spells = new List<SpellSpec>();
 
+            /// <summary>
+            /// 按名字去重用的表（**报告走它**）。
+            ///
+            /// 【为什么报告不直接用 materials 列表】卡表里万一出现两张同名卡
+            ///   （改数据时最容易出的一类错），列表会把两张都算进去，
+            ///   而 matByName 只有一份（后写的覆盖先写的）—— "报告说 32 张、
+            ///   实际只有 31 张能查到"这种账对不上就是这么来的。
+            ///   报告按去重后的表算，和规则实际看到的卡完全一致。
+            /// </summary>
+            public readonly List<Ingredient> reportMaterials = new List<Ingredient>();
+
             private readonly Dictionary<string, Ingredient> matByName = new Dictionary<string, Ingredient>();
             private readonly Dictionary<string, string> spellEnchant = new Dictionary<string, string>();
             private readonly List<string> spellNames = new List<string>();
@@ -1422,11 +1561,28 @@ namespace GameJam.Tools
                 return ing;
             }
 
+            /// <summary>
+            /// 把合成卡登记进"按名字查卡"的表里，让它也能被 <see cref="Reactions"/> 查到。
+            ///
+            /// 【为什么需要】合成卡（例如"声明无变化测试卡"）的 transitions 是**探针自己写的**，
+            ///   不登记的话 MatchCase 走 cards.Reactions(name) 会拿到空表，
+            ///   规则表就看不到那句"无变化"声明 —— 测的就不是真想测的东西了。
+            /// </summary>
+            public void RegisterSynthetic(string name, Ingredient ing)
+            {
+                if (string.IsNullOrEmpty(name) || ing == null) return;
+
+                matByName[name] = ing;
+                RuleParseResult pr = RuleText.ParseTransitions(ing.transitions, ing.id, ing.name, null);
+                reactions[name] = pr.transitions;
+            }
+
             private void AddMaterial(Ingredient ing)
             {
                 materials.Add(ing);
                 if (string.IsNullOrEmpty(ing.name)) return;
 
+                if (!matByName.ContainsKey(ing.name)) reportMaterials.Add(ing);
                 matByName[ing.name] = ing;
 
                 // 产物表：把 transitions 解析一遍（规则表要用 triggerTag + 层数类别 定位产物）

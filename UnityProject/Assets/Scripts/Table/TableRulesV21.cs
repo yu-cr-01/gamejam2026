@@ -110,11 +110,12 @@ namespace GameJam.Prototype
         public string name { get { return spell != null ? spell.name : "?"; } }
         public string id { get { return spell != null ? spell.id : ""; } }
 
-        /// <summary>引擎只认这个五字段的小结构（见 RuleText.SpellSpec 的说明）。</summary>
+        /// <summary>引擎只认这个五字段的小结构（见 RuleText.SpellSpec 的说明）；
+        /// v3.0 起多带一个稀有度（法术没有 H/D/V，稀有度就是它的强度口径）。</summary>
         public SpellSpec Spec()
         {
             if (spell == null) return new SpellSpec("", "", "", "", "");
-            return new SpellSpec(spell.id, spell.name, spell.enchant, spell.category, spell.requirement);
+            return new SpellSpec(spell.id, spell.name, spell.enchant, spell.category, spell.requirement, spell.rarity);
         }
     }
 
@@ -3206,7 +3207,7 @@ namespace GameJam.Prototype
                 {
                     Spell s = sps[i];
                     if (s == null) continue;
-                    specs.Add(new SpellSpec(s.id, s.name, s.enchant, s.category, s.requirement));
+                    specs.Add(new SpellSpec(s.id, s.name, s.enchant, s.category, s.requirement, s.rarity));
                 }
 
                 report = RuleReport.BuildAll(CardSpecs.Materials(), specs, new V21CardLookup());
@@ -3215,6 +3216,22 @@ namespace GameJam.Prototype
                 if (report.unrecognized.Count > 0)
                     Debug.LogWarning("[V21] ⚠ 有 " + report.unrecognized.Count +
                                      " 条规则文本没被解析 → 这些规则**不会生效**（HUD 有提示，F2 看全文）");
+
+                // ★ v3.0 卡表契约自检：**素材 H 只允许 5/10/20**（5普通/10稀有/20传说），
+                //   法术只标稀有度、不标 H/D/V。
+                //   【为什么和解析报告一样放在这里】这两种错都不会崩、不会报错，
+                //     只会让"数值/稀有度对不上账"，正是最需要开机就喊出来的一类问题。
+                List<string> contract = CardSpecs.SelfCheck();
+                if (contract.Count == 0)
+                {
+                    Debug.Log("[V21] v3.0 卡表契约自检：通过（素材 H 全在 " + CardSpecs.AllowedHText() +
+                              " 三档内，稀有度对得上；法术只标稀有度）");
+                }
+                else
+                {
+                    Debug.LogWarning("[V21] ⚠ v3.0 卡表契约自检：" + contract.Count + " 条不符合 —— " +
+                                     string.Join("；", contract.ToArray()));
+                }
             }
             catch (System.Exception e)
             {

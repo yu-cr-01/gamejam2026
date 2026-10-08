@@ -52,6 +52,24 @@ namespace GameJam.Data
         /// <summary>规格里的系列，例如 "水"、"铁"、"通用与特殊"。只用于图鉴分组。</summary>
         public string series = "";
 
+        /// <summary>
+        /// 卡牌类型：素材 / 法术（v3.0 原文第 2 列「类型」）。
+        ///
+        /// 【为什么要单独存一个字，而不是"在 materials 数组里就是素材"】
+        ///   产出、D耗尽、形态转换给的都是**中文卡名**，运行时要反查"这是素材还是法术"
+        ///   （AddProducedToHand 先查素材表再查法术表就是这个原因）。
+        ///   把类型写在卡上，反查时不必依赖"它在哪个数组里"这个隐含约定，
+        ///   将来法术也能进同一张表时不用改调用方。
+        /// </summary>
+        public string cardType = "";
+
+        /// <summary>
+        /// 稀有度：普通 / 稀有 / 传说（v3.0）。
+        /// 素材这一档 = H 的三档（5 普通 / 10 稀有 / 20 传说），由卡表同时落成字段，
+        /// 方便策划对表；卡表漏写时由 <see cref="Prototype.CardSpecs"/> 按 H 反推。
+        /// </summary>
+        public string rarity = "";
+
         /// <summary>形态：固体 / 液体 / 气体 / 粉末。空串表示规格没写。</summary>
         public string form = "";
 
@@ -150,6 +168,8 @@ namespace GameJam.Data
             c.effects = effects != null ? effects.Clone() : new EffectGroup();
 
             c.series   = series;
+            c.cardType = cardType;
+            c.rarity   = rarity;
             c.form     = form;
             c.tags     = tags != null ? (string[])tags.Clone() : new string[0];
             c.exhaust  = exhaust != null ? (string[])exhaust.Clone() : new string[0];

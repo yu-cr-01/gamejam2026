@@ -284,6 +284,13 @@ namespace GameJam.Prototype
             string text = sp.CardText();
             if (!string.IsNullOrEmpty(text)) GUILayout.Label("需求：" + text, dim);
 
+            // ★ v3.0：法术**不标 H/D/V**（原文：「法术卡不标 H/D/V，只标稀有度」）。
+            //   所以这里**故意不画**属性那一行，改画一句口径说明 ——
+            //   否则策划看着"别的卡都有三个数、法术没有"，会以为是数据漏了。
+            GUILayout.Label("法术：不标 H/D/V（v3.0 口径），只标稀有度"
+                            + (string.IsNullOrEmpty(sp.rarity) ? "（★ 这张没写稀有度）" : "：" + sp.rarity),
+                            string.IsNullOrEmpty(sp.rarity) ? dim : body);
+
             if (sp.sources != null && sp.sources.Length > 0)
                 GUILayout.Label("来源：" + string.Join(" / ", sp.sources), dim);
 

@@ -153,6 +153,24 @@ namespace GameJam.Data
         public string id;
         public string name;
 
+        // ── v3.0 新字段（策划定稿 2026-10-08，见 docs/卡牌数值定稿_v3.0.md）──
+        //
+        // 【为什么叫 cardType 而不是 type】
+        //   原文第 2 列就叫「类型」，但 C# 里 `type` 是个容易惹麻烦的名字
+        //   （object.GetType、将来接别的序列化器都可能撞），
+        //   所以 JSON 键写成 cardType、值照抄原文的「素材 / 法术」。
+        //   对应关系记在这里，免得以后有人对着 JSON 找不到这个字段。
+
+        /// <summary>卡牌类型：素材 / 法术（原文第 2 列「类型」；JSON 键名是 cardType）。</summary>
+        public string cardType;
+
+        /// <summary>
+        /// 稀有度：普通 / 稀有 / 传说（原文口径：素材 = H 三档 5普通/10稀有/20传说；法术直接标）。
+        /// **素材也写它**，因为策划是拿稀有度当"这一档有多强"在用的，
+        /// 单看 H 还得自己换算；两个都写，对表时一眼能对上。
+        /// </summary>
+        public string rarity;
+
         /// <summary>系列/分组，例如 "水"、"铁"、"通用与特殊"。</summary>
         public string series;
 
@@ -186,12 +204,25 @@ namespace GameJam.Data
         public string vGrade;
     }
 
-    /// <summary>一个法术（spells 数组元素）。</summary>
+    /// <summary>
+    /// 一个法术（spells 数组元素）。
+    ///
+    /// 【v3.0 起法术**没有** h/d/v】—— 原文：「法术卡**不标 H/D/V**，只标稀有度」。
+    ///   所以这一节**故意不列 h/d/v 字段**：JSON 里写了也会被 JsonUtility 静默丢掉。
+    ///   代码侧不许反过来假设"法术一定有三个数"（旧表的法术确实有，那是 v2.1 口径）。
+    /// </summary>
     [Serializable]
     public class SpellSpecDto
     {
         public string id;
         public string name;
+
+        /// <summary>卡牌类型：法术（原文第 2 列「类型」；JSON 键名是 cardType）。</summary>
+        public string cardType;
+
+        /// <summary>稀有度：普通 / 稀有 / 传说（v3.0 法术唯一的数值口径）。</summary>
+        public string rarity;
+
         public string series;
 
         /// <summary>附魔类型：热 / 冷 / 酸 / 催化（不用附魔的留空）。</summary>

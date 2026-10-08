@@ -51,6 +51,20 @@ namespace GameJam.Data
         /// <summary>规格里的系列 / 分组，例如 "法术"、"通用与特殊"。</summary>
         public string series = "";
 
+        /// <summary>
+        /// 卡牌类型：法术（v3.0 原文第 2 列「类型」）。
+        /// 卡表里写的是「法术」，这里原样存；不写就默认「法术」——
+        /// 因为能走到这个类的就一定是法术（素材走 Ingredient）。
+        /// </summary>
+        public string cardType = "法术";
+
+        /// <summary>
+        /// 稀有度：普通 / 稀有 / 传说（v3.0）。
+        /// ★ 法术**没有 h/d/v**（v3.0 原文：「法术卡不标 H/D/V，只标稀有度」），
+        ///   所以稀有度就是法术上唯一的数值口径 —— 卡面、图鉴都靠它显示强度。
+        /// </summary>
+        public string rarity = "";
+
         /// <summary>附魔类型：热 / 冷 / 酸 / 催化；不用附魔的法术留空。</summary>
         public string enchant = "";
 
@@ -119,6 +133,8 @@ namespace GameJam.Data
             s.target = target;
             s.effects = effects != null ? effects.Clone() : new EffectGroup();
             s.series = series;
+            s.cardType = cardType;
+            s.rarity = rarity;
             s.enchant = enchant;
             s.category = category;
             s.requirement = requirement;
@@ -126,12 +142,20 @@ namespace GameJam.Data
             return s;
         }
 
-        /// <summary>卡面上要显示的一行：附魔类型 + 分类，例如 "附魔：热"。</summary>
+        /// <summary>
+        /// 卡面上要显示的一行：附魔类型 + 分类 + 稀有度，例如 "附魔：热 · 稀有"。
+        ///
+        /// 【为什么把稀有度放在这里】v3.0 的法术**没有 H/D/V**，
+        ///   卡面属性区那三个格子对法术是空的（见 CardFactory：模块壳不画数字）。
+        ///   如果稀有度也不显示，玩家在卡面上就看不出这张法术强不强 ——
+        ///   而稀有度是 v3.0 给法术的唯一强度口径。所以它必须有一个能看见的落点。
+        /// </summary>
         public string KindText()
         {
             string s = "";
             if (!string.IsNullOrEmpty(enchant)) s = "附魔：" + enchant;
             if (!string.IsNullOrEmpty(category)) s = string.IsNullOrEmpty(s) ? category : s + " · " + category;
+            if (!string.IsNullOrEmpty(rarity))   s = string.IsNullOrEmpty(s) ? rarity : s + " · " + rarity;
             return s;
         }
 

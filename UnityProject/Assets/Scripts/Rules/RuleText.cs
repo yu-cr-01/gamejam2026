@@ -390,6 +390,13 @@ namespace GameJam.Rules
         /// <summary>需求（效果原文）。</summary>
         public string requirement;
 
+        /// <summary>
+        /// 稀有度：普通 / 稀有 / 传说（v3.0）。
+        /// ★ 法术**没有 H/D/V**（v3.0 原文：「法术卡不标 H/D/V，只标稀有度」），
+        ///   所以这个字段是法术唯一的数值口径；缺省空串 = 卡表没写，不报错。
+        /// </summary>
+        public string rarity;
+
         public SpellSpec(string id, string name, string enchant, string category, string requirement)
         {
             this.id = id;
@@ -397,6 +404,18 @@ namespace GameJam.Rules
             this.enchant = enchant;
             this.category = category;
             this.requirement = requirement;
+            this.rarity = "";
+        }
+
+        /// <summary>带稀有度的构造（v3.0）。旧的 5 参构造保留，老调用点一个字都不用改。</summary>
+        public SpellSpec(string id, string name, string enchant, string category, string requirement, string rarity)
+        {
+            this.id = id;
+            this.name = name;
+            this.enchant = enchant;
+            this.category = category;
+            this.requirement = requirement;
+            this.rarity = rarity != null ? rarity : "";
         }
     }
 
