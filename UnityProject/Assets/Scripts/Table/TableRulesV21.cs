@@ -2456,16 +2456,10 @@ namespace GameJam.Prototype
             // 空白卡：所有数值为 0、无特性、可被吞噬（正文 §2.1）。
             // 卡表里没有它，所以现造一张 —— 用 Ingredient 而不是 Spell，
             // 因为它要能"放在桌面上、能被启动、能被吞噬"。
-            if (name == "空白卡")
+            if (name == LevelSave.BlankCardName)
             {
-                Ingredient blank = new Ingredient("blank", "空白卡", new AttrSet());
-                blank.form        = "固体";
-                blank.tags        = new string[0];
-                blank.transitions = new FormChange[0];
-                blank.exhaust     = new string[0];
-
                 MaterialCard bc = new MaterialCard();
-                bc.card = blank;
+                bc.card = LevelSave.MakeBlankCard();
                 bc.H = 0; bc.D = 0; bc.V = 0;
                 hand.Add(bc);
 
@@ -2565,6 +2559,327 @@ namespace GameJam.Prototype
             sourceOfState.Clear();
 
             SweepUnclaimedViews("ClearTable");
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  存档 / 读档（v2.1，一个存档位）
+        //
+        //  【这一节一条规则都不实现】它只做"状态 ⇄ DTO"的搬运：
+        //    采集：CaptureSaveState() 把场上的东西抄成 LevelSaveData（DTO 在 Rules 那一层）；
+        //    落地：TryBuildSaveState() 先全建好（失败则**现有状态一个字节都没动**）
+        //          → CommitSaveState() 一次性覆盖。
+        //  【3D 那一半不在这里】重摆手牌 / 重摆桌面 / 重建刀片卡 / 刷新量筒
+        //    全部走现成的权威同步（RebuildHand / SyncTableVisuals / BuildBladeCard / SetScore）——
+        //    自己再写一套坐标就等于把"级联算式只有一份"这条规矩废掉，
+        //    而且"读档后位置和平时不一样"这种毛病只有走同一条路才不会出现。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>把当前的规则侧状态抄成存档 DTO（**只读**，不改任何东西）。</summary>
+        public LevelSaveData CaptureSaveState()
+        {
+            LevelSaveData d = LevelSave.Capture(blade, table, startedThisTurnList, SaveValueSourceOf);
+
+            d.turnIndex      = turnIndex;
+            d.actionPoints   = actionPoints;
+            d.score          = score;
+            d.targetScore    = targetScore;
+            d.startsThisTurn = startsThisTurn;
+            d.blankCount     = blankCount;
+            d.levelOver      = levelOver;
+            d.bursted        = bursted;
+            d.endReason      = endReason != null ? endReason : "";
+
+            d.selectedIndex  = SelectedIndex();
+            d.selectedAuto   = selectedAuto;
+            d.staged         = CaptureStaged();
+
+            // ── 手牌（素材一副、法术一副；顺序就是摆出来的顺序）──
+            for (int i = 0; i < hand.Count; i++)
+            {
+                MaterialCard mc = hand[i];
+                if (mc == null) continue;
+
+                SaveHandCard c = LevelSave.CaptureHandMaterial(
+                    mc.id, mc.name, mc.H, mc.D, mc.V, (int)mc.source);
+
+                // 卡面那三个数（卡自己的 h/d/v）—— 见 SaveMaterial.cardH 的说明：
+                // 按 id 再查一次卡表不保证得到原局里那一组（硝石就是反例）
+                if (mc.card != null) LevelSave.SetCardFace(c, mc.card.h, mc.card.d, mc.card.v);
+
+                d.handMaterials.Add(c);
+            }
+
+            for (int i = 0; i < handSpells.Count; i++)
+            {
+                SpellCard sc = handSpells[i];
+                if (sc == null) continue;
+                d.handSpells.Add(LevelSave.CaptureHandSpell(sc.id, sc.name));
+            }
+
+            // ── 刀片被动（引擎那一份是权威）──
+            if (engine != null)
+            {
+                d.blade.passives = engine.ExportBladePassives();
+
+                // "导出几条 = 现在生效几条"必须成立，否则存档里记的被动和场上的对不上
+                if (d.blade.passives.Count != engine.BladePassiveCount)
+                    Debug.LogWarning("[V21][存档] 刀片被动导出 " + d.blade.passives.Count +
+                                     " 条，但引擎里生效 " + engine.BladePassiveCount + " 条 —— 存档被动不完整");
+            }
+
+            return d;
+        }
+
+        /// <summary>当前启动目标在 table 里的下标（-1 = 没选）。</summary>
+        private int SelectedIndex()
+        {
+            if (selected == null) return -1;
+            for (int i = 0; i < table.Count; i++) if (table[i] == selected) return i;
+            return -1;
+        }
+
+        /// <summary>
+        /// 采集"投放区里待放置的是哪几张"。
+        ///
+        /// 【v2.1 常态是空表】落槽即结算，玩家打不出这个状态。
+        ///   留着它是为了旧流程的摆法 / 探针摆出来的局面 —— 那时"待放置"是真实状态的一部分，
+        ///   不存的话读档自检会报一条假警（自检误报比不检更坏）。
+        /// </summary>
+        private List<SaveStaged> CaptureStaged()
+        {
+            List<SaveStaged> list = new List<SaveStaged>();
+            if (loop == null) return list;
+
+            List<PlayCard> stagedCards = loop.StagedCards;
+            for (int i = 0; i < stagedCards.Count; i++)
+            {
+                PlayCard pc = stagedCards[i];
+                if (pc == null) continue;
+
+                SaveStaged g = new SaveStaged();
+                g.slot = pc.slotIndex;
+
+                bool found = false;
+
+                if (pc.bindingMaterial != null)
+                {
+                    for (int h = 0; h < hand.Count; h++)
+                    {
+                        if (hand[h] != pc.bindingMaterial) continue;
+                        g.spell = false; g.index = h; found = true;
+                        break;
+                    }
+                }
+
+                if (!found && pc.bindingSpell != null)
+                {
+                    for (int s = 0; s < handSpells.Count; s++)
+                    {
+                        if (handSpells[s] != pc.bindingSpell) continue;
+                        g.spell = true; g.index = s; found = true;
+                        break;
+                    }
+                }
+
+                // 认不出是哪张手牌的（手工造的卡）不记 —— 记个猜的下标比不记更坏
+                if (!found)
+                {
+                    Debug.LogWarning("[V21][存档] 投放区里有一张「" + pc.DisplayName +
+                                     "」找不到对应的手牌（bindingMaterial / bindingSpell 都是空）→ 这一张不进存档");
+                    continue;
+                }
+
+                list.Add(g);
+            }
+
+            return list;
+        }
+
+        /// <summary>引擎里现在生效的刀片被动条数（存档自检 / HUD 摘要用）。</summary>
+        public int BladePassiveCount { get { return engine != null ? engine.BladePassiveCount : 0; } }
+
+        /// <summary>这张桌面素材"出牌那一刻的数值来源"（没登记过的按 SourceOf 的同一个兜底口径）。</summary>
+        private int SaveValueSourceOf(MaterialState st)
+        {
+            MaterialCard.ValueSource src;
+            if (st != null && sourceOfState.TryGetValue(st, out src)) return (int)src;
+            return (int)SourceOf(st);
+        }
+
+        /// <summary>
+        /// 读档阶段①：把存档建成一批**新对象**（规则侧 + 手牌壳）。
+        ///
+        /// 【为什么必须"先全建好"】读档只有两种结果：完整读出来，或者什么都不动。
+        ///   边读边改的话，一旦第 3 张卡在卡表里找不到，桌面已经被清掉一半 ——
+        ///   那就是明令不许的"半读半不读"。所以这一步全程只 new 新对象、不碰现有字段。
+        /// </summary>
+        public bool TryBuildSaveState(LevelSaveData d, out BuiltSaveState built, out string error)
+        {
+            built = null;
+            error = "";
+
+            LevelSave.BuiltState rulesBuilt;
+            if (!LevelSave.TryBuild(d, ResolveSaveCard, out rulesBuilt, out error)) return false;
+
+            BuiltSaveState b = new BuiltSaveState();
+            b.rules = rulesBuilt;
+
+            // ── 手牌素材 ──
+            if (d.handMaterials != null)
+            {
+                for (int i = 0; i < d.handMaterials.Count; i++)
+                {
+                    SaveHandCard c = d.handMaterials[i];
+                    if (c == null) { error = "手牌素材第 " + (i + 1) + " 项是空的"; return false; }
+
+                    Ingredient ing = ResolveSaveCard(c.cardId, c.cardName, c.valueSource);
+                    if (ing == null)
+                    {
+                        error = "手牌素材第 " + (i + 1) + " 张「" + c.cardName + "」（id " + c.cardId +
+                                "）在卡表里找不到 —— 拒绝半读";
+                        return false;
+                    }
+
+                    // 卡面那三个数按存档覆盖（理由同桌面素材）
+                    LevelSave.ApplyCardFace(ing, c.cardH, c.cardD, c.cardV);
+
+                    MaterialCard mc = new MaterialCard();
+                    mc.card   = ing;
+                    mc.H      = c.H;
+                    mc.D      = c.D;
+                    mc.V      = c.V;
+                    mc.source = (MaterialCard.ValueSource)c.valueSource;
+                    b.hand.Add(mc);
+                }
+            }
+
+            // ── 手牌法术 ──
+            if (d.handSpells != null)
+            {
+                for (int i = 0; i < d.handSpells.Count; i++)
+                {
+                    SaveHandCard c = d.handSpells[i];
+                    if (c == null) { error = "手牌法术第 " + (i + 1) + " 项是空的"; return false; }
+
+                    Spell tpl = CardSpecs.Spell(c.cardId);
+                    if (tpl == null) tpl = CardSpecs.SpellByName(c.cardName);
+                    if (tpl == null)
+                    {
+                        error = "手牌法术第 " + (i + 1) + " 张「" + c.cardName + "」（id " + c.cardId +
+                                "）在卡表里找不到 —— 拒绝半读";
+                        return false;
+                    }
+
+                    b.handSpells.Add(new SpellCard { spell = CloneSpell(tpl) });
+                }
+            }
+
+            built = b;
+            return true;
+        }
+
+        /// <summary>
+        /// 读档阶段②：把建好的那批对象**一次性覆盖**到场上（这一步不会失败）。
+        ///
+        /// 【注意这里没有"合并"】存档是整关的快照，所以桌子 / 手牌 / 刀片全部换成新的，
+        ///   不保留任何残留 —— 留着旧的就会出现"读档后桌面多一张卡"这类问题，
+        ///   而那正是权威同步的残留清扫要报的警。
+        /// </summary>
+        public void CommitSaveState(BuiltSaveState built, out string passiveError)
+        {
+            passiveError = "";
+            if (built == null || built.rules == null) return;
+
+            LevelSave.BuiltState b = built.rules;
+
+            // ── 刀片与计数 ──
+            blade          = b.blade;
+            if (b.targetScore > 0) targetScore = b.targetScore;
+            score          = b.score;
+            turnIndex      = b.turnIndex;
+            actionPoints   = b.actionPoints;
+            startsThisTurn = b.startsThisTurn;
+            blankCount     = b.blankCount;
+            levelOver      = b.levelOver;
+            bursted        = b.bursted;
+            endReason      = b.endReason;
+
+            // ── 桌面素材（顺序 = 级联顺序）+ 两张按引用的附属表 ──
+            table.Clear();
+            startedThisTurnList.Clear();
+            sourceOfState.Clear();
+
+            for (int i = 0; i < b.table.Count; i++)
+            {
+                table.Add(b.table[i]);
+                if (i < b.started.Count && b.started[i]) startedThisTurnList.Add(b.table[i]);
+                if (i < b.valueSource.Count)
+                    sourceOfState[b.table[i]] = (MaterialCard.ValueSource)b.valueSource[i];
+            }
+
+            // ── 手牌 ──
+            hand.Clear();
+            for (int i = 0; i < built.hand.Count; i++) hand.Add(built.hand[i]);
+
+            handSpells.Clear();
+            for (int i = 0; i < built.handSpells.Count; i++) handSpells.Add(built.handSpells[i]);
+
+            // ── 启动目标 ──
+            selected = (b.selectedIndex >= 0 && b.selectedIndex < table.Count) ? table[b.selectedIndex] : null;
+            selectedAuto = b.selectedAuto;
+
+            // ── 规则旋钮 + 引擎 ──
+            //   TargetScore 必须跟着存档走：引擎的 Finish() 靠它判"达到目标分"。
+            //   引擎实例**尽量复用**（同一个会话里读档不该把随机法术的序列重置回去）。
+            EnsureEngine();
+            rules.TargetScore = targetScore;
+
+            int n = engine.ImportBladePassives(b.passives, out passiveError);
+            if (!string.IsNullOrEmpty(passiveError))
+            {
+                Debug.LogWarning("[V21][存档] 刀片被动重建不全（" + n + "/" + b.passives.Count + "）：" + passiveError);
+                if (!warnings.Contains(passiveError)) warnings.Add(passiveError);
+            }
+
+            // 结算日志属于"上一把"的，别和读回来的局面混在一起
+            lastLog.Clear();
+            lastSummary = "";
+
+            Debug.Log("[V21][存档] 状态已落地（未做任何 3D 操作）：" + DescribeHud().Replace("\n", "　｜　") +
+                      "｜刀片被动 " + engine.BladePassiveCount + " 条");
+        }
+
+        /// <summary>
+        /// 规则旋钮 + 引擎实例。读档路径用它 —— 引擎**已经存在就复用**
+        /// （新建一个会把随机法术的取数序列重置，读档后第一次产出会和存档前不一样）。
+        /// </summary>
+        private void EnsureEngine()
+        {
+            if (rules == null) rules = new TurnRules();
+            if (engine == null || engine.rules != rules) engine = new TurnEngine(rules, new V21CardLookup());
+        }
+
+        /// <summary>
+        /// 存档里的一张卡 → 运行时的 <see cref="Ingredient"/>（卡表模板的副本 + 数值回填）。
+        ///
+        /// 【为什么按 id 找、名字只是兜底】id 是卡表的主键，名字会随文案改；
+        ///   而 has 值是"当前形态对应的卡"，形态变化产出的卡也在卡表里（有 id）。
+        /// 【为什么还要 ApplyValues】卡面的 H/D/V 是从 attrs 画的（见那里关于"两套数值口径"的说明），
+        ///   不补一次的话，读档后桌上的卡属性区会显示成 H0/D0/V0 —— 看起来像数据没加载。
+        /// </summary>
+        public Ingredient ResolveSaveCard(string cardId, string cardName, int valueSource)
+        {
+            // 空白卡：卡表里没有它（正文 §2.1 的三零卡），和 AddProducedToHand 同一套现造口径
+            if (cardId == LevelSave.BlankCardId || cardName == LevelSave.BlankCardName)
+                return LevelSave.MakeBlankCard();
+
+            Ingredient tpl = CardSpecs.Material(cardId);
+            if (tpl == null) tpl = CardSpecs.MaterialByName(cardName);
+            if (tpl == null) return null;
+
+            Ingredient ing = tpl.Clone();
+            ApplyValues(ing, (MaterialCard.ValueSource)valueSource);
+            return ing;
         }
 
         // ══════════════════════════════════════════════════════════════

@@ -85,6 +85,7 @@ namespace GameJam.Tools
                 Scenario9_ScoreFormula(cards);
                 Scenario10_HeatColdOverwrite(cards);
                 Scenario11_Explode(cards);
+                Scenario12_SaveLoad(cards);
                 Report_NoSilentLoss(cards);
 
                 Console.WriteLine();
@@ -876,6 +877,290 @@ namespace GameJam.Tools
 
             ScenarioEnd("场景11 爆炸（粉末+易燃）与燃烧（非粉末易燃）", mark,
                 "粉末+易燃 → " + r.ProducedText() + "（H 归零、刀片热 1→" + s.blade.layers.Count(LayerKind.Heat) + "）；白磷 → " + r2.ProducedText());
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  场景 12：存档 / 读档（v2.1 一个存档位）
+        //
+        //  【为什么这一条必须在离线跑】存读档的坑全在"少写一个字段"上：
+        //    刀片层数只存总数（丢掉"不衰退"那份）、桌面素材漏了"本回合是否启动过"、
+        //    D 满值没存、被动清单没存…… 这些在实机上表现为"读回来状态不对"，
+        //    而那时候现场早就没了 —— 只有离线的逐字段断言能当场钉住它们。
+        //  这里走的是**和游戏完全同一份**实现（LevelSave / LevelSaveJson 都在 Rules 那一层），
+        //  所以这里全绿 = 游戏里那两步是全绿的（游戏那一侧只多一层文件读写与 3D 重摆）。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>探针用的数值来源口径（照游戏里"牌组带来的卡 = 旧配置"那条设一个非 0 值，验证它也能存住）。</summary>
+        private static int ProbeValueSource(MaterialState st)
+        {
+            return (st != null && st.name == "铁") ? 1 : 0;
+        }
+
+        /// <summary>探针用的卡表解析器：按名字取卡（**返回副本** —— 读档会往上写卡面数值）；空白卡照 Rules 那一层的口径现造。</summary>
+        private static SaveCardResolver ProbeResolver(JsonCards cards)
+        {
+            return delegate (string id, string name, int src)
+            {
+                if (id == LevelSave.BlankCardId || name == LevelSave.BlankCardName) return LevelSave.MakeBlankCard();
+
+                Ingredient m = cards.Material(name);
+                return m != null ? m.Clone() : null;
+            };
+        }
+
+        /// <summary>两份状态逐字段比对（不相等时把差异清单原样写进失败说明）。</summary>
+        private static void CheckEqual(string what, LevelSaveData a, LevelSaveData b)
+        {
+            List<string> d = LevelSave.CompareStates(a, b);
+            if (d.Count == 0) { passed++; return; }
+
+            failed++;
+            failures.Add(what + "：" + LevelSave.DiffText(d));
+        }
+
+        private static void Scenario12_SaveLoad(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // ── ① 造一个有内容的局面 ──────────────────────────────────
+            TurnRules rules = ProbeRules();
+            rules.TargetScore = 30;
+
+            LevelRun s = NewLevel(cards, "铁刀片", 5, 5);
+            s.blade.layers.Add(LayerKind.Acid, 2);        // 让玻璃被酸蚀之后还能走"献祭吞噬"
+            s.blade.layers.Add(LayerKind.Catalyst, 2);
+
+            // 桌面 3 张、D 各不相同（含 D=0 这条边界）
+            MaterialState water = Put(cards, s, "水", 0);
+            MaterialState iron  = Put(cards, s, "铁", 1);
+            MaterialState salt  = Put(cards, s, "盐", 2);
+            iron.fullD = 3;                               // D 与满值不同 → 两个数都必须存住
+            salt.H = 4;                                   // 场上被扣过 H 的卡
+
+            // 第 4 张用来被吞噬：登记一条**真实的**刀片被动（被动列表非空）
+            MaterialState glass = Put(cards, s, "玻璃", 3);
+            TurnEngine e = new TurnEngine(rules, cards);
+            e.StartBlade(s, glass, true);
+
+            Check("存档：先造出一条真实的刀片被动（玻璃被吞噬）", 1, e.BladePassiveCount);
+            Check("存档：被吞噬那张已离场，桌面正好 3 张", 3, s.table.Count);
+
+            // 刀片层数：热 2 衰退 + 热 1 不衰退（★ 两份分开存）
+            s.blade.layers.Add(LayerKind.Heat, 2);
+            s.blade.layers.Add(LayerKind.Heat, 1, true);
+
+            s.turnIndex = 3; s.actionPoints = 2; s.startsThisTurn = 3;
+            s.blankCount = 1; s.score = 14;
+
+            // "本回合已经启动过"的名单（决定还能不能把手牌收回来）
+            List<MaterialState> started = new List<MaterialState>();
+            started.Add(iron);
+
+            // ── ② 采集（状态 → DTO）────────────────────────────────────
+            LevelSaveData before = LevelSave.Capture(s.blade, s.table, started, ProbeValueSource);
+            before.turnIndex      = s.turnIndex;
+            before.actionPoints   = s.actionPoints;
+            before.score          = s.score;
+            before.targetScore    = rules.TargetScore;
+            before.startsThisTurn = s.startsThisTurn;
+            before.blankCount     = s.blankCount;
+            before.levelOver      = s.levelOver;
+            before.bursted        = s.bursted;
+            before.endReason      = "";
+            before.selectedIndex  = 1;                    // 启动目标 = 桌面第 2 张（铁）
+            before.selectedAuto   = true;
+
+            // 投放区里"待放置"的一张（v2.1 常态为空 —— 这一条是为了把"万一不为空"也验到：
+            // 它是旧流程的摆法 / 探针摆出来的局面，读档时那几张牌必须照旧待在投放区）
+            before.staged.Add(new SaveStaged { spell = false, index = 0, slot = 1 });
+
+            before.handMaterials.Add(LevelSave.CaptureHandMaterial("water", "水", 2, 3, 2, 1));
+            before.handMaterials.Add(LevelSave.CaptureHandMaterial(LevelSave.BlankCardId, LevelSave.BlankCardName, 0, 0, 0, 0));
+            before.handSpells.Add(LevelSave.CaptureHandSpell("sp_fire", "火焰术"));
+            before.blade.passives = e.ExportBladePassives();
+
+            // 卡面那三个数（卡自己的 h/d/v）：**故意和 MaterialState 的 H/D/V 取不同值** ——
+            // 它们本来就是两回事（一个给卡面画属性区/元素皮肤，一个是规则上的耐久与得分），
+            // 只存一半就会出现"读回来卡面变了"（硝石实测：占位 12/3/1 → 旧图鉴 3/4/8，插画从冰晶变气团）
+            for (int i = 0; i < before.table.Count; i++)
+            {
+                SaveMaterial sm = before.table[i];
+                sm.cardH = 10 + i; sm.cardD = 20 + i; sm.cardV = 30 + i;
+            }
+            LevelSave.SetCardFace(before.handMaterials[0], 7, 8, 9);
+
+            Check("存档：桌子 3 张都采到了（顺序 = 级联顺序）", 3, before.table.Count);
+            Check("存档：刀片层数采成 4 类（一类一条，含不衰退那份）", 4, before.blade.layers.Count);
+            Check("存档：手牌 2 素材 + 1 法术", 3, before.handMaterials.Count + before.handSpells.Count);
+            Check("存档：被动清单非空", 1, before.blade.passives.Count);
+
+            // ── ③ 存 → 读（同一份 JSON 实现）──────────────────────────
+            SaveFileDto file = new SaveFileDto();
+            file.savedAt     = "探针"; file.levelIndex = 1;
+            file.levelId     = "lv2";  file.levelName  = "第 2 关";
+            file.deckId      = "deck_probe"; file.deckName = "探针牌组";
+            file.phaseAtSave = "Select";
+            file.state       = before;
+
+            string json = LevelSaveJson.Write(file);
+
+            Check("存档：JSON 里逐类写了中文层数名 + 两份计数",
+                  true, json.Contains("\"kind\": \"热\"") && json.Contains("\"decaying\"") && json.Contains("\"permanent\""));
+            Check("存档：JSON 里记了「本回合是否已启动」", true, json.Contains("\"startedThisTurn\""));
+            Check("存档：JSON 里记了 D 的满值", true, json.Contains("\"fullD\""));
+            Check("存档：JSON 里记了刀片被动（连原文一起）", true, json.Contains("\"passives\"") && json.Contains("\"sentence\""));
+
+            SaveFileDto back;
+            string error;
+            Check("存档：读回来成功", true, LevelSaveJson.Read(json, out back, out error));
+            Check("存档：版本号原样", LevelSave.Version, back != null ? back.version : -1);
+            Check("存档：kind 原样", LevelSave.KindName, back != null ? back.kind : "");
+            Check("存档：关卡 / 牌组定位原样", "第 2 关|deck_probe",
+                  back != null ? back.levelName + "|" + back.deckId : "");
+
+            CheckEqual("存档：读回来的状态与存出去的那份逐字段全等（CompareStates）",
+                       before, back != null ? back.state : null);
+
+            // ── ④ 按存档重建对象，再采集一次（这才是"读回来能接着打"）──
+            LevelSave.BuiltState built;
+            string buildErr;
+            Check("存档：按存档重建规则侧状态成功", true,
+                  LevelSave.TryBuild(back.state, ProbeResolver(cards), out built, out buildErr));
+
+            if (built != null)
+            {
+                Check("读档：刀片 H / V 一致", s.blade.H * 1000 + s.blade.V,
+                      built.blade.H * 1000 + built.blade.V);
+                Check("读档：热层衰退份 = 2", 2, built.blade.layers.Stack(LayerKind.Heat).decaying);
+                Check("读档：热层不衰退份 = 1（★ 只存总数就会在这里丢）", 1, built.blade.layers.Stack(LayerKind.Heat).permanent);
+                Check("读档：酸层 = 1（双份计数各归各类）", 1, built.blade.layers.Stack(LayerKind.Acid).decaying);
+                Check("读档：催化层 = 2", 2, built.blade.layers.Count(LayerKind.Catalyst));
+
+                Check("读档：桌面 3 张且顺序不变（级联顺序靠它）", 3, built.table.Count);
+                Check("读档：桌面第 1 张是水、D=0", "水|0",
+                      built.table.Count > 0 ? built.table[0].name + "|" + built.table[0].D : "?");
+                Check("读档：桌面第 2 张是铁、D=1 而满值=3（两个数都得在）", "铁|1|3",
+                      built.table.Count > 1 ? built.table[1].name + "|" + built.table[1].D + "|" + built.table[1].fullD : "?");
+                Check("读档：桌面第 3 张被扣过的 H 也回来了（H=4）", 4,
+                      built.table.Count > 2 ? built.table[2].H : -1);
+
+                Check("读档：本回合已启动标志还在（★ 漏了它就能把启动过的素材收回手牌）", true,
+                      built.started.Count == 3 && !built.started[0] && built.started[1] && !built.started[2]);
+                Check("读档：数值来源也回来了（铁 = 1 旧配置）", 1,
+                      built.valueSource.Count == 3 ? built.valueSource[1] : -1);
+                Check("读档：启动目标下标 / 自动选中一致", 1 * 10 + (built.selectedAuto ? 1 : 0), 11);
+                Check("读档：关卡计数（回合 / 行动 / 分数 / 启动次数 / 空白卡）", 3 * 100000 + 2 * 10000 + 14 * 100 + 3 * 10 + 1,
+                      built.turnIndex * 100000 + built.actionPoints * 10000 + built.score * 100 + built.startsThisTurn * 10 + built.blankCount);
+                Check("读档：刀片被动记录跟着回来了", 1, built.passives.Count);
+
+                // 卡面那三个数（Ingredient 自己的 h/d/v）：读档必须按存档覆盖，不能靠"再查一次卡表"
+                Check("读档：卡面 h/d/v 按存档覆盖（10/20/30，和规则上的 H/D/V 是两回事）", true,
+                      built.table.Count > 0 && built.table[0].card != null &&
+                      built.table[0].card.h == 10 && built.table[0].card.d == 20 && built.table[0].card.v == 30);
+                Check("读档：卡面的 attrs 同步成同一组数（属性区与元素皮肤读它）", 30,
+                      built.table.Count > 0 && built.table[0].card != null && built.table[0].card.attrs != null
+                          ? built.table[0].card.attrs.Get(AttrId.Sulfur) : -1);
+
+                Check("读档：投放区待放置那一张也回来了（下标 / 槽位）", 0 * 100 + 1,
+                      built.staged.Count > 0 ? built.staged[0].index * 100 + built.staged[0].slot : -1);
+
+                // 用重建出来的对象再采集一次：这一遍如果不等，说明"建"的那一步丢了东西
+                List<MaterialState> startedAgain = new List<MaterialState>();
+                for (int i = 0; i < built.table.Count; i++)
+                    if (i < built.started.Count && built.started[i]) startedAgain.Add(built.table[i]);
+
+                LevelSaveData again = LevelSave.Capture(built.blade, built.table, startedAgain, ProbeValueSource);
+                again.turnIndex      = built.turnIndex;
+                again.actionPoints   = built.actionPoints;
+                again.score          = built.score;
+                again.targetScore    = built.targetScore;
+                again.startsThisTurn = built.startsThisTurn;
+                again.blankCount     = built.blankCount;
+                again.levelOver      = built.levelOver;
+                again.bursted        = built.bursted;
+                again.endReason      = built.endReason;
+                again.selectedIndex  = built.selectedIndex;
+                again.selectedAuto   = built.selectedAuto;
+                again.staged         = built.staged;
+                again.handMaterials  = back.state.handMaterials;
+                again.handSpells     = back.state.handSpells;
+                again.blade.passives = built.passives;
+
+                CheckEqual("读档：重建出来的对象再采集一次，仍然逐字段全等（读回来 = 存档前）", before, again);
+
+                // 被动不是"存了个壳"：重建进引擎之后，下一次启动它要真的生效
+                TurnEngine e2 = new TurnEngine(ProbeRules(), cards);
+                string perr;
+                int n = e2.ImportBladePassives(built.passives, out perr);
+                Check("读档：被动重建进引擎（1 条）", 1, n);
+                Check("读档：被动重建没有报错", "", perr);
+                Check("读档：引擎里的被动条数与存档一致", built.passives.Count, e2.BladePassiveCount);
+            }
+            else
+            {
+                Fail("读档：按存档重建状态", buildErr);
+            }
+
+            // ── ⑤ 反例：坏档一律明确报错，且**不产出半个状态** ──────────
+            SaveFileDto bad;
+
+            Check("反例·坏 JSON：拒绝读取", false, LevelSaveJson.Read("{ \"version\": 1, ", out bad, out error));
+            Check("反例·坏 JSON：给了带位置的原因", true, !string.IsNullOrEmpty(error) && error.Contains("JSON"));
+            Check("反例·坏 JSON：没有产出存档对象", true, bad == null);
+
+            Check("反例·空文件：拒绝读取", false, LevelSaveJson.Read("", out bad, out error));
+
+            string missingField = json.Replace("\"startsThisTurn\"", "\"startsThisTurnTYPO\"");
+            Check("反例·缺字段：拒绝读取", false, LevelSaveJson.Read(missingField, out bad, out error));
+            Check("反例·缺字段：报的是缺了哪个字段", true, error.Contains("startsThisTurn"));
+
+            string wrongVersion = json.Replace("\"version\": 1", "\"version\": 2");
+            Check("反例·版本不符：拒绝读取", false, LevelSaveJson.Read(wrongVersion, out bad, out error));
+            Check("反例·版本不符：报的是版本", true, error.Contains("版本"));
+
+            string wrongKind = json.Replace("\"kind\": \"v21-table-save\"", "\"kind\": \"something-else\"");
+            Check("反例·类型不符：拒绝读取（别把别的 JSON 当存档）", false, LevelSaveJson.Read(wrongKind, out bad, out error));
+
+            string wrongType = json.Replace("\"blankCount\"", "\"blankCountX\"")   // 先确认换字段名确实会拒
+                                  .Replace("\"H\": 5", "\"H\": \"五\"");
+            Check("反例·类型不对（数字写成了字符串）：拒绝读取", false, LevelSaveJson.Read(wrongType, out bad, out error));
+
+            // 层数缺项：语法没毛病，但语义不完整 —— 必须在"建对象"这一步挡住
+            SaveFileDto shortLayers = new SaveFileDto();
+            shortLayers.state = new LevelSaveData();
+            shortLayers.state.blade = new SaveBlade();
+            shortLayers.state.blade.layers.Add(new SaveLayer { kind = "热", decaying = 1, permanent = 0 });
+
+            SaveFileDto parsedShort;
+            string shortJson = LevelSaveJson.Write(shortLayers);
+            Check("反例·层数缺项：语法层能读进来（它确实是合法 JSON）", true,
+                  LevelSaveJson.Read(shortJson, out parsedShort, out error));
+
+            LevelSave.BuiltState badBuilt;
+            Check("反例·层数缺项：建对象这一步拒绝", false,
+                  LevelSave.TryBuild(parsedShort.state, ProbeResolver(cards), out badBuilt, out error));
+            Check("反例·层数缺项：报的是缺了「冷」", true, error.Contains("冷"));
+            Check("反例·层数缺项：没有产出半个状态", true, badBuilt == null);
+
+            // 卡表里没有这张卡：同样必须在建对象这一步挡住
+            SaveFileDto ghost = new SaveFileDto();
+            ghost.state = new LevelSaveData();
+            ghost.state.blade = new SaveBlade();
+            for (int i = 0; i < LayerLedger.KindCount; i++)
+                ghost.state.blade.layers.Add(new SaveLayer { kind = LayerLedger.Name((LayerKind)i) });
+            ghost.state.table.Add(new SaveMaterial { cardId = "no_such_card", cardName = "不存在的卡", D = 1, fullD = 1 });
+
+            LevelSave.BuiltState ghostBuilt;
+            Check("反例·卡表里没这张卡：建对象这一步拒绝", false,
+                  LevelSave.TryBuild(ghost.state, ProbeResolver(cards), out ghostBuilt, out error));
+            Check("反例·卡表里没这张卡：说清是哪一张", true, error.Contains("不存在的卡"));
+            Check("反例·卡表里没这张卡：没有产出半个状态", true, ghostBuilt == null);
+
+            ScenarioEnd("场景12 存档 / 读档（逐字段往返 + 反例）", mark,
+                "刀片 " + s.blade.Describe() + "｜桌面 " + before.table.Count + " 张（D " +
+                before.table[0].D + "/" + before.table[1].D + "/" + before.table[2].D + "）｜手牌 " +
+                (before.handMaterials.Count + before.handSpells.Count) + " 张｜被动 " + before.blade.passives.Count +
+                " 条｜JSON " + json.Length + " 字符");
         }
 
         // ══════════════════════════════════════════════════════════════

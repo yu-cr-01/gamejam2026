@@ -170,6 +170,13 @@ namespace GameJam.Prototype
         /// <summary>待投放的牌数。</summary>
         public int StagedCount { get { return staged.Count; } }
 
+        /// <summary>
+        /// 投放区里那几张 3D 卡（只读）。
+        /// 存档要用它把"待放置的是哪几张手牌"记下来（见 TableRulesV21.CaptureStaged）——
+        /// 别处不要改这个列表，改投放区一律走 Stage / Release。
+        /// </summary>
+        public List<PlayCard> StagedCards { get { return staged; } }
+
         /// <summary>手牌是不是真的空了（关卡结束的判据）。</summary>
         public bool HandEmpty { get { return turn.IsHandEmpty; } }
 
@@ -476,6 +483,9 @@ namespace GameJam.Prototype
             //   关卡是玩家在关卡界面选的，new 一下就把选择覆盖掉、永远回到第 1 关。
             //   （原来写的就是 new Level(GameConfig.Level())，加多关卡之后成了 bug。）
             level.Begin(deck, GameConfig.DefaultBlade());
+
+            // 记下本局用的是哪一副牌组 —— 存档要写它，读档才能按同一副牌组把这一关重开
+            deckId = deck != null ? deck.id : "";
 
             // 新的一关 = 干净的杯子。粒子和刀片磨损都从零开始，
             // 跨回合保留说的是"关内"，不是"跨关"。
@@ -1570,7 +1580,391 @@ namespace GameJam.Prototype
             V21ClearTable();
             bladeCoreCard = null;
 
+            // ★ 重开本关 = 这一把不要了，存档跟着作废。
+            //   【为什么顺手清掉，而不是留着】留着的话玩家重开之后再按「继续」，
+            //   会回到**重开之前**的局面 —— 看起来像"重开没生效"，而且他刚做的决定被推翻了。
+            //   反过来的代价（想反悔刚才那次重开）远小于这个困惑，所以口径选"清掉"。
+            DiscardSave("重新开始本关");
+
             StartDeckPick();
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  存档 / 读档（v2.1，一个存档位）
+        //
+        //  【谁能存】只有正式回合（Select 阶段、关卡还没结束）—— 存档要的是"能接着打"，
+        //    开局准备 / 结算屏那些中间态存下来没有意义（读回来也没有对应的入口）。
+        //  【读档都做哪几件事】按顺序：关卡与牌组定位 → 规则状态落地（两阶段，失败则什么都不动）
+        //    → **走现成的权威同步**重摆 3D（手牌 / 桌面 / 刀片卡 / 量筒）→ 阶段回到可操作
+        //    → 自检（CompareStates 逐字段比 + ViewSyncSummary 状态与画面一致）。
+        //  【一个字节的规则都不在这里】这里只做装配与自检，结算语义全在 TableRulesV21 → TurnEngine。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>本局用的牌组 id（读档要按同一副牌组重开这一关，见 FindDeckById）。</summary>
+        public string deckId = "";
+
+        /// <summary>本次运行里最近一次保存的状态 —— 读档自检的参照物（跨进程读档时它是 null）。</summary>
+        public LevelSaveData lastSavedState;
+
+        /// <summary>现在能不能存（正式回合 + v2.1 + 关卡没结束）。不能存时 <see cref="SaveBlockReason"/> 说明原因。</summary>
+        public bool CanSave
+        {
+            get
+            {
+                if (!V21 || rulesV21 == null) return false;
+                if (levels == null || levels.Count == 0) return false;
+                if (rulesV21.levelOver) return false;
+                return phase == TablePhase.Select;
+            }
+        }
+
+        /// <summary>不能存的原因（按钮灰着就得说清为什么，不然玩家只会以为坏了）。</summary>
+        public string SaveBlockReason
+        {
+            get
+            {
+                if (!V21 || rulesV21 == null) return "旧流程没有存档位（这是 v2.1 的功能）";
+                if (levels == null || levels.Count == 0) return "还没进关卡，没有可保存的东西";
+                if (rulesV21.levelOver) return "关卡已经结束了 —— 存档是给「接着打」用的";
+                if (phase != TablePhase.Select) return "只能在正式回合里保存（现在是 " + phase + "）";
+                return "";
+            }
+        }
+
+        /// <summary>存档文件的完整路径（日志与回报里都写它）。</summary>
+        public static string SavePath { get { return TableSaveIO.Path; } }
+
+        /// <summary>
+        /// 保存当前关卡状态到磁盘（暂停菜单「保　存」与探针走的是同一个入口）。
+        ///
+        /// 【写盘之后立刻回读一遍再比对】序列化少写一个字段，表现是"读回来状态不对"，
+        ///   而那时候玩家已经打了半个回合、现场早没了。所以在**存档这一步**就把文件读回来，
+        ///   和写出去的那份逐字段比一遍：不相等当场 LogWarning 并把差异列出来。
+        /// </summary>
+        public bool SaveGame()
+        {
+            if (!CanSave)
+            {
+                notice = "现在不能保存：" + SaveBlockReason;
+                Debug.LogWarning("[V21][存档] 保存被拒：" + SaveBlockReason);
+                return false;
+            }
+
+            SaveFileDto f = new SaveFileDto();
+            f.version     = LevelSave.Version;
+            f.kind        = LevelSave.KindName;
+            f.savedAt     = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            f.levelIndex  = levelIndex;
+            f.levelId     = level != null ? level.Id : "";
+            f.levelName   = level != null ? level.Name : "";
+            f.deckId      = deckId;
+            f.deckName    = setup != null ? setup.deckName : "";
+            f.phaseAtSave = phase.ToString();
+            f.state       = rulesV21.CaptureSaveState();
+
+            string error;
+            if (!TableSaveIO.Write(f, out error))
+            {
+                notice = "保存失败：" + error;
+                Debug.LogError("[V21][存档] 保存失败：" + error);
+                return false;
+            }
+
+            lastSavedState = f.state;
+
+            Debug.Log("[V21][存档] 已保存｜" + TableSaveIO.PathLine() + "｜" + LevelSaveJson.VersionLine(f) +
+                      "｜" + f.Describe());
+
+            // ── 写盘自检：把刚写下去的文件读回来，和写出去的那份逐字段比 ──
+            SaveFileDto back;
+            string readErr;
+            if (!TableSaveIO.TryLoad(out back, out readErr))
+            {
+                Debug.LogWarning("[V21][存档] 写盘自检失败：文件读不回来 —— " + readErr);
+            }
+            else
+            {
+                List<string> diffs = LevelSave.CompareStates(f.state, back.state);
+                if (diffs.Count == 0)
+                    Debug.Log("[V21][存档] ✓ 写盘自检：读回来的状态与存出去的那份" + LevelSave.DiffText(diffs) +
+                              "（" + DescribeStateNumbers(back.state) + "）");
+                else
+                    Debug.LogWarning("[V21][存档] ★ 写盘自检不通过：" + LevelSave.DiffText(diffs));
+
+                // 顺手把字段清单打一行（回报里要贴"存了哪些字段"）
+                Debug.Log("[V21][存档] 文件大小 " + FileSizeText() + "｜字段：version/kind/savedAt/levelIndex/levelId/levelName/deckId/deckName/phaseAtSave" +
+                          " + state{turnIndex,actionPoints,score,targetScore,startsThisTurn,blankCount,levelOver,bursted,endReason," +
+                          "selectedIndex,selectedAuto,staged[]{spell,index,slot},blade{cardId,name,H,V,layers[4]{kind,decaying,permanent},passives[]{cardId,cardName,text,sentence}}," +
+                          "table[]{cardId,cardName,H,D,fullD,V,removed,consumed,startedThisTurn,valueSource}," +
+                          "handMaterials[]{cardId,cardName,H,D,V,valueSource,spell},handSpells[]}");
+            }
+
+            notice = "已保存到 " + TableSaveIO.Path + "　（" + f.Describe() + "）";
+            return true;
+        }
+
+        /// <summary>存档文件大小（写盘自检那行日志用）。</summary>
+        private static string FileSizeText()
+        {
+            try
+            {
+                System.IO.FileInfo fi = new System.IO.FileInfo(TableSaveIO.Path);
+                return fi.Exists ? fi.Length + " 字节" : "（文件不在）";
+            }
+            catch (System.Exception) { return "（量不到）"; }
+        }
+
+        /// <summary>
+        /// 读档：把存档恢复到场上，并回到"能接着打"的那一屏。
+        ///
+        /// 【失败时一定什么都不做】所有可能失败的事（读盘 / 解析 / 卡表对不上）都排在
+        ///   "改任何现有状态"之前；任何一步不对就明确报错、把「继续」按回禁用，现场原封不动。
+        /// </summary>
+        public bool ContinueFromSave()
+        {
+            if (!V21 || rulesV21 == null)
+            {
+                FailContinue("存档是 v2.1 规则的；当前「规则模式」是旧流程 —— 把它切回 v2.1 再读");
+                return false;
+            }
+
+            SaveFileDto file;
+            string error;
+            if (!TableSaveIO.TryLoad(out file, out error))
+            {
+                FailContinue(error);
+                return false;
+            }
+
+            Debug.Log("[V21][存档] 开始读档｜" + TableSaveIO.PathLine() + "｜" + LevelSaveJson.VersionLine(file) +
+                      "｜存档里写着：" + file.Describe() + "（存于阶段 " + file.phaseAtSave + "）");
+
+            // ── ① 先把状态**全建好**（这一步只读存档；失败则现场原封不动）──
+            BuiltSaveState built;
+            if (!rulesV21.TryBuildSaveState(file.state, out built, out error))
+            {
+                FailContinue(error);
+                return false;
+            }
+
+            // ── ② 关卡与牌组定位 ──
+            if (levels == null || levels.Count == 0)
+            {
+                levels = GameConfig.Levels();
+                if (levels.Count == 0) levels.Add(GameConfig.Level());
+            }
+
+            if (file.levelIndex < 0 || file.levelIndex >= levels.Count)
+            {
+                FailContinue("存档里的关卡下标 " + file.levelIndex + " 超出了关卡表（共 " + levels.Count +
+                             " 关）—— 配置可能改过，拒绝读到别的关上");
+                return false;
+            }
+
+            int idx = file.levelIndex;
+            Deck deck = FindDeckById(file.deckId);
+            if (deck == null && !string.IsNullOrEmpty(file.deckId))
+                Debug.LogWarning("[V21][存档] 存档里的牌组 id「" + file.deckId +
+                                 "」在配置里找不到 → 退回默认牌组（刀片与手牌仍按存档恢复，不受影响）");
+
+            // ── ③ 到这里才动现场：这一关按存档重开（旧状态机的壳），再把规则状态覆盖上去 ──
+            levelIndex = idx;
+            level = new Level(levels[idx]);
+            level.Begin(deck, GameConfig.DefaultBlade());
+
+            cup = new CupSim();
+            skipsUsed = 0;
+            staged.Clear();
+            bladeCoreCard = null;
+            lastPlayed    = "";
+            paused        = false;
+            settingsOpen  = false;
+
+            if (setup != null)
+            {
+                setup.deckName = file.deckName;
+                setup.ClearHand();          // 先清干净：RebuildHand 会照规则侧重摆
+            }
+
+            KillBladeCard();
+            V21ClearTable();
+
+            deckId = file.deckId;
+
+            string passiveError;
+            rulesV21.CommitSaveState(built, out passiveError);
+
+            // ── ④ 表现层：**全部走现成的权威同步**（一个坐标都不自己算）──
+            //   ★ 从开场进来时先把开场收掉：titleRig.Clear() 同时负责"机位还回桌面视角"
+            //     （见那里的说明）—— 自己另写一遍就会漏掉机位，读档后玩家看到的还是开场那一屏的构图。
+            //     走"新游戏"那条路时是同一个调用（ConfirmTitleStart → titleRig.Clear）。
+            if (phase == TablePhase.Title && titleRig != null) titleRig.Clear();
+
+            BuildBladeCard();               // 刀片卡 + 「刀 片」标记
+            rulesV21.RebuildHand();         // 手牌重摆（含残留清扫 + 手牌自检）
+            RestoreStagedFromSave(built.rules.staged);   // 待放置的牌（v2.1 常态为空）
+            rulesV21.SyncTableVisuals();    // 桌面素材按级联重摆（含布局自检）
+            SyncJuicer();                   // 量筒 / 得分板按分数刷新
+            if (setup != null) setup.RefreshSlotLabels();
+
+            // ── ⑤ 阶段：关卡已结束的存档回到结算屏，否则回到"能接着打"的出牌阶段 ──
+            phase = rulesV21.levelOver ? TablePhase.LevelEnd : TablePhase.Select;
+
+            // ── ⑥ 自检：逐字段比对 + 状态与画面一致 ──
+            LevelSaveData now = rulesV21.CaptureSaveState();
+            List<string> diffs = LevelSave.CompareStates(file.state, now);
+
+            if (diffs.Count == 0)
+            {
+                Debug.Log("[V21][存档] ✓ 读档自检 CompareStates：读回来的状态与存档前逐字段全等" +
+                          "（存档前 " + DescribeStateNumbers(file.state) + "）" +
+                          "｜读回来后 " + DescribeStateNumbers(now));
+            }
+            else
+            {
+                Debug.LogWarning("[V21][存档] ★ 读档自检不通过（" + diffs.Count + " 处不同）：" +
+                                 LevelSave.DiffText(diffs) +
+                                 "\n   存档前 " + DescribeStateNumbers(file.state) +
+                                 "\n   读回来后 " + DescribeStateNumbers(now));
+            }
+
+            Debug.Log("[V21][存档] ✓ 读档完成｜" + rulesV21.ViewSyncSummary() +
+                      "｜阶段 " + phase + "｜" + StateSummary());
+
+            notice = "已读取存档：" + file.Describe();
+            return true;
+        }
+
+        /// <summary>
+        /// 读档时把"投放区里待放置的那几张"恢复出来（**必须在 RebuildHand 之后调**）。
+        ///
+        /// 【为什么在 RebuildHand 之后】待放置是按"手牌下标"记的，得先有新的 3D 手牌卡，
+        ///   才能用 bindingMaterial / bindingSpell 把下标认回那几张卡（名字会随 D 变，不能用名字）。
+        /// 【v2.1 常态是空表】落槽即结算，玩家打不出这个状态；这一段是给旧流程的摆法和探针兜底的。
+        /// </summary>
+        public void RestoreStagedFromSave(List<SaveStaged> list)
+        {
+            staged.Clear();
+            if (list == null || list.Count == 0) return;
+            if (rulesV21 == null || setup == null || setup.hand == null) return;
+
+            int n = 0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                SaveStaged g = list[i];
+                if (g == null) continue;
+
+                PlayCard pc = FindStagedHandView(g);
+                if (pc == null)
+                {
+                    Debug.LogWarning("[V21][存档] 投放区待放置第 " + (i + 1) + " 项（手牌下标记不住的那张）" +
+                                     "找不到对应的 3D 手牌卡 → 这一张不摆回投放区");
+                    continue;
+                }
+
+                staged.Add(pc);
+                if (g.slot >= 0 && board != null && board.Place(g.slot, pc))
+                    pc.SnapTo(board.SlotPosition(g.slot));
+                n++;
+            }
+
+            Debug.Log("[V21][存档] 投放区待放置已恢复 " + n + "/" + list.Count + " 张（" + StagedText + "）");
+        }
+
+        /// <summary>按存档记的（手牌下标 + 素材/法术）找回那张 3D 手牌卡。</summary>
+        private PlayCard FindStagedHandView(SaveStaged g)
+        {
+            for (int i = 0; i < setup.hand.Count; i++)
+            {
+                PlayCard pc = setup.hand[i];
+                if (pc == null) continue;
+
+                if (g.spell)
+                {
+                    if (pc.bindingSpell != null && g.index >= 0 && g.index < rulesV21.handSpells.Count &&
+                        rulesV21.handSpells[g.index] == pc.bindingSpell) return pc;
+                }
+                else
+                {
+                    if (pc.bindingMaterial != null && g.index >= 0 && g.index < rulesV21.hand.Count &&
+                        rulesV21.hand[g.index] == pc.bindingMaterial) return pc;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>读档失败：明确报错 + 让开场那个「继续」回到禁用状态，**现场一个字节都不动**。</summary>
+        private void FailContinue(string why)
+        {
+            Debug.LogError("[V21][存档] 读取失败：" + why + "　—— 「继续」保持/回到禁用状态，当前局面不动" +
+                           "（存档：" + TableSaveIO.Path + "）");
+            notice = "读档失败：" + why;
+
+            // 停在场界面时重建一次开场 —— 它建牌子时会重新判断"这一档能不能读"，
+            // 于是坏档当场变灰（用户报的就是"改坏存档后按继续"这一下）。
+            if (phase == TablePhase.Title && titleRig != null) titleRig.Build();
+        }
+
+        /// <summary>"存档前 / 读回来后"那两行数字（逐条对照用，日志里一眼能比）。</summary>
+        public static string DescribeStateNumbers(LevelSaveData s)
+        {
+            if (s == null) return "（没有状态）";
+
+            return "回合 " + s.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel
+                 + "｜行动机会 " + s.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn
+                 + "｜分数 " + s.score + "/" + s.targetScore
+                 + "｜刀片 " + s.blade.name + " H" + s.blade.H + " V" + s.blade.V
+                 + "｜附魔 " + s.LayersText()
+                 + "｜桌面 " + s.LiveTableCount() + " 张"
+                 + "｜手牌 " + s.handMaterials.Count + " 素材 + " + s.handSpells.Count + " 法术"
+                 + "｜被动 " + (s.blade.passives != null ? s.blade.passives.Count : 0) + " 条"
+                 + "｜空白卡 " + s.blankCount;
+        }
+
+        /// <summary>当前规则状态的一行摘要（探针在存档前后各打一次，两条一比就知道有没有变）。</summary>
+        public string StateSummary()
+        {
+            if (rulesV21 == null) return "（规则侧不在）";
+
+            return "回合 " + rulesV21.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel
+                 + "｜行动机会 " + rulesV21.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn
+                 + "｜分数 " + rulesV21.score + "/" + rulesV21.targetScore
+                 + "｜刀片 " + (rulesV21.blade != null ? rulesV21.blade.name : "（无）")
+                 + " H" + (rulesV21.blade != null ? rulesV21.blade.H : 0)
+                 + " V" + (rulesV21.blade != null ? rulesV21.blade.V : 0)
+                 + "｜附魔 " + (rulesV21.blade != null ? rulesV21.blade.layers.Describe() : "（无）")
+                 + "｜桌面 " + rulesV21.LiveTableCount() + " 张"
+                 + "｜手牌 " + rulesV21.hand.Count + " 素材 + " + rulesV21.handSpells.Count + " 法术"
+                 + "｜被动 " + rulesV21.BladePassiveCount + " 条"
+                 + "｜空白卡 " + rulesV21.blankCount
+                 + "｜阶段 " + phase;
+        }
+
+        /// <summary>按 id 找牌组（找不到返回配置里第一副；一副都没有返回 null）。</summary>
+        private static Deck FindDeckById(string id)
+        {
+            List<Deck> decks = GameConfig.Decks();
+            if (decks == null || decks.Count == 0) return null;
+
+            if (!string.IsNullOrEmpty(id))
+                for (int i = 0; i < decks.Count; i++)
+                    if (decks[i] != null && decks[i].id == id) return decks[i];
+
+            return decks[0];
+        }
+
+        /// <summary>把存档作废（"重新开始本关"调它；详见那里的说明）。</summary>
+        public void DiscardSave(string why)
+        {
+            lastSavedState = null;
+
+            if (!TableSaveIO.Exists) return;
+
+            string error;
+            if (TableSaveIO.Delete(out error))
+                Debug.Log("[V21][存档] " + why + " → 已清掉存档（" + TableSaveIO.Path + "）");
+            else
+                Debug.LogWarning("[V21][存档] " + why + "：清存档失败 —— " + error);
         }
 
         /// <summary>退出游戏。编辑器里是停止 Play，出包后是真退出。</summary>

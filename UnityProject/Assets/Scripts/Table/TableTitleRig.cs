@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using GameJam.Rules;
 
 namespace GameJam.Prototype
 {
@@ -50,6 +51,22 @@ namespace GameJam.Prototype
 
         /// <summary>鼠标底下那一项（null = 没有）。</summary>
         public string Hovered { get; private set; }
+
+        /// <summary>
+        /// 「继　续」现在能不能点 —— **判据是"存档能不能完整读出来"**，不是"文件在不在"。
+        ///
+        /// 【为什么不是只看文件存在】改坏过 / 写了一半的存档，点下去只会报错；
+        ///   与其让玩家反复点一个坏档，不如当场置灰（用户要的口径就是这个）。
+        ///   每次 <see cref="Build"/> 重新判一次，所以"按了继续 → 读失败 → 牌子变灰"
+        ///   和"删掉存档 → 回开场 → 牌子变灰"两条路都自动成立。
+        /// </summary>
+        public bool ContinueEnabled { get; private set; }
+
+        /// <summary>「继　续」这一项的状态说明（开场底部那行提示直接读它）。</summary>
+        public string ContinueHint { get; private set; }
+
+        /// <summary>存档摘要（能读出来时是"第 1 关 · 第 2 回合 …"）。</summary>
+        public string SaveSummary { get; private set; }
 
         // ── 蜡烛 ──────────────────────────────────────────────────────
         private Transform   flame;
@@ -115,10 +132,21 @@ namespace GameJam.Prototype
         {
             Clear();
 
+            // ── 「继　续」的亮/灰：这一档能不能完整读出来 ──────────────────
+            //   ★ 判据是"读得出来"，不是"文件在"（理由见 ContinueEnabled 的说明）。
+            //   ★ 每次开场都重判一次：玩家在暂停菜单里存过档、或者手动删了文件，
+            //     回开场时这块牌子必须跟着变 —— 它读的是磁盘，不是启动那一刻的记忆。
+            string saveSummary, saveError;
+            ContinueEnabled = CanContinueFromSave(out saveSummary, out saveError);
+            SaveSummary = ContinueEnabled ? saveSummary : "";
+            ContinueHint = ContinueEnabled
+                ? "接着上一局打：" + saveSummary
+                : (TableSaveIO.Exists ? "存档读不出来（原因见日志）" : "还没有存档");
+
             BuildBook();
             // "继续"不加括号说明 —— 括号会让这行字比其他两块长出一截，
             // 而且横排三块的对齐会被撑歪。存档状态改由底部提示行交代。
-            BuildPlaque(IdContinue, "继　　续",       -PlaqueGap, false);
+            BuildPlaque(IdContinue, "继　　续",       -PlaqueGap, ContinueEnabled);
             BuildPlaque(IdSettings, "设　　置",        0f,         true);
             BuildPlaque(IdQuit,     "退　　出",        PlaqueGap,  true);
 
@@ -160,6 +188,17 @@ namespace GameJam.Prototype
             items.Clear();
 
             // 点击代理和辉光跟着开场一起走 —— 回合里不该有任何残留碰撞体
+            //
+            // ★ 拆之前必须把辉光**当场关掉**（enabled = false），不能只 Destroy：
+            //   Object.Destroy 是**帧末**才真删的，这一帧里它还是一个"活着的渲染器"，
+            //   而桌面素材级联的布局自检（TableRulesV21.CollectLayoutObstacles）是按
+            //   "破壁机整组的世界包围盒"算障碍的 —— 那圈光是 1.30 缩放的面片
+            //   （乘上机器的 0.75 = 世界 0.975 见方），一算进去就会报
+            //   「★ 桌面素材级联有 2 处违反不变式：压到破壁机」。实测踩到的正是它：
+            //   读档那一下（ContinueFromSave → titleRig.Clear → SyncTableVisuals）日志里
+            //   多出一条假警。自检误报比不检更坏（下次真出问题没人信它），所以源头关掉它。
+            if (juicerGlow != null) juicerGlow.enabled = false;
+
             CardFactory.DestroySafe(juicerProxy);
             CardFactory.DestroySafe(juicerGlow != null ? juicerGlow.gameObject : null);
             juicerProxy = null;
@@ -564,6 +603,14 @@ namespace GameJam.Prototype
                     if (loop != null) loop.ConfirmTitleStart();
                     break;
 
+                // 「继　续」= 读存档，接着上一局打。
+                // ★ 它是**唯一**能在开场进入关卡的路（另一条是"新游戏"，那要从选关重来）。
+                //   读档失败时 loop 那边什么都不动、并重建这块牌子（变灰）——
+                //   所以"按了继续却进了个半残的局面"在结构上就不可能发生。
+                case IdContinue:
+                    ActivateContinue();
+                    break;
+
                 // 点机器也是开始。先让它动起来，过一拍再切屏 ——
                 // 点了立刻进牌组选择的话，玩家根本看不到自己启动了机器。
                 case IdJuicer:
@@ -587,6 +634,55 @@ namespace GameJam.Prototype
                 default:
                     break;
             }
+        }
+
+        /// <summary>
+        /// 点「继　续」要做的全部事情 —— **公开出来给探针走同一条路**
+        /// （编辑器探针点不了 3D 木牌，但它必须按玩家那一下的同一个入口进来）。
+        /// </summary>
+        public void ActivateContinue()
+        {
+            if (loop == null)
+            {
+                Debug.LogWarning("[开场] 点了「继续」，但没有 TableTurnLoop，读档跳过。");
+                return;
+            }
+
+            if (!ContinueEnabled)
+            {
+                Debug.Log("[开场] 「继续」是灰的（" + ContinueHint + "）—— 玩家这一下本来就不该生效，这里如实挡掉。");
+                return;
+            }
+
+            Debug.Log("[开场] 点了「继续」→ 读存档（" + SaveSummary + "）");
+            loop.ContinueFromSave();
+        }
+
+        /// <summary>
+        /// 这一份存档现在能不能读 —— **判据是"整份档能完整建成一批对象"**，不只是"JSON 语法对"。
+        ///
+        /// 【为什么要做到这一步】"文件在"→ 亮，"JSON 能解析"→ 还是亮，都不够：
+        ///   一份语法没问题、但层数缺了一类 / 卡表里少了一张卡的存档，
+        ///   点下去会在读档中途失败。那种档就该从一开始是灰的。
+        ///   而 <see cref="TableRulesV21.TryBuildSaveState"/> 恰好是**纯读**的
+        ///   （只建新对象、不碰现有状态），拿它来试一下最合适 —— 试完什么都不留。
+        ///
+        /// ★ 规则侧还没装好（极早期）时退回"只看语法"：那时点「继续」本来也没有可恢复的对象。
+        /// </summary>
+        public bool CanContinueFromSave(out string summary, out string error)
+        {
+            summary = "";
+            error = "";
+
+            SaveFileDto file;
+            if (!TableSaveIO.TryLoad(out file, out error)) return false;
+
+            summary = file.Describe();
+
+            if (loop == null || loop.rulesV21 == null) return true;
+
+            BuiltSaveState built;
+            return loop.rulesV21.TryBuildSaveState(file.state, out built, out error);
         }
 
         // ══════════════════════════════════════════════════════════════

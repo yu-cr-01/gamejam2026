@@ -260,6 +260,16 @@ namespace GameJam.Rules
         /// <summary>挂在刀片上的"每次启动都生效"的被动（卡被吞噬后登记：铜的"其他素材D-2"、铁的"D-3"）。</summary>
         private readonly List<RuleClause> bladePassives = new List<RuleClause>();
 
+        /// <summary>
+        /// 与 <see cref="bladePassives"/> **一一对应**的来源记录（存档要存"这条被动是从哪张卡的哪句话来的"）。
+        ///
+        /// 【为什么不用另建一套查找】被动本体的 RuleClause 里只有一个 sentence，
+        ///   没有"它出自哪张卡、哪个字段"—— 而读档时必须知道从哪段文本重新解析它。
+        ///   登记的那一刻是唯一同时握着卡和句子的地方，顺手记一份最省事，
+        ///   也保证了"导出多少条 = 现在生效多少条"（两个列表永远同增同清）。
+        /// </summary>
+        private readonly List<SaveBladePassive> bladePassiveSource = new List<SaveBladePassive>();
+
         public TurnEngine() : this(new TurnRules(), EmptyCardLookup.Instance) { }
 
         public TurnEngine(TurnRules rules) : this(rules, EmptyCardLookup.Instance) { }
@@ -274,7 +284,73 @@ namespace GameJam.Rules
 
         public int BladePassiveCount { get { return bladePassives.Count; } }
 
-        public void ClearBladePassives() { bladePassives.Clear(); }
+        public void ClearBladePassives()
+        {
+            bladePassives.Clear();
+            bladePassiveSource.Clear();
+        }
+
+        /// <summary>
+        /// 导出刀片被动（存档用）。返回的是**副本** —— 调用方拿去写盘，改它不影响场上的被动。
+        /// </summary>
+        public List<SaveBladePassive> ExportBladePassives()
+        {
+            return new List<SaveBladePassive>(bladePassiveSource);
+        }
+
+        /// <summary>
+        /// 按存档里的记录重建刀片被动（读档用）。
+        ///
+        /// 【为什么按"原文重新解析"而不是把被动也序列化成数据】
+        ///   被动的本体是一棵 RuleClause（条件 + 操作 + 层数类别 + 数值），
+        ///   把它整个序列化就等于给规则解析结果定一份"对外格式" ——
+        ///   以后解析器加一个字段，旧存档就会读回一棵**缺字段的**规则树，
+        ///   而它不会报错，只会算错分。按保存下来的原文重新解析，
+        ///   拿到的永远是"用当前解析器读这段文本"的结果，和当初登记时同一个口径。
+        ///
+        /// 【重建不出来怎么办】如实记进 <paramref name="error"/> 并**跳过那一条**，
+        ///   不静默、也不让整个读档失败（少一条被动比读不进这一关要好，
+        ///   而且调用方会把它打出来）。
+        ///
+        /// 返回重建成功的条数。
+        /// </summary>
+        public int ImportBladePassives(List<SaveBladePassive> records, out string error)
+        {
+            ClearBladePassives();
+            error = "";
+            if (records == null) return 0;
+
+            int ok = 0;
+            for (int i = 0; i < records.Count; i++)
+            {
+                SaveBladePassive rec = records[i];
+                if (rec == null) continue;
+
+                RuleParseResult pr = RuleText.ParseField(rec.text, RuleField.Sacrifice, rec.cardId, rec.cardName, ctx);
+
+                RuleClause hit = null;
+                for (int c = 0; c < pr.clauses.Count; c++)
+                {
+                    RuleClause cl = pr.clauses[c];
+                    if (cl == null || cl.trigger != RuleTrigger.EachStartup) continue;
+                    if (cl.sentence != rec.sentence) continue;
+                    hit = cl;
+                    break;
+                }
+
+                if (hit == null)
+                {
+                    error += "第 " + (i + 1) + " 条刀片被动没能重建（来源卡「" + rec.cardName + "」，句子「" +
+                             rec.sentence + "」）—— 已跳过；";
+                    continue;
+                }
+
+                bladePassives.Add(hit);
+                bladePassiveSource.Add(rec);
+                ok++;
+            }
+            return ok;
+        }
 
         public ICardLookup Lookup { get { return lookup; } }
 
@@ -725,6 +801,15 @@ namespace GameJam.Rules
                         if (c.trigger == RuleTrigger.EachStartup)
                         {
                             bladePassives.Add(c);
+
+                            // 顺手记下"这条被动出自哪张卡的哪句话"（存档要存它，见 bladePassiveSource）
+                            SaveBladePassive src = new SaveBladePassive();
+                            src.cardId   = target.card != null ? target.card.id : "";
+                            src.cardName = target.name;
+                            src.text     = target.card != null ? target.card.sacrifice : "";
+                            src.sentence = c.sentence;
+                            bladePassiveSource.Add(src);
+
                             Log(r, "　　登记为刀片被动（从下一次启动开始，每次启动都生效）：" + c.sentence);
                             continue;
                         }

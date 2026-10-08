@@ -1132,10 +1132,10 @@ namespace GameJam.Prototype
 
         private void DrawPausePanel()
         {
-            // 312 → 396（多了「关卡」和「卡牌图鉴」）→ 442（再多一个「牌组」）。
-            // ★ 高度必须 = 66（标题）+ N×(40+6)（N 个按钮）+ 两条说明的 44 ——
-            //   加一项就 +46。第一版只加到 358，最后一个「退出游戏」正好压在下面两行说明上。
-            const float w = 400f, h = 442f;
+            // 312 → 396（多了「关卡」和「卡牌图鉴」）→ 442（再多一个「牌组」）→ 560（再一排「保存 / 读取」）。
+            // ★ 高度必须 = 66（标题）+ N×46（N 行按钮）+ 底下三条说明（20 + 52 + 20，中间那条要能折三行）
+            //   加一项就 +46（并排两项算一行）。第一版只加到 358，最后一个「退出游戏」正好压在下面两行说明上。
+            const float w = 400f, h = 560f;
             Rect r = CenterBox(w, h);
             GUI.Box(r, GUIContent.none, panelBox);
 
@@ -1157,6 +1157,33 @@ namespace GameJam.Prototype
                 GUI.FocusControl(null);
                 turnLoop.settingsOpen = true;
             }
+            by += bh + gap;
+
+            // ── 存档 / 读档（v2.1，一个存档位）────────────────────────────
+            //   用户点名要的就是这两项，所以并排放一整行（比再占两行更好找）。
+            //   ★ 灰着的时候**必须写清为什么**（见面板底下第二行说明）：
+            //     玩家看到灰按钮的第一反应是"坏了"，而不是"现在不能存"。
+            //   ★ v2.1 才有存档位（旧流程的状态形状完全不同），旧流程下两项都灰。
+            float halfW = (w - 44f - 8f) * 0.5f;
+            bool oldEnabled = GUI.enabled;
+
+            GUI.enabled = turnLoop.CanSave;
+            if (GUI.Button(new Rect(r.x + 22f, by, halfW, bh), "保　　存", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.SaveGame();
+                turnLoop.paused = false;   // 收起菜单：结果（已保存 / 为什么存不了）在顶部提示那条上
+            }
+            GUI.enabled = oldEnabled;
+
+            GUI.enabled = TableSaveIO.Exists;
+            if (GUI.Button(new Rect(r.x + 22f + halfW + 8f, by, halfW, bh), "读　　取", btn))
+            {
+                GUI.FocusControl(null);
+                turnLoop.paused = false;   // 读档会重摆整张桌子，菜单挡着看不清
+                turnLoop.ContinueFromSave();
+            }
+            GUI.enabled = oldEnabled;
             by += bh + gap;
 
             // ── 关卡窗口 / 牌组窗口 / 卡牌图鉴 ──
@@ -1208,10 +1235,19 @@ namespace GameJam.Prototype
                 turnLoop.QuitGame();
             }
 
-            GUI.Label(new Rect(r.x + 22f, r.y + h - 44f, w - 44f, 20f),
-                      "退出关卡：放弃这一把，回到开场（不算失败）", dimPanel);
-            GUI.Label(new Rect(r.x + 22f, r.y + h - 24f, w - 44f, 20f),
-                      "Esc 也可以直接继续", dimPanel);
+            // ── 底下三行：刚刚发生了什么 / 存档位现状 / 为什么存不了（或 Esc 提示）──
+            //   notice 那一行放最上面：保存和读档的结果都写在那里，玩家一睁眼就能看到。
+            //   ★ 存档摘要那行给**三行高**（52）：dimPanel 是自动换行的，矮一截就会把
+            //     折下来的第二、三行裁在半路（实测截图里就看到"（第 1 关 · 点火　第 1/4"被切掉）。
+            if (!string.IsNullOrEmpty(turnLoop.notice))
+                GUI.Label(new Rect(r.x + 22f, r.y + h - 118f, w - 44f, 20f), turnLoop.notice, dimPanel);
+
+            GUI.Label(new Rect(r.x + 22f, r.y + h - 96f, w - 44f, 52f),
+                      TableSaveIO.StatusLine(), dimPanel);
+
+            GUI.Label(new Rect(r.x + 22f, r.y + h - 28f, w - 44f, 20f),
+                      turnLoop.CanSave ? "存档 = 覆盖那一个存档位；Esc 也可以直接继续"
+                                       : ("现在不能保存：" + turnLoop.SaveBlockReason), dimPanel);
         }
 
         /// <summary>
@@ -1383,16 +1419,26 @@ namespace GameJam.Prototype
             GUI.Label(new Rect(0f, Screen.height - 96f, Screen.width, 30f),
                       turnLoop.titleRig.IsStarting
                           ? "启 动 中 …"
-                          : HintForTitle(turnLoop.titleRig.Hovered), titleHint);
+                          : HintForTitle(turnLoop.titleRig), titleHint);
         }
 
-        private static string HintForTitle(string id)
+        /// <summary>
+        /// 开场底部那行提示。
+        ///
+        /// 【为什么改成读 rig 的状态】「继　续」现在有两种状态（有档可读 / 没有），
+        ///   提示必须跟着变 —— 写着"还没有存档"的牌子却是亮的，玩家点下去只会以为坏了。
+        ///   状态由 TableTitleRig 在 Build 时判定一次（它才是拿磁盘说话的那一处），
+        ///   这里只负责把它显示出来。
+        /// </summary>
+        private static string HintForTitle(TableTitleRig rig)
         {
+            string id = rig != null ? rig.Hovered : null;
+
             switch (id)
             {
                 case TableTitleRig.IdNew:      return "翻开它，开始这一局";
                 case TableTitleRig.IdJuicer:   return "按下开关，启动破壁机";
-                case TableTitleRig.IdContinue: return "还没有存档";
+                case TableTitleRig.IdContinue: return rig != null ? rig.ContinueHint : "还没有存档";
                 case TableTitleRig.IdSettings: return "设置还没做";
                 case TableTitleRig.IdQuit:     return "离开这张桌子";
 

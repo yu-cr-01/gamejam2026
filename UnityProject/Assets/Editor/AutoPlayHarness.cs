@@ -75,6 +75,12 @@ namespace GameJam.EditorTools
     ///                      每一步都先把"每张卡上文字的 sortingOrder vs 卡面的 sortingOrder"
     ///                      打进日志（"文字排在卡面之后"是个可以逐条核对的数字），再截图。
     ///                      默认 0 = 完全不介入（不会临时注册 cardface 机位）。
+    ///   DSH_SAVEPROBE=1    存档 / 读档探针（㉞⓪~㉟⑤）：验用户点名的那件事 ——
+    ///                      "保存当前关卡状态，读取后能接着打"。造一个有内容的局面
+    ///                      （桌面 2 张素材、打了法术、刀片带"不衰退"层）→ 在暂停菜单里
+    ///                      点「保　存」→ 退回开场 → 按「继　续」，两边的数字逐条对照；
+    ///                      反例也走一遍：把存档改坏之后「继续」必须是灰的 / 明确报错、
+    ///                      **不进半残状态**。默认 0 = 完全不介入。
     ///
     /// 【★ 命令行怎么用：-executeMethod 必须指向一个**方法**】
     ///   Unity 的 -executeMethod 只认 `类.方法`，不能指向一个带 [InitializeOnLoad] 的静态类本身。
@@ -137,6 +143,7 @@ namespace GameJam.EditorTools
         private static bool   framingProbe;
         private static bool   overlapProbe;
         private static bool   cardFaceProbe;
+        private static bool   saveProbe;
 
         /// <summary>
         /// 相交探针拍完之后回哪一步 —— 进探针时按**来路**记下（开场那条链和牌组/关卡那条链
@@ -215,6 +222,13 @@ namespace GameJam.EditorTools
             //   也单独一条链：它会把镜头怼到卡面上（临时注册一个 cardface 机位），
             //   混进别的链会让那些"按默认机位量"的日志换一个口径。
             cardFaceProbe = System.Environment.GetEnvironmentVariable("DSH_CARDFACEPROBE") == "1";
+
+            // ★ 存档 / 读档探针（DSH_SAVEPROBE=1，见 ㉞⓪~㉟⑤ 那一段）：
+            //   用户点名要的是"保存当前关卡状态、读取后能接着打"，所以这条链要**走玩家那条路**
+            //   （暂停菜单里点保存 → 回开场 → 按继续），每一步都把两边的数字打进日志；
+            //   反例（改坏存档）也走一遍 —— "不许半读半不读"这条只有真去改坏它才验得到。
+            //   单独一条链：它会**覆盖存档文件**，混进主链会让别的验收步骤失去前提。
+            saveProbe = System.Environment.GetEnvironmentVariable("DSH_SAVEPROBE") == "1";
 
             // ★ 每次域重载都要订阅，否则进 Play 之后就再也没人推进流程了
             EditorApplication.update += Tick;
@@ -558,11 +572,12 @@ namespace GameJam.EditorTools
                     // 取景探针要接着在**这一屏**量"提示块压不压手牌"（见 ㉚⓪ 那一段的说明：
                     // 提示块只在正式回合画，开局准备那几屏根本没有它）；
                     // 其余支线各走各的（都不设 = 原来的"只用点击"那条路，行为一个字没变）
-                    Stage = framingProbe ? 270
+                    Stage = saveProbe ? 340
+                          : (framingProbe ? 270
                           : (cardFaceProbe ? 300
                           : (overlapProbe ? 296
                           : (layoutProbe ? 240
-                          : (fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110))))));
+                          : (fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110)))))));
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -2545,6 +2560,249 @@ namespace GameJam.EditorTools
 
                 case 69:
                     if (EditorApplication.timeSinceStartup - stageTime < 4.0) return;
+                    Finish();
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㉞⓪~㉟⑤ 存档 / 读档探针（DSH_SAVEPROBE=1）
+                //
+                //  【它验的是用户点名的那件事】"保存当前关卡状态，读取后能接着打"。
+                //   所以这一条链不是"调一下 API 看返回值"，而是**走玩家那条路**：
+                //     造一个有内容的局面 → 暂停菜单里点「保　存」→ 退回开场 → 按「继　续」
+                //     → 两边的数字逐条对照（回合 / 行动机会 / 分数 / 刀片 H·V·层数 /
+                //       桌面张数 / 手牌张数 / 被动条数 / 空白卡）
+                //   反例也走一遍：**把存档改坏**之后「继续」必须是灰的 / 明确报错，
+                //   而且局面一个字节都不动（"不许半读半不读"这条只有真去改坏它才验得到）。
+                //
+                //  【stage 号从 340 起】270~284 / 285~299 / 300~328 已经被
+                //   取景 / 相交 / 卡面 / 选关 / 牌组那几条探针占满了，另起一段不会撞号。
+                //
+                //  【每一步都先截图、下一个 stage 再改状态】ScreenCapture 是帧末异步写盘的，
+                //   同一帧里先截图后改状态，落盘的就是"改完之后"的那一帧（文件头那条教训）。
+                // ══════════════════════════════════════════════════════
+
+                // ㉞⓪ 状态守卫 + 第一张手牌素材上桌
+                //     ★ 这台机器上同时跑着别的 Unity 实例，它的自动化会点到最前面那个窗口 ——
+                //       点到这边就等于替玩家把牌打出去了。阶段不对/手牌空就**重开一局**再走回这一屏，
+                //       守卫只在真的动过状态时打一行日志（别人踩过"守卫每帧刷屏"的坑）。
+                case 340:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    if (!ProbeSaveGuard("㉞⓪ 造局面之前"))
+                    {
+                        Stage = 57;                       // 回去重新点核心 → 确认刀片 → 第 1 回合
+                        stageTime = EditorApplication.timeSinceStartup;
+                        return;
+                    }
+                    ProbeClickHandMaterial();
+                    Stage = 341;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉞① 第二张素材上桌（桌面要有 2 张 —— 存档才有"桌面"这一项可验）
+                case 341:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeClickHandMaterial();
+                    Stage = 342;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉞② 启动破壁机一次：分数 / 行动机会 / 刀片 H / D / 本回合已启动 全都有内容了
+                case 342:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeActivateV21();
+                    Stage = 343;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉞③ 记一下手牌：读档后的回归要用**还留在手里的那张法术**，
+                //     所以这一步不打卡，只如实把"手里还有什么"写进日志（一张法术都没有就要说出来）
+                case 343:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    ProbeSaveHandCheckpoint("㉞③ 存档前的手牌");
+                    Stage = 344;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉞④ 再补一点层数：热 2（衰退）+ 热 1（**不衰退**）+ 催化 1
+                //     ★ "不衰退"那一份必须真有一条 —— 只存总数就会丢的那一项，实机也要验到
+                case 344:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSaveAddLayers();
+                    Stage = 345;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉞⑤ 打开暂停菜单（用户点名的入口：Esc 菜单里那两项）
+                case 345:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetPaused(true);
+                    Stage = 346;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉞⑥ 截图：菜单上「保　存 / 读　取」两项 + 底下那行"存档位：…"
+                case 346:
+                    if (!Shot("sv_01_pause_menu.png")) return;
+                    ProbeSaveLogNumbers("㉞⑥ 存档前（暂停菜单里）");
+                    Stage = 347;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉞⑦ 存档：走 TableTurnLoop.SaveGame —— 和「保　存」按钮按下去是同一个入口
+                //     （它内部会写盘 + **把文件读回来逐字段比一遍**，日志里能看到自检结果）
+                case 347:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSaveNow();
+                    Stage = 348;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉞⑧ 收起暂停菜单（存档结果那行 notice 在顶部提示条上）
+                case 348:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetPaused(false);
+                    Stage = 349;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉞⑨ 截图：存档瞬间的桌面（和后面"读档后"那张同机位，肉眼应几乎一致）
+                case 349:
+                    if (!Shot("sv_02_saved.png")) return;
+                    ProbeLogSync("㉞⑨ 存档瞬间");
+                    ProbeTableLook("㉞⑨ 存档瞬间（顺带看木纹 shader）");
+                    Stage = 350;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉟⓪ 退回开场（存档还在 —— 这是"关掉游戏再进来"的替身）
+                case 350:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeReturnToTitle();
+                    Stage = 351;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉟① 开场：存档在 → 「继　续」应该是亮的（截图 + 机位 + 亮/灰状态都记下来）
+                case 351:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("sv_03_title_continue_on.png")) return;
+                    LogCameraPose("㉟① 开场（存档在 → 「继续」应亮）");
+                    ProbeSaveLogContinueState("㉟① 存档还在时");
+                    Stage = 352;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉟② 反例①：把存档**改坏**（先备份好档原文），再让开场重新判定一次
+                case 352:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    ProbeSaveCorruptFile();
+                    ProbeSaveRebuildTitle("㉟② 改坏存档之后重新判定");
+                    Stage = 353;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉟③ 截图：这一档读不出来了 → 「继　续」必须是灰的
+                case 353:
+                    if (!Shot("sv_04_title_continue_gray.png")) return;
+                    Stage = 354;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉟④ 按「继　续」：牌是灰的 → 玩家那一下本来就不该生效（如实挡掉、不进关卡）
+                case 354:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    ProbeSavePressContinue("㉟④ 灰着的「继续」被按了一下");
+                    Stage = 355;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉟⑤ 再**直接走一遍读档入口**（模拟"牌子还亮着时点下去"这一下，比如存档刚被改坏）：
+                //     必须明确报错，而且局面一个字节都不动 —— "不许半读半不读"就验在这里
+                case 355:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    ProbeSaveLoadRejected();
+                    Stage = 356;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉟⑥ 截图：坏档被拒之后仍然停在开场（没有半残的牌桌）
+                case 356:
+                    if (!Shot("sv_05_load_rejected.png")) return;
+                    Stage = 357;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉟⑦ 把好档写回去 → 「继续」应该又亮（说明"禁用"是跟着存档状态走的，不是一次性的）
+                case 357:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    ProbeSaveRestoreFile();
+                    ProbeSaveRebuildTitle("㉟⑦ 恢复好档之后重新判定");
+                    Stage = 358;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉟⑧ 截图：牌子又亮了
+                case 358:
+                    if (!Shot("sv_06_title_continue_back.png")) return;
+                    Stage = 359;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㉟⑨ 按「继　续」—— 这一次真的读档（走 TableTitleRig.ActivateContinue，
+                //     和玩家点那块木牌是同一个入口）
+                case 359:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.6) return;
+                    ProbeSavePressContinue("㉟⑨ 按「继续」读档");
+                    Stage = 360;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊱⓪ 截图：读档后的桌面（与 ㉞⑨ 同机位）+ 逐条对照两边的数字
+                case 360:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("sv_07_loaded.png")) return;
+                    ProbeSaveCompareNumbers("㊱⓪ 读档后逐条对照");
+                    ProbeLogSync("㊱⓪ 读档后");
+                    ProbeTableLook("㊱⓪ 读档后（木纹 shader 也在这里看）");
+                    Stage = 361;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊱① 回归①：读档之后**拖法术进附魔位**还能附魔（层数要 +1）
+                case 361:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSpellIntoEnchantSlot("㊱① 读档后拖法术进附魔位（必过）");
+                    Stage = 362;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊱② 回归②：读档之后**没启动过的素材能拖回手牌**（收下）
+                case 362:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeWithdrawTableCardAt(0, "㊱② 读档后把桌面第 1 张拖回手牌");
+                    Stage = 363;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊱③ 回归③：**已启动过的素材收不回来**（这条正是"本回合是否启动过"那个字段在管）
+                case 363:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeWithdrawStartedCheck("㊱③ 读档后：已启动过的素材收不回来");
+                    Stage = 364;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊱④ 收尾：拍一张回归之后的桌面，再退出
+                case 364:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("sv_08_after_regression.png")) return;
+                    ProbeLogSync("㊱④ 回归之后");
+                    Stage = 365;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 365:
+                    if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
                     Finish();
                     return;
             }
@@ -5335,6 +5593,292 @@ namespace GameJam.EditorTools
 
             loop.ReturnToTitle();
             Debug.Log("[AutoPlay/Black] 已回菜单 → 阶段 " + loop.phase);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  存档 / 读档探针（DSH_SAVEPROBE=1）用的动作 —— 见 ㉞⓪~㉟⑤ 那一段
+        //
+        //  【它们只做两件事】把"现在的数字"打进日志，和**按玩家那一下的同一个入口**做事
+        //    （保存 = TableTurnLoop.SaveGame，读档 = TableTitleRig.ActivateContinue）。
+        //    探针不自己去写文件、也不自己造状态 —— 那样测到的就不是玩家那条路。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>存档前那一行数字（读档后要和它逐条对照）。</summary>
+        private static string saveProbeBeforeNumbers = "（还没存过）";
+
+        /// <summary>好档的原文备份 —— 反例要把它改坏，验完再写回去。</summary>
+        private static string saveProbeBackupText = "";
+
+        /// <summary>状态守卫重试了几次（防止"局面一直被别的进程点掉"时无限重开）。</summary>
+        private static int saveProbeGuardRetries;
+
+        /// <summary>
+        /// 状态守卫：确认局面在"第 1 回合、什么都没动"，不对就**走游戏自己的入口重开一局**。
+        ///
+        /// 【为什么需要它】这台机器上同时跑着别的 Unity 实例，它的自动化脚本会点"最前面那个窗口" ——
+        ///   点到这边就等于替玩家把牌打出去了（取景探针踩过：走到第 1 回合时手里 0 张，
+        ///   于是那一屏的验收图全是空手牌）。
+        ///
+        /// ★ 日志**只在真的动过状态时**打一行：每帧都打会把要看的行冲没
+        ///   （别人踩过这个坑：一个 stage 打了几百行，真正要看的行全被冲走了）。
+        /// ★ 最多重开两次：只有一次机会的话，"一直被点"会让探针卡在这一屏来回跑。
+        /// </summary>
+        private static bool ProbeSaveGuard(string who)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null)
+            {
+                Debug.LogWarning("[AutoPlay/存档] " + who + "：找不到 TableTurnLoop / 规则侧，这条链跳过。");
+                return false;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+
+            bool ok = loop.phase == TablePhase.Select && !r.levelOver && r.turnIndex == 1
+                      && r.actionPoints == GameJam.Rules.LevelRun.ActionPointsPerTurn
+                      && HandCardCount() > 0;
+
+            if (ok) return true;
+
+            if (saveProbeGuardRetries >= 2)
+            {
+                Debug.LogWarning("[AutoPlay/存档] " + who + "：连着 " + saveProbeGuardRetries +
+                                 " 次都没能把局面摆回第 1 回合（阶段 " + loop.phase + "、3D 手牌 " +
+                                 HandCardCount() + " 张）→ 不再重开，后面的数字只能当作废。");
+                return true;
+            }
+
+            saveProbeGuardRetries++;
+
+            Debug.LogWarning("[AutoPlay/存档] " + who + "：局面已经被动过（阶段 " + loop.phase +
+                             "、回合 " + r.turnIndex + "、行动机会 " + r.actionPoints +
+                             "、3D 手牌 " + HandCardCount() + " 张）→ 重开一局再走到这一屏。");
+
+            loop.Begin();                 // 回开场
+            ProbeEnsureBladePick();       // 点书 → 选关 → 选牌组，停在「选刀片」（它自己会打"摆位"日志）
+            return false;
+        }
+
+        /// <summary>给刀片补层数（探针调味）：热 2 衰退 + **热 1 不衰退** + 催化 1。</summary>
+        private static void ProbeSaveAddLayers()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) return;
+
+            GameJam.Rules.BladeState b = loop.rulesV21.blade;
+            if (b == null) return;
+
+            string before = b.layers.Describe();
+
+            // ★ 特意带上一条"不衰退"的层：存档里那两份计数**必须分开写**
+            //   （只存总数的话，读回来要么永远不掉、要么下次回合结束就掉光）
+            b.layers.Add(GameJam.Rules.LayerKind.Heat, 2);
+            b.layers.Add(GameJam.Rules.LayerKind.Heat, 1, true);
+            b.layers.Add(GameJam.Rules.LayerKind.Catalyst, 1);
+
+            Debug.Log("[AutoPlay/存档] 探针调味：刀片附魔 " + before + " → " + b.layers.Describe() +
+                      "（其中热×1 是**不衰退**的 —— 存档要能把它单独存回来）");
+        }
+
+        /// <summary>存档前的手牌检查：读档后的"拖法术进附魔位"要用还留在手里的那张法术。</summary>
+        private static void ProbeSaveHandCheckpoint(string what)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) return;
+
+            TableRulesV21 r = loop.rulesV21;
+            Debug.Log("[AutoPlay/存档] " + what + "：素材 " + r.hand.Count + " 张｜法术 " + r.handSpells.Count +
+                      " 张｜" + r.HandText() +
+                      "｜桌面 " + r.LiveTableCount() + " 张：" + r.TableText());
+
+            if (r.handSpells.Count == 0)
+                Debug.LogWarning("[AutoPlay/存档] " + what + "：手里一张法术都没有 —— " +
+                                 "读档后那一项回归（拖法术进附魔位）会测不到，如实记下。");
+        }
+
+        /// <summary>"存档要比对的那几个数字"——一行（存档前 / 读档后各打一次）。</summary>
+        private static string ProbeSaveNumbers()
+        {
+            TableTurnLoop loop = Loop();
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (loop == null || loop.rulesV21 == null) return "（规则侧不在）";
+
+            TableRulesV21 r = loop.rulesV21;
+            GameJam.Rules.BladeState b = r.blade;
+
+            return "回合 " + r.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel
+                 + "｜行动机会 " + r.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn
+                 + "｜分数 " + r.score + "/" + r.targetScore
+                 + "｜刀片 " + (b != null ? b.name : "?") + " H" + (b != null ? b.H : 0) + " V" + (b != null ? b.V : 0)
+                 + "｜附魔 " + (b != null ? b.layers.Describe() : "（无）")
+                 + "｜桌面 " + r.LiveTableCount() + " 张"
+                 + "｜手牌 " + r.hand.Count + " 素材 + " + r.handSpells.Count + " 法术"
+                 + "｜被动 " + r.BladePassiveCount + " 条"
+                 + "｜空白卡 " + r.blankCount
+                 + "｜3D 手牌 " + (setup != null && setup.hand != null ? setup.hand.Count : -1) + " 张";
+        }
+
+        private static void ProbeSaveLogNumbers(string what)
+        {
+            Debug.Log("[AutoPlay/存档] " + what + "：" + ProbeSaveNumbers());
+        }
+
+        /// <summary>存档：走 TableTurnLoop.SaveGame —— 就是暂停菜单「保　存」按钮按下去那件事。</summary>
+        private static void ProbeSaveNow()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null) { Debug.LogWarning("[AutoPlay/存档] 找不到 TableTurnLoop，存档跳过。"); return; }
+
+            saveProbeBeforeNumbers = ProbeSaveNumbers();
+            Debug.Log("[AutoPlay/存档] 存档前 " + saveProbeBeforeNumbers);
+
+            bool ok = loop.SaveGame();
+
+            string size = "（文件不在）";
+            try
+            {
+                System.IO.FileInfo fi = new System.IO.FileInfo(TableTurnLoop.SavePath);
+                if (fi.Exists) size = fi.Length + " 字节";
+            }
+            catch (System.Exception) { }
+
+            Debug.Log("[AutoPlay/存档] 保存" + (ok ? "成功" : "★ 失败") +
+                      "｜文件 " + TableTurnLoop.SavePath + "（" + size + "）｜notice " + loop.notice);
+        }
+
+        /// <summary>把开场那块「继　续」的亮/灰状态打进日志（用户口径：没档 / 坏档必须是灰的）。</summary>
+        private static void ProbeSaveLogContinueState(string what)
+        {
+            TableTurnLoop loop = Loop();
+            TableTitleRig rig = Object.FindObjectOfType<TableTitleRig>();
+            if (rig == null)
+            {
+                Debug.LogWarning("[AutoPlay/存档] 找不到 TableTitleRig，" + what + " 的牌子状态记不了。");
+                return;
+            }
+
+            bool fileThere = false;
+            try { fileThere = System.IO.File.Exists(TableTurnLoop.SavePath); } catch (System.Exception) { }
+
+            Debug.Log("[AutoPlay/存档] " + what + "：「继　续」" + (rig.ContinueEnabled ? "亮着（能读）" : "灰着（读不了）") +
+                      "｜提示「" + rig.ContinueHint + "」｜存档文件在不在 " + fileThere +
+                      "｜阶段 " + (loop != null ? loop.phase.ToString() : "?"));
+        }
+
+        /// <summary>反例：把存档文件**改坏**（先备份好档原文，验完再写回去）。</summary>
+        private static void ProbeSaveCorruptFile()
+        {
+            string path = TableTurnLoop.SavePath;
+            try
+            {
+                saveProbeBackupText = System.IO.File.ReadAllText(path);
+                System.IO.File.WriteAllText(path, "{ \"version\": 1, \"kind\": \"v21-table-save\", \"state\": { ",
+                                            new System.Text.UTF8Encoding(false));
+
+                Debug.LogWarning("[AutoPlay/存档] 反例：存档已被**改坏**（截断成半截 JSON）—— " +
+                                 "好档原文 " + saveProbeBackupText.Length + " 字符已备份，验完写回去。｜" + path);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[AutoPlay/存档] 反例：改坏存档失败 —— " + e.GetType().Name + " " + e.Message);
+            }
+        }
+
+        /// <summary>把备份的好档写回去（反例验完之后）。</summary>
+        private static void ProbeSaveRestoreFile()
+        {
+            if (string.IsNullOrEmpty(saveProbeBackupText))
+            {
+                Debug.LogWarning("[AutoPlay/存档] 没有备份文本可恢复 —— 存档保持在坏的状态。");
+                return;
+            }
+
+            try
+            {
+                System.IO.File.WriteAllText(TableTurnLoop.SavePath, saveProbeBackupText,
+                                            new System.Text.UTF8Encoding(false));
+                Debug.Log("[AutoPlay/存档] 好档已写回（" + saveProbeBackupText.Length + " 字符）｜" + TableTurnLoop.SavePath);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[AutoPlay/存档] 写回好档失败 —— " + e.GetType().Name + " " + e.Message);
+            }
+        }
+
+        /// <summary>让开场重新判定一次"这一档能不能读"（= 玩家回一趟开场时发生的事）。</summary>
+        private static void ProbeSaveRebuildTitle(string why)
+        {
+            TableTitleRig rig = Object.FindObjectOfType<TableTitleRig>();
+            if (rig == null)
+            {
+                Debug.LogWarning("[AutoPlay/存档] 找不到 TableTitleRig，" + why + " 判定不了。");
+                return;
+            }
+
+            rig.Build();
+            ProbeSaveLogContinueState(why);
+        }
+
+        /// <summary>按一下「继　续」（走 ActivateContinue = 玩家点那块木牌的同一条路）。</summary>
+        private static void ProbeSavePressContinue(string what)
+        {
+            TableTitleRig rig = Object.FindObjectOfType<TableTitleRig>();
+            TableTurnLoop loop = Loop();
+            if (rig == null || loop == null)
+            {
+                Debug.LogWarning("[AutoPlay/存档] 找不到 TableTitleRig / TableTurnLoop，" + what + " 跳过。");
+                return;
+            }
+
+            string before = loop.phase.ToString();
+            rig.ActivateContinue();
+
+            Debug.Log("[AutoPlay/存档] " + what + "：阶段 " + before + " → " + loop.phase +
+                      "｜notice " + loop.notice + "｜" + loop.StateSummary());
+        }
+
+        /// <summary>
+        /// 反例：坏档时**直接走读档入口**（模拟"牌子还亮着时点下去"这一下）。
+        /// 判据三条：返回 false、阶段没变、两边的数字一个都没变。
+        /// </summary>
+        private static void ProbeSaveLoadRejected()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null) { Debug.LogWarning("[AutoPlay/存档] 找不到 TableTurnLoop，坏档用例跳过。"); return; }
+
+            string before     = ProbeSaveNumbers();
+            string phaseBefore = loop.phase.ToString();
+            int tableBefore   = loop.rulesV21 != null ? loop.rulesV21.LiveTableCount() : -1;
+            int handBefore    = loop.rulesV21 != null ? (loop.rulesV21.hand.Count + loop.rulesV21.handSpells.Count) : -1;
+
+            bool ok = loop.ContinueFromSave();
+
+            int tableAfter = loop.rulesV21 != null ? loop.rulesV21.LiveTableCount() : -1;
+            int handAfter  = loop.rulesV21 != null ? (loop.rulesV21.hand.Count + loop.rulesV21.handSpells.Count) : -1;
+            string after   = ProbeSaveNumbers();
+            bool untouched = (before == after) && (tableBefore == tableAfter) && (handBefore == handAfter);
+
+            Debug.LogWarning("[AutoPlay/存档] ㉟⑤ 坏档直接走读档入口：返回 " + ok + "（期望 false）" +
+                             "｜阶段 " + phaseBefore + " → " + loop.phase + "（期望还停在开场）" +
+                             "｜桌面 " + tableBefore + " → " + tableAfter + " 张｜手牌 " + handBefore + " → " + handAfter +
+                             " 张｜局面一个字节都没动 = " + untouched +
+                             "｜notice " + loop.notice +
+                             "\n   拒绝前 " + before + "\n   拒绝后 " + after);
+
+            // 读档失败之后，开场那块牌子应当回到灰的（用户口径第二条）
+            ProbeSaveRebuildTitle("㉟⑤ 坏档被拒之后");
+        }
+
+        /// <summary>读档后逐条对照：存档前那一行 vs 现在这一行。</summary>
+        private static void ProbeSaveCompareNumbers(string what)
+        {
+            string now = ProbeSaveNumbers();
+            bool same = (now == saveProbeBeforeNumbers);
+
+            Debug.Log("[AutoPlay/存档] " + what + "：" +
+                      "\n   存档前 " + saveProbeBeforeNumbers +
+                      "\n   " + (same ? "✓ 读档后 " : "★ 读档后 ") + now +
+                      "\n   逐条一致 = " + same + "（回合/行动机会/分数/刀片 H·V/附魔层数/桌面/手牌/被动/空白卡/3D 手牌）");
         }
 
         /// <summary>
