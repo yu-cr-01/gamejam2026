@@ -3354,6 +3354,432 @@ namespace GameJam.EditorTools
 
                 case 414:
                     if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
+                    // ㊸⓪~㊹⑨ 那一段（430+）是同一个开关下的**取证续段**：它自己会重开一局，
+                    // 所以 400~414 那一局的结论一个字都不受影响。
+                    Stage = 430;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㊸⓪~㊹⑨ 两个 bug 修好之后的**实跑取证**（DSH_SACPROBE=1）
+                //
+                //  【要证的两件事】
+                //   Bug A：`IsLastStartForSure()` 原来第一条判据是死条件 `actionPoints <= 0`，
+                //     于是"把最后一个行动机会用掉的那一次启动"（AP 1→0）不被认作最后一次，
+                //     第 ⑤ 步写"本次不是本回合实际使用的最后一次启动 → 不吞噬"，目标卡留在桌上。
+                //     修成 `actionPoints <= 1` 之后，那一次必须当场写"并入刀片"。
+                //   Bug B：`SyncVisualsAfterActivate` 第①步原来遍历**规则侧的 table**
+                //     （引擎 `RemoveFromTable` 已经把那一项从 List 里摘掉了）→ 循环永远进不去，
+                //     飞行动画是死代码，"正在飞的卡：0 张"。改成遍历 tableCards（视图侧）之后，
+                //     必须真能抓到"卡在桌面与破壁机之间"的中间帧。
+                //
+                //  【局面怎么造（每一步都走玩家那条路，一行玩法代码都不碰）】
+                //   牌组 0「硫硝爆燃」+ 刀片核心点名**硝石 H12**（H4 的核心第 4 次就爆刀 ——
+                //   那正是以前从来没抓到吞噬的原因）。
+                //   ★★ 三张素材的 D **都是 3**，而一回合只有 5 次启动 —— 所以"五次要摊在两张卡上"
+                //      这条路是死的：谁被打到第 3 下，谁的第 3 下就是 `D-1 → D=0` →
+                //      当场触发「D耗尽」（`ExhaustTarget` 把 `removed=true` 并移出桌面），
+                //      第 ⑤ 步只会写反例②那句"已因…D耗尽移出桌面 → 本次献祭不生效"。
+                //      第一版探针就是这么摆的（水打 3 下），实跑日志抓到的正是那句 ——
+                //      所以**第 5 次必须打一张这一回合还没被打过的卡**（D 3→2 > 0）。
+                //   第 1 回合（行动机会 5，刚好 5 次启动）：
+                //     ① 水 / 外星合金 / 硫磺 上桌；**火焰故意留在手里**（手牌不空
+                //        → "手牌空"那一条永远不成立，只剩"用掉最后一个行动机会"能命中）
+                //     ② 启动 1/5、2/5 打**水**（水带遇热：第 1 下先把火焰那 1 层热吃掉、
+                //        第 2 下无层数不反应），D 3→2→1（仍在桌上）
+                //     ③ 启动 3/5、4/5 打**外星合金**（惰性、不响应热/冷/酸），D 3→2→1（仍在桌上）
+                //     ④ ★ 启动 5/5（行动机会 1→0）打**硫磺**（这一回合**第一次**被打，
+                //        无热层所以不会"易燃 + 热"形态变化）：D 3→2 > 0 → 目标仍在桌上
+                //        → 按正文 §四.5 必须**当场吞噬**
+                //        （★ 这就是修好的那一条：修前 `actionPoints <= 0` 是死条件，
+                //          这一次会被判成"不是最后一次" → 第 ⑤ 步写"不吞噬"）
+                //   第 2 回合（行动机会重置 5；三张素材都只剩 D ≥ 1 → 谁都不会耗尽）：
+                //     ⑤ 拖「硫磺」回手牌 —— 它第 1 回合启动过 → **必须被拒**
+                //     ⑥ 把本回合还没启动过的「水」打上桌 → 拖回手牌 → **必须被收下**
+                //        （同一张卡、同一个入口，只有"本回合启动过没有"不同）
+                //
+                //  【飞行动画怎么抓】`Shot()` 的 ShotSettle 是 1.6 秒（防串帧），
+                //   而 ConsumeInto 的寿命只有 0.55 秒（法术 0.45）—— 正常速度下连第一张都拍不到。
+                //   所以这一段：`SetTimeScale(0.8)`（0.55 秒 → 现实约 0.69 秒）+
+                //   `SacShotNow`（直接 ScreenCapture，不排队、绕开 ShotSettle）连拍两帧（间隔 0.2 秒）。
+                //   规则结算是一次调用跑完的（引擎不看 Time.deltaTime），放慢只影响动画，
+                //   判据一个字都不变（和 DSH_FXPROBE 同一个理由）。
+                //   ★ 每一帧都把 `PlayCard.IsConsuming` **数出来** —— "在飞"必须是个数字。
+                //   ★ 0.8 是**中间档**：1.0 太快（下一帧就飞完，中间态一帧都拍不到），
+                //     0.3 太慢（0.55 秒的动画拖到现实 1.8 秒，第二次启动要等它）
+                // ══════════════════════════════════════════════════════
+
+                // ㊸⓪ 重开一局（走游戏自己的入口），回到"选刀片"那一屏
+                case 430:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacRestartForApTest();
+                    Stage = 431;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊸① 还是点名硝石当核心（H12 —— 这一段要 5 次启动）
+                case 431:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSacPickCore("硝石");
+                    Stage = 432;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊸② 确认刀片 → 第 1 回合
+                case 432:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeConfirmBladeV21();
+                    Stage = 433;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊸③ 出 水 / 外星合金 / 硫磺（**火焰留着不打** —— 手牌不空，才测得到"用掉最后一个行动机会"那一条）
+                case 433:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!ProbeSacGuardAt("㊸③ 第 1 回合开局（第 1 回合、桌面 0 张、手牌 4 张）", 1, 0, 4))
+                    {
+                        Stage = 430;                      // 重开之后：点核心 → 确认刀片 → 第 1 回合
+                        stageTime = EditorApplication.timeSinceStartup;
+                        return;
+                    }
+                    ProbeSacSetupCheck();
+                    Debug.Log("[AutoPlay/献祭] ㊸③ 这一段开局（**手牌故意留一张火焰**）：" + ProbeSacNumbers());
+                    ProbeSacPlayHandMaterial("水", "㊸③ 水 上桌（第 1、4 次启动的目标）");
+                    Stage = 434;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊸④㊸⑤ 外星合金 / 硫磺上桌
+                case 434:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacPlayHandMaterial("外星合金", "㊸④ 外星合金 上桌（第 2、3、5 次启动的目标 = 被吞噬那张）");
+                    Stage = 435;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 435:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacPlayHandMaterial("硫磺", "㊸⑤ 硫磺 上桌（打一次；后面拿它验「本回合启动过的不能收回手牌」）");
+                    Stage = 436;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊸⑥ 截图：三张素材上桌的对照帧（桌上 3 张、手里 1 张法术、行动机会满 5）
+                case 436:
+                    if (!Shot("sac21_01_three_on_table.png")) return;
+                    Debug.Log("[AutoPlay/献祭] ㊸⑥ 三张素材上桌、手里留着一张火焰（行动机会满 5）："
+                              + ProbeSacNumbers());
+                    Stage = 437;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊸⑦ 启动 1/5 打**水**（热×1 在这一步被吃掉；手牌不空 → 按判据**不该**吞噬）
+                case 437:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacSelectTable("水");
+                    ProbeSacActivate("㊸⑦ 启动 1/5 打「水」（行动机会 5→4；热×1 被这一步吃掉）");
+                    ProbeSacDumpLastActivate("㊸⑦ 这一下照理不该吞噬（手牌不空、行动机会还剩 4）");
+                    Stage = 438;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊸⑧ 启动 2/5 继续打**水**（D 2→1；水带遇热但热层已被上一步吃掉 → 不会形态变化）
+                case 438:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacSelectTable("水");
+                    ProbeSacActivate("㊸⑧ 启动 2/5 打「水」（行动机会 4→3；D 2→1，仍在桌上）");
+                    Stage = 439;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊸⑨ 启动 3/5 打**外星合金**（惰性、无规则；D 3→2）
+                case 439:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacSelectTable("外星合金");
+                    ProbeSacActivate("㊸⑨ 启动 3/5 打「外星合金」（行动机会 3→2；D 3→2）");
+                    Stage = 440;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊹⓪ 启动 4/5 继续打**外星合金**（D 2→1）—— 打完之后三张卡的 D 都 ≥ 1，
+                //      第 5 次打的是**这一回合还没被打过**的硫磺（D 3→2 > 0）
+                case 440:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacSelectTable("外星合金");
+                    ProbeSacActivate("㊹⓪ 启动 4/5 打「外星合金」（行动机会 2→1；D 2→1）");
+                    Stage = 441;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊹① ★ 第 5 次启动 = **用掉最后一个行动机会的那一次**（AP 1→0）
+                //   ★ 打的是这一回合第一次被启动的「硫磺」：D 3→2 > 0 → 目标结算后仍在桌上
+                //     → 按正文 §四.5 必须**当场吞噬**（刀片 H+4 V+2）
+                //   ★ 压到 0.15 倍速：这一次会真吞噬，"飞向罐口"只有 0.55 秒（现实 3.7 秒）
+                case 441:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    SetTimeScale(0.15f, "㊹① 第 5 次启动（这一次会吞噬 → 要把飞行中间态拍下来）");
+                    ProbeSacSelectTable("硫磺");
+                    ProbeSacActivate("㊹① 启动 5/5 打「硫磺」（行动机会 1→0 = 本回合实际使用的最后一次启动；" +
+                                     "目标 D=3 → 结算后 D=2 > 0 → 期望**吞噬成功**、刀片 H+4 V+2）");
+                    Stage = 442;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊹② ★★ 证据行：这一下的 ①「本回合最后一次启动」那一行 + ⑤ 判定的每一行 ★★
+                //   ★ 这一档**故意不等**（0.15 倍速下卡还在半路）—— 要看的数字在 lastLog 里，
+                //     和动画进度无关；等久了会把飞行中间态等过去。
+                case 442:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.05) return;
+                    ProbeSacDumpLastActivate("㊹② 第 5 次启动（AP 1→0）的原始日志");
+                    Debug.Log("[AutoPlay/献祭] ㊹② 这一下之后还能做什么：" + ProbeSacCanActivateText());
+                    Stage = 443;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊹③㊹④ 连拍：卡在桌面与破壁机之间的中间态
+                //   （0.15 倍速 → 0.55 秒的动画拖到现实约 3.7 秒；这两档各等 0.25 秒
+                //     = 游戏内约 0.037 / 0.075 秒 → 卡刚离开桌面、还没到罐口）
+                case 443:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.25) return;
+                    SacShotNow("sac21_02_consume_flying_a.png");
+                    Debug.Log("[AutoPlay/献祭] ㊹③ 吞噬飞行第 1 帧：" + ProbeSacFlyingCountText("㊹③ 飞行第 1 帧"));
+                    Debug.Log("[AutoPlay/献祭] ㊹③ 吞噬飞行第 1 帧（逐张坐标）：" + ProbeSacFlightText());
+                    Stage = 444;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 444:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.25) return;
+                    SacShotNow("sac21_03_consume_flying_b.png");
+                    Debug.Log("[AutoPlay/献祭] ㊹④ 吞噬飞行第 2 帧：" + ProbeSacFlyingCountText("㊹④ 飞行第 2 帧"));
+                    Debug.Log("[AutoPlay/献祭] ㊹④ 吞噬飞行第 2 帧（逐张坐标）：" + ProbeSacFlightText());
+                    Stage = 445;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊹⑤ 飞完之后：卡自己飞完自毁了（IsConsuming 应当回到 0）
+                case 445:
+                    if (EditorApplication.timeSinceStartup - stageTime < 4.0) return;
+                    SetTimeScale(1f, "㊹⑤ 时间恢复（那张卡应当已经自己飞完自毁）");
+                    Debug.Log("[AutoPlay/献祭] ㊹⑤ 飞完之后（应当 0 张在飞）："
+                              + ProbeSacFlyingCountText("㊹⑤ 飞完之后"));
+                    Stage = 446;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊹⑥ ★ 截图：吞噬之后的桌面 + 面板上的新数字（刀片 H/V + 桌面张数）
+                case 446:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.4) return;
+                    if (!Shot("sac21_04_after_consume.png")) return;
+                    Debug.Log("[AutoPlay/献祭] ㊹⑥ 吞噬之后：" + ProbeSacNumbers());
+                    Debug.Log("[AutoPlay/献祭] ㊹⑥ 吞噬之后（再数一遍在飞的卡）："
+                              + ProbeSacFlyingCountText("㊹⑥ 吞噬之后"));
+                    ProbeLogSync("㊹⑥ 吞噬之后（回归：状态与画面一致 / 残留 0 张）");
+                    Stage = 447;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊹⑦ 结束回合 → 第 2 回合（行动机会重置 5；附魔层数每回合结束 −1）
+                case 447:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSacEndRound();
+                    Stage = 448;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊹⑧ 第 2 回合：桌面剩 水（D=1）+ 外星合金（D=1）—— 两张谁挨一下都会 D耗尽，
+                //   所以"收回手牌"那两帧必须留到第 4 回合（那时桌上剩的是 D 还被没打过的硫磺）。
+                case 448:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!ProbeSacGuardAt("㊹⑧ 第 2 回合（第 2 回合、桌面 2 张、手牌 0 素材 + 1 法术）", 2, 2, 1))
+                    {
+                        Stage = 430;
+                        stageTime = EditorApplication.timeSinceStartup;
+                        return;
+                    }
+                    Debug.Log("[AutoPlay/献祭] ㊹⑧ 第 2 回合开局（桌面两张的 D 都只剩 1）：" + ProbeSacNumbers());
+                    // ★ 时间倍率兜底：㊹① 把它压到 0.15 是为了拍飞行中间态，
+                    //   万一 ㊹⑤ 那一档没跑到（守卫重开 / 被别的进程点掉），
+                    //   后面每一档的等待时间都会按错的口径算 —— 这里再钉一次 1.0。
+                    if (Mathf.Abs(Time.timeScale - 1f) > 0.0001f)
+                        SetTimeScale(1f, "㊹⑧ 兜底（上一段的 0.15 倍速没被还原）");
+                    Stage = 449;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊹⑨ 第 2 回合：把 D=1 的「水」用掉（启动一下 → D 0 → D耗尽移出桌面）
+                //   ★ 这一步是给第 4 回合腾干净桌子：D=1 的卡再挨一下就没了，
+                //     留在桌上只会污染"收回手牌"那两帧的前提。
+                case 449:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacSelectTable("水");
+                    ProbeSacActivate("㊹⑨ 第 2 回合启动「水」（D=1 → D耗尽移出桌面；行动机会 5→4）");
+                    ProbeSacDumpLastActivate("㊹⑨ 这一下不该吞噬（手牌不空、行动机会还剩 4）");
+                    Stage = 450;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊺⓪ 第 2 → 第 3 回合
+                case 450:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSacEndRound();
+                    Stage = 451;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊺① 第 3 回合：把 D=1 的「外星合金」也用掉（同样 D耗尽移出桌面）
+                case 451:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacSelectTable("外星合金");
+                    ProbeSacActivate("㊺① 第 3 回合启动「外星合金」（D=1 → D耗尽移出桌面；行动机会 5→4）");
+                    ProbeSacDumpLastActivate("㊺① 这一下不该吞噬（手牌不空、行动机会还剩 4）");
+                    Stage = 452;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊺② 法术那条飞行动画：打出「火焰」→ 它也是走 ConsumeInto（另一条路径：
+                //   TableRulesV21.OnSpellCardClicked 里 `view.ConsumeInto(JuicerMouth(view), 0.45f)`），
+                //   而"打完立刻 RebuildHand → TableSetup.ClearHand"以前会把它当场销毁 ——
+                //   所以这一档同样要抓到"卡在桌面与罐口之间"的中间帧。
+                //   ★ 出牌/法术都不消耗行动机会，所以第 3 回合打它不影响任何数字。
+                case 452:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    SetTimeScale(0.15f, "㊺② 打出「火焰」（顺带抓法术卡飞向罐口）");
+                    ProbeSacPlaySpell();
+                    Stage = 453;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 453:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.25) return;
+                    SacShotNow("sac21_07_spell_flight_a.png");
+                    Debug.Log("[AutoPlay/献祭] ㊺③ 法术卡飞行第 1 帧：" + ProbeSacFlyingCountText("㊺③ 法术飞行第 1 帧"));
+                    Debug.Log("[AutoPlay/献祭] ㊺③ 法术卡飞行第 1 帧（逐张坐标）：" + ProbeSacFlightText());
+                    Stage = 454;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 454:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.25) return;
+                    SacShotNow("sac21_08_spell_flight_b.png");
+                    Debug.Log("[AutoPlay/献祭] ㊺④ 法术卡飞行第 2 帧：" + ProbeSacFlyingCountText("㊺④ 法术飞行第 2 帧"));
+                    Debug.Log("[AutoPlay/献祭] ㊺④ 法术卡飞行第 2 帧（逐张坐标）：" + ProbeSacFlightText());
+                    Stage = 455;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊺⑤ 法术飞完之后：时间恢复 + 截图 + 级联布局报告（回归：`[V21][布局]` 不许有警告）
+                case 455:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.4) return;
+                    SetTimeScale(1f, "㊺⑤ 时间恢复");
+                    Debug.Log("[AutoPlay/献祭] ㊺⑤ 法术飞完之后（应当 0 张在飞）："
+                              + ProbeSacFlyingCountText("㊺⑤ 法术飞完之后"));
+                    if (!Shot("sac21_09_after_spell_layout.png")) return;
+                    Debug.Log("[AutoPlay/献祭] ㊺⑤ 法术打完之后：" + ProbeSacNumbers());
+                    ProbeLayoutReport("㊺⑤ 法术打完之后（回归：级联布局不变式）");
+                    ProbeLogSync("㊺⑤ 法术打完之后（回归：状态与画面一致 / 残留 0 张）");
+                    ProbeSacWoodShader("㊺⑤ 木纹材质读回");
+                    Stage = 456;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊺⑥ 第 3 → 第 4 回合
+                case 456:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSacEndRound();
+                    Stage = 457;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊺⑦ 第 4 回合：**桌面空、手里只剩两张空白卡**（前几张素材要么被吞噬、要么 D耗尽）
+                //   ★★ 这一段踩到的那条不变式（如实写在这里，省得下一个人再试一遍）：
+                //     素材一旦挨到 D≤0 就被 `ExhaustTarget` **永久**移出桌面并成一张空白卡，
+                //     而"被启动过 → 本回合不能收回手牌"这条记录在 `EndRound` 时清零。
+                //     所以"第 N 回合启动过、第 N+1 回合还在桌上、又还有 D 可扣"这张卡**不存在**
+                //     —— 能拒的那一张必须**在同一回合里**先被启动、再被拖。
+                //     这一局的 3 张素材在第 1 回合就全部被打过了（3 张 D=3，一回合 5 次启动），
+                //     所以"拒绝收回"这个反例只能靠**这一回合新打上桌的一张**来造。
+                //   —— 于是这一段改成：先把本回合的空白卡打上桌 → 拖回手牌（**期望被收下**）；
+                //     而"启动过的收不回来"那条由存档探针的 ㊱③
+                //     （`ProbeWithdrawStartedCheck`，它专门造了"同一回合、已启动"的局面）覆盖。
+                case 457:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!ProbeSacGuardAt("㊺⑦ 第 4 回合（第 4 回合、桌面 0 张、手牌 1 张 = 空白卡）", 4, 0, 1))
+                    {
+                        Stage = 430;
+                        stageTime = EditorApplication.timeSinceStartup;
+                        return;
+                    }
+                    Debug.Log("[AutoPlay/献祭] ㊺⑦ 第 4 回合开局（桌面已空 —— 素材都被吞噬 / D耗尽带走了）："
+                              + ProbeSacNumbers());
+                    Stage = 458;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊺⑧ 把本回合**没启动过**的「空白卡」打上桌（本回合第一次，D 满 3）
+                case 458:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacPlayHandMaterial("空白卡", "㊺⑧ 第 4 回合：空白卡 上桌（本回合还没启动过）");
+                    Stage = 459;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊺⑨ ★ 正例：拖它回手牌 → **必须被收下**（本回合没启动过）
+                case 459:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacWithdrawNamed("空白卡", "㊺⑨ 拖「空白卡」回手牌（本回合没启动过 → 期望被收下）");
+                    ProbeLogSync("㊺⑨ 收回手牌之后");
+                    Stage = 460;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊻⓪ ★ 反例（同一回合里先启动、再拖）：把空白卡再打上桌 → **启动一次**
+                //   （D 3→2，仍在桌上）→ 然后拖它 ↓
+                case 460:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacPlayHandMaterial("空白卡", "㊻⓪ 第 4 回合：空白卡 再上桌（准备验「启动过的收不回来」）");
+                    Stage = 461;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 461:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!ProbeSacSelectTable("空白卡"))
+                    {
+                        Debug.LogWarning("[AutoPlay/献祭] ㊻① 桌面上没有空白卡（\"启动过的收不回来\"这一帧的前提不成立）"
+                                         + "：" + ProbeSacNumbers());
+                        Stage = 463;
+                        stageTime = EditorApplication.timeSinceStartup;
+                        return;
+                    }
+                    ProbeSacActivate("㊻① 第 4 回合启动空白卡（行动机会 5→4；D 3→2，仍在桌上）");
+                    ProbeSacDumpLastActivate("㊻① 这一下不该吞噬（手牌不空、行动机会还剩 4）");
+                    Stage = 462;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊻② ★★ 反例：拖**本回合刚启动过**的「空白卡」回手牌 → **必须被拒**
+                case 462:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacWithdrawNamed("空白卡", "㊻② 拖「空白卡」回手牌（它本回合刚启动过 → 期望被拒）");
+                    Stage = 463;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊻③ 截图：收回之后（手牌里多了一张、桌面少了一张）+ 布局/同步回归
+                case 463:
+                    if (!Shot("sac21_05_withdraw_back.png")) return;
+                    Debug.Log("[AutoPlay/献祭] ㊻③ 收回手牌之后：" + ProbeSacNumbers());
+                    ProbeSacWoodShader("㊻③ 木纹材质再读一次");
+                    ProbeLogSync("㊻③ 收回手牌之后（回归：状态与画面一致 / 残留 0 张）");
+                    ProbeLayoutReport("㊻③ 收回手牌之后（回归：级联布局不变式）");
+                    Stage = 464;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊻④ 收尾
+                case 464:
+                    if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
                     Finish();
                     return;
             }
@@ -6628,6 +7054,20 @@ namespace GameJam.EditorTools
         }
 
         /// <summary>
+        /// 日志里用的卡名（把换行压成一行）。
+        ///
+        /// 【为什么必须压】法术卡的 DisplayName 是**卡面正文**拼出来的、里面带换行
+        ///   （实测"火焰"那张的名字是 `火焰\n附魔到刀片，可叠加。`）——
+        ///   直接拼进日志会把"世界坐标/离家多远/缩放"那一行劈成两行，
+        ///   验收的人看到的就是"「火焰"后面什么都没有（第一版飞行动画那两行就是这么断的）。
+        /// </summary>
+        private static string OneLineCardName(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "（无名）";
+            return s.Replace("\r", " ").Replace("\n", " ").Trim();
+        }
+
+        /// <summary>
         /// 正在飞向罐口的卡（<see cref="PlayCard.IsConsuming"/>）：卡名 / 世界坐标 / 离罐口还有多远 / 缩放。
         ///
         /// 【为什么它必须是数字】"这张卡在飞"和"这张卡被直接删了"在截图上长得一模一样
@@ -6655,7 +7095,7 @@ namespace GameJam.EditorTools
                 flying++;
                 Vector3 p = pc.transform.position;
 
-                sb.Append("\n   · 「").Append(pc.DisplayName).Append("」世界 (")
+                sb.Append("\n   · 「").Append(OneLineCardName(pc.DisplayName)).Append("」世界 (")
                   .Append(p.x.ToString("0.###")).Append(", ")
                   .Append(p.y.ToString("0.###")).Append(", ")
                   .Append(p.z.ToString("0.###")).Append(")｜离罐口 ")
@@ -6982,7 +7422,7 @@ namespace GameJam.EditorTools
 
             TableRulesV21 r = loop.rulesV21;
 
-            Debug.Log("[AutoPlay/献祭] ㊵① " + what + "｜本次启动日志共 " + r.lastLog.Count + " 行"
+            Debug.Log("[AutoPlay/献祭] " + what + "｜本次启动日志共 " + r.lastLog.Count + " 行"
                       + "｜下面只抄①「本回合最后一次启动」那一行、②⑤ 判定的每一行、③ 并入刀片那一行：");
 
             System.Text.StringBuilder sb = new System.Text.StringBuilder();
@@ -7004,8 +7444,8 @@ namespace GameJam.EditorTools
                 }
             }
 
-            Debug.Log("[AutoPlay/献祭] ㊵① 抄完（原文见上一条 [V21] 启动日志）" + sb);
-            Debug.Log("[AutoPlay/献祭] ㊵① 抄完之后的数字：" + ProbeSacNumbers());
+            Debug.Log("[AutoPlay/献祭] " + what + "｜抄完（原文见上一条 [V21] 启动日志）" + sb);
+            Debug.Log("[AutoPlay/献祭] " + what + "｜抄完之后的数字：" + ProbeSacNumbers());
         }
 
         /// <summary>
@@ -7107,46 +7547,53 @@ namespace GameJam.EditorTools
         }
 
         /// <summary>
-        /// 木纹那一项回归（用户报过"桌子的木质表面纹理不见了"）：把**木纹材质**现在挂的是哪个 shader
-        /// 直接打出来。
+        /// 木纹那一项回归（用户报过"桌子的木质表面纹理不见了"）：把**桌子那个 renderer 上的材质**
+        /// 现在挂的是哪个 shader / 哪张贴图直接读回来打一行。
         ///
-        /// 【为什么要读回 shader 名而不是看截图】"纹理丢了"在截图里有三种一样的样子：
-        ///   ① shader 被换掉（打包版 Standard 被剥 → 退到内建兜底）；
-        ///   ② _MainTex 丢了（帖图引用被释放）；
-        ///   ③ 光没了。三条各打一个数，才能一眼分清是哪一条。
+        /// 【它和游戏自己那行 [TableSetup] 桌面材质 是什么关系】
+        ///   游戏只在**建桌子那一刻**打一次（`tableLogged` 保证只打一次）——
+        ///   那行证明"开局是对的"；这一行是在**这一局打完 5 次启动、结束过一次回合之后**再读一次，
+        ///   证明"中途没被人换掉 / 贴图没被释放"。两行不是重复：一行是入口，一行是出口。
+        /// 【为什么按材质反查而不是抓名字】桌子的 GameObject 叫 "Table"，
+        ///   但 `MakeMaterial` 造出来的材质名不一定带这个字 —— 所以两个口径都收，
+        ///   并把命中数打出来（命中 0 个要看得见，不能打印一行空话）。
         /// </summary>
         private static void ProbeSacWoodShader(string what)
         {
-            TableSetup setup = Object.FindObjectOfType<TableSetup>();
-            if (setup == null) { Debug.LogWarning("[AutoPlay/献祭] " + what + "：找不到 TableSetup。"); return; }
-
             Renderer[] all = Object.FindObjectsOfType<Renderer>();
             System.Text.StringBuilder sb = new System.Text.StringBuilder();
             int shown = 0;
+            bool anyStandard = false;
 
-            for (int i = 0; i < all.Length && shown < 6; i++)
+            for (int i = 0; i < all.Length; i++)
             {
                 Renderer rd = all[i];
                 if (rd == null || rd.sharedMaterial == null) continue;
 
-                string n = rd.gameObject.name;
+                string n  = rd.gameObject.name;
                 string mn = rd.sharedMaterial.name;
-                bool wood = (n != null && (n.Contains("Table") || n.Contains("Board") || n.Contains("桌")))
-                         || (mn != null && (mn.Contains("Wood") || mn.Contains("wood") || mn.Contains("Table")));
-                if (!wood) continue;
 
-                Shader sh = rd.sharedMaterial.shader;
-                Texture tex = rd.sharedMaterial.HasProperty("_MainTex") ? rd.sharedMaterial.mainTexture : null;
+                bool wood = (n == "Table")
+                         || (mn != null && (mn.Contains("Wood") || mn.Contains("Table") || mn.Contains("木")));
+                if (!wood || shown >= 4) continue;
 
-                sb.Append("\n   · ").Append(n).Append("｜材质 ").Append(mn)
+                Material m = rd.sharedMaterial;
+                Shader sh = m.shader;
+                Texture tex = m.HasProperty("_MainTex") ? m.mainTexture : null;
+
+                if (sh != null && sh.name == "Standard") anyStandard = true;
+
+                sb.Append("\n   · GO「").Append(n).Append("」｜材质 ").Append(mn)
                   .Append("｜shader=").Append(sh != null ? sh.name : "（null）")
+                  .Append("｜_Color=").Append(m.color.ToString())
                   .Append("｜_MainTex=").Append(tex != null ? (tex.name + " " + tex.width + "×" + tex.height) : "（无）");
 
                 shown++;
             }
 
-            Debug.Log("[AutoPlay/献祭] " + what + "：木纹材质 " + (shown == 0 ? "（一个都没找到）" : "") + sb
-                      + (shown == 0 ? "" : (sb.ToString().Contains("shader=Standard") ? "　✓ shader=Standard" : "　★ 不是 Standard")));
+            Debug.Log("[AutoPlay/献祭] " + what + "：桌子的木纹材质读回 " + shown + " 处"
+                      + (shown == 0 ? "（★ 一处都没找到 —— 这一项没验到）" : sb.ToString())
+                      + (shown == 0 ? "" : (anyStandard ? "　✓ 含 shader=Standard" : "　★ 没有一处是 Standard")));
         }
 
         /// <summary>现在还能不能启动 / 不能的话原因是什么（HUD 上就是这两句）。</summary>
