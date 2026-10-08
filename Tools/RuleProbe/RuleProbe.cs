@@ -71,6 +71,7 @@ namespace GameJam.Tools
             {
                 Console.WriteLine("  素材 " + cards.materials.Count + " 张 · 法术 " + cards.spells.Count + " 张");
                 Table_MatchCases(cards);
+                V3_NewMechanics(cards);
 
                 Console.WriteLine();
                 Console.WriteLine("=== 端到端场景（cards_v21.json 真实文案 + v3 启动流程）===");
@@ -388,6 +389,256 @@ namespace GameJam.Tools
             Check("V档位：高=5", 5, CardValues.VGradeValue("高"));
             Check("V档位：极高=8", 8, CardValues.VGradeValue("极高"));
             Check("V档位：卡表直接写数字也认", 7, CardValues.ParseV("7"));
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  二·五、v3.0 新机制清单（parsed? × executed?）
+        //
+        //  【这一节要钉住的是什么】
+        //    v3.0 定稿给每张卡写了大量新写法（得分翻倍 / 不消耗 H / 层数翻倍 / 每层得分 /
+        //    额外产卡 / 随机法术 / 复制手牌法术 / 常驻被动 / 反应式触发…）。
+        //    对这些写法，**"能解析"和"能执行"是两件事**，而两者一旦混起来，
+        //    就会出现最坏的情况："卡表看起来全绿、游戏里那张卡其实是死的"。
+        //    所以这里按「原文短句 → 期望 op」逐条钉住，并且**再单独钉一条**:
+        //      这个 op 在 TurnEngine.ExecuteAction 里到底有没有真实现。
+        //    EngineExecutes 那张表是照 ExecuteAction 的 switch 逐条抄的；
+        //    哪天引擎补了某个算子，这张表必须跟着改 —— 改不动就说明"报告和实现脱节了"。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 这个 op 在 TurnEngine.ExecuteAction 里**是不是真的有实现**。
+        ///
+        /// 【为什么必须单列一张表】解析器认出一个 op，只说明"这句话读懂了"；
+        ///   引擎里的 switch 是不是照着做了，是另一件事：
+        ///     · BladeNoConsumeH：只打警告，**不豁免**（v3 正文把豁免取消了）；
+        ///     · NoConsumeLayer：只打一行日志，**不产生任何效果**；
+        ///     · LowerEnchantThreshold：真作用是 LayerLedger.LowerThreshold，这条 op 只做记录；
+        ///     · 其余 op 都有实际动作。
+        ///   探针用这张表断言"哪些 op 目前是空转的"，避免报告里把空转写成已实现。
+        /// </summary>
+        private class OpSemantics
+        {
+            public RuleOp op;
+            public bool executed;        // 引擎会真的改状态吗
+            public string note;
+        }
+
+        private static OpSemantics[] EngineOps()
+        {
+            return new OpSemantics[]
+            {
+                new OpSemantics { op = RuleOp.AddScore,              executed = true,  note = "加分" },
+                new OpSemantics { op = RuleOp.MultiplyScore,         executed = true,  note = "得分倍率（本次得分 ×(N-1) 追加）" },
+                new OpSemantics { op = RuleOp.ZeroScore,             executed = true,  note = "本次得分清零" },
+                new OpSemantics { op = RuleOp.ScorePerLayer,         executed = true,  note = "层数 × N 加分" },
+                new OpSemantics { op = RuleOp.ScoreByLayerCount,     executed = true,  note = "按层数加分" },
+                new OpSemantics { op = RuleOp.ScorePerConsumedLayer, executed = true,  note = "已消耗层数 × N 加分" },
+                new OpSemantics { op = RuleOp.BladeNoConsumeH,       executed = false, note = "★ 空转：只打「v3 已失效」警告，启动照样扣 1 H" },
+                new OpSemantics { op = RuleOp.BladeDamageH,          executed = true,  note = "扣刀片 H" },
+                new OpSemantics { op = RuleOp.BladeHardenH,          executed = true,  note = "加刀片 H" },
+                new OpSemantics { op = RuleOp.BladeDamageOtherH,     executed = true,  note = "其他素材 H-N" },
+                new OpSemantics { op = RuleOp.OtherMaterialsDepleteD,executed = true,  note = "其他素材 D-N" },
+                new OpSemantics { op = RuleOp.AddLayer,              executed = true,  note = "加层（可带不衰退）" },
+                new OpSemantics { op = RuleOp.ConsumeLayer,          executed = true,  note = "消耗 N 层" },
+                new OpSemantics { op = RuleOp.ConsumeAllLayers,      executed = true,  note = "消耗所有该类层数" },
+                new OpSemantics { op = RuleOp.NoConsumeLayer,        executed = false, note = "★ 空转：只打一行日志，层数照样会被启动消耗" },
+                new OpSemantics { op = RuleOp.DoubleLayers,          executed = true,  note = "层数翻倍" },
+                new OpSemantics { op = RuleOp.ProduceCard,           executed = true,  note = "产出卡进手牌" },
+                new OpSemantics { op = RuleOp.ProduceRandomSpell,    executed = true,  note = "随机法术（走种子 RNG）" },
+                new OpSemantics { op = RuleOp.EnchantBlade,          executed = true,  note = "附魔 = 加该类型层" },
+                new OpSemantics { op = RuleOp.LowerEnchantThreshold, executed = false, note = "★ 本条只做记录：真作用在 LayerLedger.LowerThreshold（催≥1 → -1，催≥3 → 再 -1）" },
+                new OpSemantics { op = RuleOp.SetBurstMultiplier,    executed = true,  note = "本次结算的爆刀倍率" },
+            };
+        }
+
+        private static OpSemantics SemanticsOf(RuleOp op)
+        {
+            OpSemantics[] all = EngineOps();
+            for (int i = 0; i < all.Length; i++) if (all[i].op == op) return all[i];
+            return null;
+        }
+
+        /// <summary>解析一句，返回它认出来的第一批 op（未识别则为空数组）。</summary>
+        private static RuleAction[] OpsOf(string text, RuleField field, string enchant)
+        {
+            RuleParseResult pr = RuleText.ParseField(text, field, "probe", "probe",
+                new RuleContext(EmptyCardLookup.Instance, enchant));
+
+            List<RuleAction> acts = new List<RuleAction>();
+            for (int i = 0; i < pr.clauses.Count; i++)
+                for (int k = 0; k < pr.clauses[i].actions.Count; k++)
+                    acts.Add(pr.clauses[i].actions[k]);
+            return acts.ToArray();
+        }
+
+        private static bool HasOp(RuleAction[] acts, RuleOp op)
+        {
+            for (int i = 0; i < acts.Length; i++) if (acts[i].op == op) return true;
+            return false;
+        }
+
+        private static RuleAction FirstOp(RuleAction[] acts, RuleOp op)
+        {
+            for (int i = 0; i < acts.Length; i++) if (acts[i].op == op) return acts[i];
+            return null;
+        }
+
+        private static void V3_NewMechanics(JsonCards cards)
+        {
+            Console.WriteLine();
+            Console.WriteLine("=== v3.0 新机制清单（每句：解析结果 × 引擎是否真执行）===");
+
+            // 整份卡表的报告走一遍（下面"半懂字段"要读它）
+            RuleReport mechRep = RuleReport.BuildAll(cards.reportMaterials, cards.spells, cards);
+
+            // ── ① 解析层：每句原文短句 → 期望 op；同时钉住"引擎执行得了吗" ──
+            //
+            //   下面每条都按**定稿原文的短句**写（不是改写过的"引擎友好"版本）：
+            //   卡表里怎么写，这里就怎么解析 —— 这样"策划改了文案"必然在这里红一条。
+            Check("v3机制·得分翻倍：引擎的「得分倍率」是真实现的", true,
+                  SemanticsOf(RuleOp.MultiplyScore) != null && SemanticsOf(RuleOp.MultiplyScore).executed);
+
+            RuleAction[] steam = OpsOf("若刀片有热附魔，则不消耗热层数，且本次启动得分翻倍", RuleField.Startup, "");
+            Check("v3机制·不消耗热层数：解析成「不消耗层」（热）", true,
+                  HasOp(steam, RuleOp.NoConsumeLayer) && FirstOp(steam, RuleOp.NoConsumeLayer).HasKind(LayerKind.Heat));
+            Check("v3机制·不消耗热层数：得分翻倍同时认出来", true,
+                  HasOp(steam, RuleOp.MultiplyScore) && FirstOp(steam, RuleOp.MultiplyScore).amount == 2);
+            Check("v3机制·不消耗热层数：★ 引擎这个 op 是空转（层数照样被消耗）", false,
+                  SemanticsOf(RuleOp.NoConsumeLayer).executed);
+
+            RuleAction[] salt = OpsOf("若有冷/热/酸，层数翻倍", RuleField.Startup, "");
+            Check("v3机制·层数翻倍：认成「层数翻倍」，类别取自条件（冷/热/酸）", true,
+                  HasOp(salt, RuleOp.DoubleLayers) && FirstOp(salt, RuleOp.DoubleLayers).layers.Length == 3);
+
+            RuleAction[] vapor = OpsOf("若刀片有热附魔，则本次启动消耗刀片所有热层数，每消耗一层获得2分", RuleField.Startup, "");
+            Check("v3机制·消耗所有热层数并每层得 2 分：两个 op 都认出来", true,
+                  HasOp(vapor, RuleOp.ConsumeAllLayers) && HasOp(vapor, RuleOp.ScorePerConsumedLayer));
+            Check("v3机制·每消耗一层 2 分：类别由前面那次消耗补齐（热）", true,
+                  FirstOp(vapor, RuleOp.ScorePerConsumedLayer).HasKind(LayerKind.Heat) &&
+                  FirstOp(vapor, RuleOp.ScorePerConsumedLayer).amount == 2);
+
+            RuleAction[] ice = OpsOf("若刀片冷层数≥3，则本次启动额外产生一张冰霜法术进手牌", RuleField.Startup, "");
+            Check("v3机制·额外产生某卡进手牌：产出名 = 「冰霜」（后缀「法术进手牌」已剥掉）", true,
+                  HasOp(ice, RuleOp.ProduceCard) && FirstOp(ice, RuleOp.ProduceCard).cardName == "冰霜");
+
+            RuleAction[] scroll = OpsOf("指定手牌中的1张法术卡，复制2张", RuleField.Sacrifice, "");
+            Check("v3机制·复制手牌法术：★ 认不出来（要玩家选牌，没有交互模型）→ 必须进未识别清单", 0, scroll.Length);
+
+            RuleAction[] copper = OpsOf("刀片每次启动，其他素材D-2", RuleField.Sacrifice, "");
+            Check("v3机制·常驻被动（其他素材D-2）：认成「其他素材D-N」且注册成每次启动", true,
+                  HasOp(copper, RuleOp.OtherMaterialsDepleteD) && FirstOp(copper, RuleOp.OtherMaterialsDepleteD).amount == 2);
+
+            RuleAction[] glass = OpsOf("每次消耗H时，获得1分", RuleField.Sacrifice, "");
+            Check("v3机制·每次消耗H时得1分：★ 反应式触发认不出来（没有钩子）→ 必须进未识别清单", 0, glass.Length);
+
+            RuleAction[] mGlass = OpsOf("每次获得冷层数时，翻倍", RuleField.Sacrifice, "");
+            Check("v3机制·每次获得冷层数时翻倍：★ 反应式触发认不出来 → 必须进未识别清单", 0, mGlass.Length);
+
+            RuleAction[] mercury = OpsOf("刀片每次受到大于等于2点H的损伤时，减少1点", RuleField.Sacrifice, "");
+            Check("v3机制·受击≥2点H时减1点：★ 反应式触发认不出来 → 必须进未识别清单", 0, mercury.Length);
+
+            RuleAction[] gold = OpsOf("一次性获得30分，获得3张催化术", RuleField.Sacrifice, "");
+            Check("v3机制·一次性获得 N 层/张：30 分 + 3 张催化术都认出来", true,
+                  HasOp(gold, RuleOp.AddScore) && FirstOp(gold, RuleOp.AddScore).amount == 30 &&
+                  HasOp(gold, RuleOp.ProduceCard) && FirstOp(gold, RuleOp.ProduceCard).count == 3);
+
+            // 熔融金：整句是"刀片减少5H，额外增加10V"。
+            // ★ 前半句（H-5）本身要认出来 —— 但**整句是半懂**（V 那半认不出来），
+            //   所以这一整句不进 clauses（引擎不会执行它，见文件头的"不半懂半执行"不变量）。
+            //   探针分两层钉：① 单独那半句必须解析成 BladeDamageH(5)；② 整句必须出现在「半懂字段」里。
+            RuleAction[] moltenGoldHalf = OpsOf("刀片减少5H", RuleField.Sacrifice, "");
+            Check("v3机制·刀片 H±n：单独那半句「刀片减少5H」认成扣 5 点", true,
+                  HasOp(moltenGoldHalf, RuleOp.BladeDamageH) && FirstOp(moltenGoldHalf, RuleOp.BladeDamageH).amount == 5);
+
+            RuleAction[] moltenGold = OpsOf("刀片减少5H，额外增加10V", RuleField.Sacrifice, "");
+            Check("v3机制·刀片 V+n：★ 认不出来（刀片模型没有 V）→ 整句不执行、进未识别清单", 0, moltenGold.Length);
+            // ★ 这一句是典型的**半懂**：前半句认得出、后半句认不出。
+            //   以前的账目只看"clauses + unrecognized == 句子数"，这种事在汇总里看不出来
+            //   （面板上只写"未识别 1"，看不出前半句本来是可以生效的），
+            //   所以报告里专门加了「半懂字段」一节钉住它。
+            Check("v3机制·半懂字段：熔融金献祭必须被记成「半懂」（一半认得出、一半认不出）", true,
+                  HasPartialField(mechRep, "熔融金·献祭"));
+
+            RuleAction[] acid = OpsOf("使当前所有酸层数翻倍，减少刀片等同于当前酸层数的H，同时获得等同于当前酸层数的分数", RuleField.Spell, "");
+            Check("v3机制·爆刀分数3倍（酸爆前半句）：层数翻倍 + 按层扣H + 按层得分", true,
+                  HasOp(acid, RuleOp.DoubleLayers) && HasOp(acid, RuleOp.BladeDamageH) && HasOp(acid, RuleOp.ScoreByLayerCount));
+
+            RuleAction[] burst = OpsOf("如果通过此卡达成爆刀，爆刀产生的分数翻倍变为3倍", RuleField.Spell, "");
+            Check("v3机制·爆刀分数3倍：认成「爆刀倍率 ×3」", true,
+                  HasOp(burst, RuleOp.SetBurstMultiplier) && FirstOp(burst, RuleOp.SetBurstMultiplier).amount == 3);
+
+            RuleAction[] catalyst = OpsOf("附魔1层催化到刀片，可叠加。每层催化降低热/冷/酸附魔触发阈值1点，最多降低2点",
+                                          RuleField.Spell, "催化");
+            Check("v3机制·触发阈值降低（催化）：降阈值 + 「最多降低2点」上限声明都收下，整句无未识别", true,
+                  HasOp(catalyst, RuleOp.LowerEnchantThreshold) && HasOp(catalyst, RuleOp.None) &&
+                  RuleText.ParseField("每层催化降低热/冷/酸附魔触发阈值1点，最多降低2点", RuleField.Spell, "c", "催化术",
+                      new RuleContext(EmptyCardLookup.Instance, "催化")).unrecognized.Count == 0);
+            Check("v3机制·阈值降低：真作用在 LayerLedger.LowerThreshold（催≥1 → -1、催≥3 → 再 -1）", 1,
+                  CatalystThreshold(3));
+
+            RuleAction[] crystal = OpsOf("根据当前刀片冷层数直接加分，每层冷得2分", RuleField.Spell, "");
+            Check("v3机制·每层冷得2分：整句无未识别，且每层分值 = 2（不是兜底 1、也不是占位）", true,
+                  HasOp(crystal, RuleOp.ScoreByLayerCount) && HasOp(crystal, RuleOp.ScorePerLayer) &&
+                  FirstOp(crystal, RuleOp.ScorePerLayer).amount == 2 &&
+                  RuleText.ParseField("根据当前刀片冷层数直接加分，每层冷得2分", RuleField.Spell, "c", "结晶",
+                      new RuleContext(EmptyCardLookup.Instance, "")).unrecognized.Count == 0);
+
+            RuleAction[] ember = OpsOf("所有“火焰”法术，附加“热”的层数+1", RuleField.Spell, "热");
+            Check("v3机制·余温改写火焰层数：作用范围限定 + 层数+N 都认出来", true,
+                  HasOp(ember, RuleOp.AddLayer) && FirstOp(ember, RuleOp.AddLayer).amount == 1 &&
+                  FirstOp(ember, RuleOp.AddLayer).HasKind(LayerKind.Heat));
+
+            RuleAction[] wood = OpsOf("若桌面上的卡牌为水，启动时，刀片V+1", RuleField.Sacrifice, "");
+            Check("v3机制·桌面卡为水时刀片V+1：★ 认不出来（没有桌面条件 + 刀片没有 V）→ 必须进未识别清单", 0, wood.Length);
+
+            RuleAction[] harden = OpsOf("刀片H+10", RuleField.Spell, "");
+            Check("v3机制·刀片H+n（法术硬化）：认成「加刀片H 10」", true,
+                  HasOp(harden, RuleOp.BladeHardenH) && FirstOp(harden, RuleOp.BladeHardenH).amount == 10);
+
+            // ── ② 未识别清单不能是"引擎接到没接到"的盲区 ──
+            //   上面钉住的 6 句（木头/法术卷轴/熔融金/固态汞/熔融玻璃/玻璃）必须**都在**未识别清单里；
+            //   而催化术/结晶那两句（纯解析修正）必须**不在**了。
+            Check("v3机制·空转 op 清单与非空转 op 清单互不重叠（报告分类不会自相矛盾）", true,
+                  EngineOps().Length == 21 && CountOp(RuleOp.NoConsumeLayer) == 1 && CountOp(RuleOp.BladeNoConsumeH) == 1);
+        }
+
+        private static int CountOp(RuleOp op)
+        {
+            int n = 0;
+            OpSemantics[] all = EngineOps();
+            for (int i = 0; i < all.Length; i++) if (all[i].op == op) n++;
+            return n;
+        }
+
+        /// <summary>给刀片挂 n 层催化之后，基础阈值 3 会被降到几（照 LayerLedger.LowerThreshold 的实现验）。</summary>
+        private static int CatalystThreshold(int catalysts)
+        {
+            LayerLedger l = new LayerLedger();
+            for (int i = 0; i < catalysts; i++) l.Add(LayerKind.Catalyst, 1, false);
+            return l.LowerThreshold(3);
+        }
+
+        /// <summary>报告里的「半懂字段」清单里有没有这个条目（前缀匹配，例如 "熔融金·献祭"）。</summary>
+        private static bool HasPartialField(RuleReport rep, string prefix)
+        {
+            for (int i = 0; i < rep.partialFields.Count; i++)
+                if (rep.partialFields[i].StartsWith(prefix, StringComparison.Ordinal)) return true;
+            return false;
+        }
+
+        /// <summary>从整表报告里读出「结晶」那条"每层冷得 N 分"的 N（读不到返回 -1）。</summary>
+        private static int CrystalPerLayer(RuleReport rep)
+        {
+            for (int i = 0; i < rep.fields.Count; i++)
+            {
+                RuleParseResult f = rep.fields[i];
+                if (f.cardName != "结晶" || f.field != RuleField.Spell) continue;
+
+                for (int c = 0; c < f.clauses.Count; c++)
+                    for (int a = 0; a < f.clauses[c].actions.Count; a++)
+                        if (f.clauses[c].actions[a].op == RuleOp.ScorePerLayer) return f.clauses[c].actions[a].amount;
+            }
+            return -1;
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -1344,13 +1595,17 @@ namespace GameJam.Tools
             //   ★★ v3.0 定稿（2026-10-08）之后这四个数**不再可能是 0**，原因不是回归、
             //      是**卡表先落地、引擎算子下一阶段才做**（本次任务明确：本阶段只转写数据 + 出报告）。
             //      所以断言改成"钉住当前的账"，而不是放宽成 `>= 0`（那等于把金丝雀放飞）：
-            //        · 未识别 8：木头/法术卷轴/熔融金/固态汞/熔融玻璃/玻璃/催化术/结晶 的新写法；
+            //        · 未识别 6：木头（桌面卡为水 + V+1）/ 法术卷轴（指定手牌复制）/ 熔融金（增加10V）
+            //          / 固态汞（受击时减伤）/ 熔融玻璃（每次获得冷层数时翻倍）/ 玻璃（每次消耗H时得1分）；
+            //          ★ 从 8 降到 6 的原因：催化术的"最多降低2点"、结晶的"每层冷得2分"
+            //            这两句是**解析器自己认不出**（不是策划写法超纲），本轮在 RuleText 里补了词条
+            //            （纯解析修正，语义仍等引擎，见缺口报告）；卡表一个字都没改。
             //        · 规则表接不上 22：v3.0 把"遇热/遇酸"这类**重复的形态转换行**删掉了，
             //          而标签（遇热/金属/可溶/液体…）还在，AuditProducts 就会按标签去要产物；
             //        · v3 失效写法 8：v3.0 把「不消耗刀片H」写回了 8 张卡（引擎按失效处理并打警告）；
             //        · 可疑产出 1：法术卷轴的形态转换产物「灰烬」不在 v3.0 卡表里（定稿只列了 32 张）。
             //      这四个数一旦变化，说明卡表又被改过 —— 请同步更新 docs/卡牌数值_v3.0_缺口报告.md。
-            Check("解析报告：未识别句子数（v3.0 卡表 = 8，见缺口报告）", 8, rep.unrecognized.Count);
+            Check("解析报告：未识别句子数（v3.0 卡表 = 6，见缺口报告）", 6, rep.unrecognized.Count);
             Check("解析报告：规则表接不上的卡（v3.0 卡表 = 22，见缺口报告）", 22, rep.tableGaps.Count);
             Check("解析报告：v3 已失效写法（v3.0 卡表 = 8 张卡的『不消耗刀片H』）", 8, rep.superseded.Count);
             Check("解析报告：可疑产出（v3.0 卡表 = 1，法术卷轴产出的「灰烬」不在 32 张里）", 1, rep.unknownProducts.Count);
@@ -1378,11 +1633,22 @@ namespace GameJam.Tools
 
             Check("解析报告：没有『执行不了』的条目（v3 里素材有 H 了，v2.1 的『其他素材H』也能落地）",
                  0, rep.unsupported.Count);
-            // ★ v3.0 数据变化：定稿把"每层多少分"写实了（汞蒸气/熔融玻璃/结晶 各给了 2 分），
-            //   所以占位数值从 4 处掉到 **1 处**（只剩酸爆的"每层多少分"没写）。
-            //   这一条断言改成"钉住这 1 处是酸爆"（>= 0 那种写法等于没断言）。
-            Check("解析报告：占位数值 = 1 处，且只剩酸爆那一条（v3.0 把其它每层分值都写实了）",
-                  true, rep.placeholders.Count == 1 && rep.placeholders[0].Contains("酸爆"));
+            // ★ v3.0 数据变化：定稿把"每层多少分"写实了一部分（汞蒸气 2 分 / 熔融玻璃 2 分 /
+            //   结晶 2 分），所以占位数值从 4 处掉到 **2 处**：
+            //     · 酸爆"同时获得等同于当前酸层数的分数" —— 正文确实没给每层分值（占位值兜底）；
+            //     · 结晶"根据当前刀片冷层数直接加分" —— 定稿把 2 分写在了**后一小句**
+            //       （"每层冷得2分"），前一小句本身仍然没给数，于是也进了这一节。
+            //       这是**口径不一致**（同一张卡前后两半句一个给数一个不给），值得让策划拍板：
+            //       要么前半句写"每层冷得2分"就删掉，要么后半句并进前半句。
+            //   ★ 这两条都不是"引擎没实现"，而是"正文没给数" —— 报告分节就是为了不混淆这两件事。
+            Check("解析报告：占位数值 = 2 处（酸爆 + 结晶的前半句），且两条都对得上",
+                  true, rep.placeholders.Count == 2 &&
+                        rep.placeholders[0].Contains("酸爆") && rep.placeholders[1].Contains("结晶"));
+            // ★ 结晶的"每层冷得2分"必须是**实数 2**，不能掉到兜底 1、更不能被当成占位：
+            //   掉兜底会让结晶每层只加 1 分（数值错一半），而且报告会把它伪装成"策划没写数"。
+            Check("解析报告：结晶的『每层冷得2分』读到实数 2（不是兜底 1）", true, CrystalPerLayer(rep) == 2);
+            Check("解析报告：半懂字段 = 1 处（熔融金·献祭：H-5 执行、增加10V 不执行）", true,
+                  rep.partialFields.Count == 1 && rep.partialFields[0].StartsWith("熔融金·献祭", StringComparison.Ordinal));
             Check("解析报告：矛盾清单至少 8 条（启动消耗层/爆炸/献祭两义/…；含已按意图修正的爆炸）", true, rep.conflicts.Count >= 8);
 
             ScenarioEnd("报告·不静默失效", mark,

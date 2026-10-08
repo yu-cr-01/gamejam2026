@@ -97,6 +97,12 @@ namespace GameJam.EditorTools
     ///                      顺带把被吞噬那张卡**飞向罐口**的中间帧拍下来
     ///                      （把 timeScale 压到 0.3；IsConsuming 的张数也逐帧进日志）。
     ///                      默认 0 = 完全不介入。
+    ///   DSH_CARDV3PROBE=1  v3.0 卡表落地探针（㊽⓪~㊽③）：验**这一版转写的卡表在游戏里真的看得见**——
+    ///                      开局 → 选核心 → 确认刀片（这一步会打 `[V21] 卡表解析报告` 那行）
+    ///                      → 打开图鉴（走 Esc 菜单同一个入口 CardBrowser.SetOpen）拍一张，
+    ///                      再按系列跳转把"法术"那一列也拍进去；每张 v2.1 里没有的新卡
+    ///                      逐条打一行「注册名 / H / D / V / 类型 / 稀有度」，好和 cards_v21.json 对账。
+    ///                      默认 0 = 完全不介入。
     ///
     /// 【★ 命令行怎么用：-executeMethod 必须指向一个**方法**】
     ///   Unity 的 -executeMethod 只认 `类.方法`，不能指向一个带 [InitializeOnLoad] 的静态类本身。
@@ -161,6 +167,8 @@ namespace GameJam.EditorTools
         private static bool   cardFaceProbe;
         private static bool   saveProbe;
         private static bool   sacProbe;
+        /// <summary>v3.0 卡表落地探针（DSH_CARDV3PROBE=1）：见 ㊽⓪~㊽③。</summary>
+        private static bool   cardV3Probe;
 
         /// <summary>
         /// 相交探针拍完之后回哪一步 —— 进探针时按**来路**记下（开场那条链和牌组/关卡那条链
@@ -254,6 +262,13 @@ namespace GameJam.EditorTools
             //   也单独一个开关：它会把刀片 H 一路用到只剩 1~4、并且**故意让两张卡离场**，
             //   混进主链会让后面那些"验形态变化 / 验回合推进"的步骤失去前提。
             sacProbe = System.Environment.GetEnvironmentVariable("DSH_SACPROBE") == "1";
+
+            // ★ v3.0 卡表落地探针（DSH_CARDV3PROBE=1，见 ㊽⓪~㊽③ 那一段）：
+            //   这一版把卡表整份换成了策划 v3.0 定稿（31 素材 + 8 法术，含刚加进来的冰霜/酸蚀/
+            //   催化术/硬化/余温…）。离线探针能证明"解析报告和数值对得上"，
+            //   但证不了"这些新卡在**游戏里**真的画得出来、点得到"。所以这条链只做一件事：
+            //   进到正式回合 → 打开图鉴 → 把新卡那张拍下来，并把每张新卡的注册名/HDV 打进日志。
+            cardV3Probe = System.Environment.GetEnvironmentVariable("DSH_CARDV3PROBE") == "1";
 
             // ★ 每次域重载都要订阅，否则进 Play 之后就再也没人推进流程了
             EditorApplication.update += Tick;
@@ -609,13 +624,14 @@ namespace GameJam.EditorTools
                     // 提示块只在正式回合画，开局准备那几屏根本没有它）；
                     // 其余支线各走各的（都不设 = 原来的"只用点击"那条路，行为一个字没变）
                     // 献祭吞噬取证探针要从"第 1 回合、什么都没动"这一屏起步（见 ㊲⑧ 那一段）
-                    Stage = sacProbe ? 380
+                    Stage = cardV3Probe ? 480
+                          : (sacProbe ? 380
                           : (saveProbe ? 340
                           : (framingProbe ? 270
                           : (cardFaceProbe ? 300
                           : (overlapProbe ? 296
                           : (layoutProbe ? 240
-                          : (fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110))))))));
+                          : (fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110)))))))));
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -3782,6 +3798,78 @@ namespace GameJam.EditorTools
                     if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
                     Finish();
                     return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㊽⓪~㊽③ v3.0 卡表落地探针（DSH_CARDV3PROBE=1）
+                //
+                //  【为什么这一条单独存在】v3.0 定稿把卡表整份换掉了（素材 31 + 法术 8），
+                //    新增的 冰霜 / 酸蚀 / 催化术 / 硬化 / 余温 在 v2.1 的卡表里根本没有。
+                //    离线探针（Tools/RuleProbe）证明的是"文本能解析、报告数字对得上"，
+                //    它证不了**游戏里这些卡真的画得出来、点得到、数值显示对**——
+                //    那需要真的进 Play、真的打开图鉴看一眼。
+                //    所以这条链只做三件事：
+                //      ① 走游戏自己的开局入口到"第 1 回合"（确认刀片那一步会打
+                //         `[V21] 卡表解析报告` 那行 —— 报告是**引擎自己**建的，探针不另建一份）；
+                //      ② 打开图鉴（CardBrowser.SetOpen，和 Esc 菜单同一个入口）拍两张：
+                //         素材列 + 法术列（法术那列才有 v3.0 新加的法术卡）；
+                //      ③ 把每张 v3.0 新卡在**运行时卡表**里的注册名 / 类型 / H/D/V / 稀有度
+                //         逐条打进日志 —— 日志和截图两条证据互相咬合，少一条都不能算"看得见"。
+                //  ★ 它不改玩法：只调用游戏自己已有的公开入口（SetBrowser / CardSpecs 查询）。
+                // ══════════════════════════════════════════════════════
+
+                // ㊽⓪ 正式回合第一屏：先把"新卡在不在运行时卡表里"逐条落成日志
+                case 480:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeCardV3NewCards("㊽⓪ 进关卡时");
+                    ProbeCardV3Source("㊽⓪ 进关卡时");
+                    Stage = 481;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊽① 打开图鉴（素材列）并截图
+                case 481:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    SetBrowser(true);
+                    Stage = 482;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 482:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.6) return;
+                    if (!Shot("v3_codex_materials.png")) return;
+                    Stage = 483;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊽② 把筛选框设成"冰"（v3.0 新增的「冰霜」法术就是被冰启动产出的），再拍一张
+                case 483:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeCardV3BrowserFilter("冰霜");
+                    Stage = 484;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 484:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.6) return;
+                    if (!Shot("v3_codex_newcard.png")) return;
+                    Stage = 485;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊽③ 关掉图鉴、报告状态、收尾
+                case 485:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    SetBrowser(false);
+                    ProbeReportState("㊽③ 关图鉴之后（回归：报告仍应建着）");
+                    ProbeLogSync("㊽③ v3.0 卡表落地之后（回归：状态与画面一致）");
+                    Stage = 486;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 486:
+                    if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
+                    Finish();
+                    return;
             }
         }
 
@@ -6888,7 +6976,116 @@ namespace GameJam.EditorTools
         }
 
         /// <summary>
-        /// 卡表解析报告现在是什么状态 —— 打包版那个洞要盯的就是它。
+        /// v3.0 卡表落地探针：把**每张新卡的运行时注册情况**逐条打进日志。
+        ///
+        /// 【为什么不直接读 json】json 里写着"冰霜"，运行时卡表（CardSpecs → Ingredient/Spell）
+        ///   才是游戏真正用的那一份。计划文档写"新卡在游戏里可见"，可见指的就是**运行时这份**
+        ///   能被图鉴画出来、能被规则表按名字查到。所以这条日志读的是运行时对象，不是文件。
+        ///   顺带把 H 三档自检的结论也打出来（CardSpecs.SelfCheck 是引擎自带的那条检查）。
+        /// </summary>
+        private static void ProbeCardV3NewCards(string what)
+        {
+            string[] newMaterials = { "木头", "碳", "皮革", "法术卷轴", "铜", "熔融铜", "铜溶液", "铜蒸气",
+                                      "铁", "熔融铁", "铁溶液", "铁蒸气", "黄金", "熔融金", "盐", "盐溶液",
+                                      "汞", "汞蒸气", "固态汞", "硫磺", "硫磺气", "硫磺液", "硫磺粉",
+                                      "沙", "熔融玻璃", "玻璃", "白磷" };
+            string[] newSpells = { "余温", "冰霜", "酸蚀", "催化术", "结晶", "硬化" };
+
+            int matFound = 0, spellFound = 0;
+
+            for (int i = 0; i < newMaterials.Length; i++)
+            {
+                var m = CardSpecs.MaterialById(MaterialIds(newMaterials[i]));
+                if (m == null) continue;
+                matFound++;
+                Debug.Log("[AutoPlay/v3] " + what + " 新素材：「" + m.name + "」id=" + m.id
+                          + "｜H=" + m.h + " D=" + m.d + " V=" + m.v + "（" + m.vGrade + "）"
+                          + "｜类型=" + m.cardType + "｜稀有度=" + m.rarity
+                          + "｜形态=" + m.form + "｜标签=" + string.Join("·", m.tags)
+                          + "｜启动=" + (string.IsNullOrEmpty(m.startup) ? "（无）" : m.startup)
+                          + "｜献祭=" + (string.IsNullOrEmpty(m.sacrifice) ? "（无）" : m.sacrifice));
+            }
+
+            for (int i = 0; i < newSpells.Length; i++)
+            {
+                var s = CardSpecs.SpellByName(newSpells[i]);
+                if (s == null) continue;
+                spellFound++;
+                Debug.Log("[AutoPlay/v3] " + what + " 新法术：「" + s.name + "」id=" + s.id
+                          + "｜附魔=" + (string.IsNullOrEmpty(s.enchant) ? "（无）" : s.enchant)
+                          + "｜稀有度=" + s.rarity + "｜需求=" + s.requirement);
+            }
+
+            // 法务必不标 H/D/V（v3.0 口径）—— 引擎这一侧根本不该存在这三个数
+            Debug.Log("[AutoPlay/v3] " + what + " 新卡计数：素材 " + matFound + "/" + newMaterials.Length
+                      + "｜法术 " + spellFound + "/" + newSpells.Length);
+
+            System.Collections.Generic.List<string> problems = CardSpecs.SelfCheck();
+            Debug.Log("[AutoPlay/v3] " + what + " H 三档自检（CardSpecs.SelfCheck，只允许 "
+                      + CardSpecs.AllowedHText() + "）："
+                      + (problems.Count == 0 ? "0 条问题 ✓" : problems.Count + " 条问题"));
+            for (int i = 0; i < problems.Count; i++) Debug.LogWarning("[AutoPlay/v3] ★ " + problems[i]);
+        }
+
+        /// <summary>卡表里的 id 和中文名不是一回事，这张小表让日志能按 id 取到卡（找不到就返回名字本身）。</summary>
+        private static string MaterialIds(string name)
+        {
+            switch (name)
+            {
+                case "木头": return "wood";
+                case "碳": return "carbon";
+                case "皮革": return "leather";
+                case "法术卷轴": return "spell_scroll";
+                case "铜": return "copper";
+                case "熔融铜": return "molten_copper";
+                case "铜溶液": return "copper_solution";
+                case "铜蒸气": return "copper_vapor";
+                case "铁": return "iron";
+                case "熔融铁": return "molten_iron";
+                case "铁溶液": return "iron_solution";
+                case "铁蒸气": return "iron_vapor";
+                case "黄金": return "gold";
+                case "熔融金": return "molten_gold";
+                case "盐": return "salt";
+                case "盐溶液": return "salt_solution";
+                case "汞": return "mercury";
+                case "汞蒸气": return "mercury_vapor";
+                case "固态汞": return "solid_mercury";
+                case "硫磺": return "sulfur";
+                case "硫磺气": return "sulfur_gas";
+                case "硫磺液": return "sulfur_liquid";
+                case "硫磺粉": return "sulfur_powder";
+                case "沙": return "sand";
+                case "熔融玻璃": return "molten_glass";
+                case "玻璃": return "glass";
+                case "白磷": return "white_phosphorus";
+            }
+            return name;
+        }
+
+        /// <summary>卡表现在是从哪来的（"配置没生效"这类问题第一个要看的就是它）。</summary>
+        private static void ProbeCardV3Source(string what)
+        {
+            Debug.Log("[AutoPlay/v3] " + what + " 卡表来源：" + CardSpecs.Source
+                      + "｜图鉴里一共有 " + CardSpecs.Materials().Count + " 张素材 + "
+                      + CardSpecs.Spells().Count + " 张法术");
+        }
+
+        /// <summary>把图鉴的文字筛选设成某个词（走 CardBrowser.SetFilter 这个公开入口），再报一次筛的是什么。</summary>
+        private static void ProbeCardV3BrowserFilter(string keyword)
+        {
+            CardBrowser b = Object.FindObjectOfType<CardBrowser>();
+            if (b == null)
+            {
+                Debug.LogWarning("[AutoPlay/v3] 找不到 CardBrowser，筛选这次设不了（截图会是全部卡）。");
+                return;
+            }
+
+            b.SetFilter(keyword);
+            Debug.Log("[AutoPlay/v3] 图鉴筛选设为「" + keyword + "」→ 现在读到的是「" + b.Filter + "」"
+                      + "｜图鉴" + (b.IsOpen ? "开着" : "★ 关着（那这张截图拍不到卡）"));
+        }
+
         /// `UnrecognizedCount` 返回 -1 = **报告没建出来**（顶栏会写"无法确认哪些规则没实现"、F2 一片空白）。
         /// </summary>
         private static void ProbeReportState(string what)

@@ -559,6 +559,8 @@ namespace GameJam.Rules
         private static readonly Regex ReHIncrease = new Regex(@"H\s*(?:增加|提高)\s*(\d+)", RegexOptions.Compiled);
         private static readonly Regex ReGainH     = new Regex(@"(?:额外)?获得\s*(\d+)\s*H", RegexOptions.Compiled);
         private static readonly Regex ReScoreNum  = new Regex(@"获得\s*(\d+)\s*分", RegexOptions.Compiled);
+        /// <summary>"每层<类别>得<数>分"（v3.0 结晶）—— 和"获得N分"同义，动词不同。</summary>
+        private static readonly Regex ReScoreAmount = new Regex(@"得\s*(?<n>\d+)\s*分", RegexOptions.Compiled);
         private static readonly Regex ReProduce   = new Regex(@"(?:产生|变为|获得|得到)\s*(?:额外)?\s*(?<n>[0-9一二两三四五六七八九十]+)?\s*张\s*(?<name>[^，。；,、]+)", RegexOptions.Compiled);
         private static readonly Regex ReLayerPlus = new Regex(@"层数\s*(?:\+|＋)\s*(\d+)", RegexOptions.Compiled);
         private static readonly Regex ReDMinus    = new Regex(@"D\s*[-－−–]\s*(\d+)", RegexOptions.Compiled);
@@ -774,13 +776,24 @@ namespace GameJam.Rules
             return ParseCountToken(sb.ToString(), 1);
         }
 
-        /// <summary>"…获得5分" → 5；"…获得一定分数" → 占位哨兵。</summary>
+        /// <summary>
+        /// "…获得5分" → 5；"…得2分" → 2（v3.0 结晶的写法）；"…获得一定分数" → 占位哨兵。
+        ///
+        /// 【为什么"得"也要单独认】ReScoreNum 只认"获得"，而 v3.0 定稿里
+        ///   「结晶」写的是"每层冷**得**2分"。少了这一条，每层分值会掉到兜底值 1，
+        ///   而且会**被当成占位数值**混进报告（看起来像"策划没给数"，其实是解析器没认出来）——
+        ///   这种错最坏，因为它把"引擎没实现"伪装成"策划没写"。
+        /// </summary>
         private static int ScoreAmount(string seg)
         {
             if (seg.Contains("一定分")) return PlaceholderAmount;
 
             Match m = ReScoreNum.Match(seg);
             if (m.Success) return int.Parse(m.Groups[1].Value);
+
+            Match m2 = ReScoreAmount.Match(seg);
+            if (m2.Success && m2.Groups["n"].Success) return int.Parse(m2.Groups["n"].Value);
+
             return 1;
         }
 
@@ -944,6 +957,22 @@ namespace GameJam.Rules
                 return true;
             }
 
+            // 2.5) 阈值修正的**上限声明**（v3.0 催化术："每层催化降低…阈值1点，最多降低2点"）
+            //
+            // 【为什么这句话必须能认出来，而不是丢进未识别】
+            //   前一小句（"降低…阈值"）已经认出来了，错在这一小句没动作 ——
+            //   而解析器的不变量是"整句要么全懂、要么整句未识别"（不半懂半执行，见文件头）。
+            //   于是这句**纯粹的上限声明**会把整张「催化术」拖成未识别，
+            //   连已经认出来的那半句都不执行 —— 这属于解析器的锅，不是策划的锅。
+            //   它声明的上限（最多 -2）由 LayerLedger.LowerThreshold 实现（催≥1→-1、催≥3→再-1），
+            //   所以这里当一个**约束性声明**收下：记日志、不产生动作。
+            if (s.Contains("最多") && s.Contains("降低") && s.Contains("点"))
+            {
+                action = Act(RuleOp.None, rawSeg,
+                    "阈值修正的上限声明：最多降 2 点，由 LayerLedger.LowerThreshold 实现（催≥1 → -1，催≥3 → 再 -1）");
+                return true;
+            }
+
             // 3) 作用范围限定（余温："所有“火焰”法术，附加“热”的层数+1"）：这句话本身没有动作，只是限定对象
             if (s.StartsWith("所有", StringComparison.Ordinal) && s.Contains("法术") &&
                 !s.Contains("产生") && !s.Contains("获得") && !s.Contains("消耗") && !s.Contains("层") && !s.Contains("H"))
@@ -1070,6 +1099,22 @@ namespace GameJam.Rules
             if (s.Contains("每有") && s.Contains("层") && s.Contains("分"))
             {
                 action = Act(RuleOp.ScorePerLayer, rawSeg, "");
+                action.layers = kinds.ToArray();
+                action.amount = ScoreAmount(s);
+                return true;
+            }
+
+            // 15.5) 每层加分（v3.0 结晶："每层冷得2分" —— 和上面同义，只是动词换了）
+            //
+            // 【为什么这条不能丢进未识别】它和"每有1层冷，获得1分"是**同一种效果**，
+            //   只是策划这次写成"每层<类别>得<数>分"。上一个分支要求"每有"两个字，
+            //   于是「结晶」这一小句认不出来，把**已经认出来的前半句**
+            //   （"根据当前刀片冷层数直接加分"）一起拖成未识别 —— 整张法术一个动作都不执行。
+            //   归类同「每层加分」：按刀片当前该类层数 × N 直接加分。
+            if (s.Contains("每层") && s.Contains("得") && s.Contains("分"))
+            {
+                if (kinds.Count == 0) { reason = "『每层…得分』没写是哪一类层数（热/冷/酸/催化）"; return false; }
+                action = Act(RuleOp.ScorePerLayer, rawSeg, "按刀片当前该类层数 × N 直接加分");
                 action.layers = kinds.ToArray();
                 action.amount = ScoreAmount(s);
                 return true;
@@ -1719,6 +1764,18 @@ namespace GameJam.Rules
         /// <summary>有文本、但一条句子都没解析出来（说明切句 / 字段读取出了岔子，不是策划的问题）。</summary>
         public readonly List<string> silentFields = new List<string>();
 
+        /// <summary>
+        /// **半懂字段**：同一个句子里既有认出来的小句、又有认不出来的小句
+        /// （例：熔融金的献祭"刀片减少5H，额外增加10V"—— 前半句执行、后半句不执行）。
+        ///
+        /// 【为什么要单列一节】原来的账目只保证 `clauses + unrecognized == 句子数`，
+        ///   但"这一句一半执行一半不执行"这件事**在汇总里看不出来**：
+        ///   未识别清单里只有后半句（未识别那一句的 partial 写着前半句的动作），
+        ///   而面板上那行 SummaryLine 只报"未识别 N" —— 人会以为整句都没生效。
+        ///   这种"半懂"是 v3.0 卡表里最需要盯的一档（越权执行比不执行更难发现）。
+        /// </summary>
+        public readonly List<string> partialFields = new List<string>();
+
         public int materialCount;
         public int spellCount;
         public int TotalSentences { get; private set; }
@@ -1746,6 +1803,36 @@ namespace GameJam.Rules
             if (!pr.Balanced) UnbalancedFields++;
 
             for (int i = 0; i < pr.unrecognized.Count; i++) unrecognized.Add(pr.unrecognized[i]);
+
+            // 半懂字段：同一句里既有认出来的动作、又有认不出来的小句。
+            //
+            // 【判据为什么不能用 clauses.Count】解析器的不变量是"整句要么全懂、要么整句未识别"，
+            //   所以**未识别那一句的 clause 不会进 clauses** —— 它只作为一个临时的 clause
+            //   被用来写 partial（"已认出：扣刀片H(5)"），随后整句进未识别清单。
+            //   因此"半懂"要看两个地方：① 同一句里有认出来的小句（unrecognized[].partial 非空）；
+            //   ② 或者这一句同时产出了 clause 和未识别（理论上不会同时出现，留着兜底）。
+            for (int i = 0; i < pr.unrecognized.Count; i++)
+            {
+                UnrecognizedRule u = pr.unrecognized[i];
+                if (string.IsNullOrEmpty(u.partial)) continue;
+
+                partialFields.Add(pr.cardName + "·" + pr.FieldLabel + "：这一句里「" + u.partial +
+                                  "」会执行，但「" + u.sentence + "」这一句整句不生效（" + u.reason + "）");
+            }
+
+            if (pr.clauses.Count > 0 && pr.unrecognized.Count > 0)
+            {
+                bool already = false;
+                for (int i = 0; i < pr.unrecognized.Count; i++)
+                    if (!string.IsNullOrEmpty(pr.unrecognized[i].partial)) { already = true; break; }
+
+                if (!already)
+                {
+                    partialFields.Add(pr.cardName + "·" + pr.FieldLabel + "：这一句" +
+                                      (pr.clauses.Count + pr.unrecognized.Count) + "段里 " + pr.clauses.Count +
+                                      " 段执行、" + pr.unrecognized.Count + " 段不执行（未识别段见未识别清单）");
+                }
+            }
 
             for (int i = 0; i < pr.clauses.Count; i++)
                 Scan(pr, pr.clauses[i].actions);
@@ -1883,7 +1970,7 @@ namespace GameJam.Rules
                    " 条：已解析 " + ParsedSentences + " · 未识别 " + unrecognized.Count +
                    " ｜ 执行不了 " + unsupported.Count + " · 占位数值 " + placeholders.Count +
                    " · 可疑产出 " + unknownProducts.Count + " · 规则表接不上 " + tableGaps.Count +
-                   " · v3 已失效写法 " + superseded.Count;
+                   " · v3 已失效写法 " + superseded.Count + " · 半懂字段 " + partialFields.Count;
         }
 
         public void Print(System.IO.TextWriter w)
@@ -1922,6 +2009,9 @@ namespace GameJam.Rules
 
             Section(w, "字段静默丢失（有文本却一句都没解析出来 —— 这是解析器的锅，不是策划的）", silentFields.Count);
             for (int i = 0; i < silentFields.Count; i++) w.WriteLine(" · " + silentFields[i]);
+
+            Section(w, "半懂字段（同一句里一半执行、一半不执行 —— 最容易看漏的一档）", partialFields.Count);
+            for (int i = 0; i < partialFields.Count; i++) w.WriteLine(" · " + partialFields[i]);
         }
 
         public void Print() { Print(Console.Out); }

@@ -81,6 +81,22 @@ namespace GameJam.Prototype
         /// <summary>图鉴现在开着吗（HUD 的 Esc 链要问）。</summary>
         public bool IsOpen { get { return open; } }
 
+        /// <summary>当前的文字筛选词（探针截图前要看一眼自己筛的是什么）。</summary>
+        public string Filter { get { return filter; } }
+
+        /// <summary>
+        /// 设定文字筛选词 —— **给探针用**（v3.0 卡表落地探针要把图鉴筛到某张新卡再截图）。
+        ///
+        /// 【为什么不让探针直接改 filter 字段】filter 是私有的；
+        ///   用反射去改私有字段的探针，会在字段改名时**静默失效**（筛了个空、拍出来的永远是全部），
+        ///   那比"没有这个探针"更糟。所以给一个明确的公开入口，
+        ///   改名会直接编译不过 —— 这正是我们要的失败方式。
+        /// </summary>
+        public void SetFilter(string keyword)
+        {
+            filter = keyword != null ? keyword : "";
+        }
+
         private void OnGUI()
         {
             if (!open) return;
@@ -98,7 +114,7 @@ namespace GameJam.Prototype
             GUILayout.BeginArea(new Rect(18f, 12f, w - 36f, 44f));
             GUILayout.BeginHorizontal();
 
-            GUILayout.Label("卡牌图鉴 v2.1", title);
+            GUILayout.Label("卡牌图鉴 v3.0", title);
             GUILayout.Space(12f);
 
             showMaterials = GUILayout.Toggle(showMaterials, " 素材 ", showMaterials ? btnOn : btn, GUILayout.Width(70f));
@@ -247,7 +263,8 @@ namespace GameJam.Prototype
             GUILayout.Label("H 硬度 " + ing.h + "　D 耐久 " + ing.d + "　"
                             + (ing.v == 0
                                ? "V 数值未定"
-                               : "V 计分 " + ing.v + (string.IsNullOrEmpty(ing.vGrade) ? "" : "（" + ing.vGrade + "）")),
+                               : "V 计分 " + ing.v + (string.IsNullOrEmpty(ing.vGrade) ? "" : "（" + ing.vGrade + "）"))
+                            + "　" + RarityText(ing.h, ing.rarity),
                             ing.v == 0 ? dim : body);
 
             string kind = ing.FormAndTags();
@@ -304,6 +321,27 @@ namespace GameJam.Prototype
             if (attrs == null) return "";
             string s = attrs.DescribeNonZero();
             return string.IsNullOrEmpty(s) ? "（无数值，等策划补）" : s;
+        }
+
+        /// <summary>
+        /// 卡面那一行末尾的稀有度（v3.0 口径：素材 H 只有 5/10/20 三档 → 普通/稀有/传说）。
+        ///
+        /// 【为什么要单独写出来】素材的稀有度是从 H 推出来的（5=普通/10=稀有/20=传说），
+        ///   玩家/策划看图鉴时不会自己去换算；而 H=20 的卡（外星合金/黄金/熔融金）
+        ///   在卡面上只写"20"是看不出"这是传说档"的。
+        ///   卡表里 rarity 字段和 H **不一致**时这里要如实标出来（那是数据错，不该被藏起来），
+        ///   所以不一致就不显示推导值，直接打一个 ✗ 提示 —— 和 CardSpecs.SelfCheck 一个口径。
+        /// </summary>
+        private static string RarityText(int h, string rarity)
+        {
+            string derived = CardSpecs.RarityOfH(h);
+            if (string.IsNullOrEmpty(rarity))
+                return string.IsNullOrEmpty(derived) ? "（稀有度未标）" : "稀有度 " + derived + "（按 H 推导）";
+
+            if (!string.IsNullOrEmpty(derived) && derived != rarity)
+                return "★ 稀有度「" + rarity + "」和 H=" + h + " 推出的「" + derived + "」不一致";
+
+            return "稀有度 " + rarity;
         }
 
         // ── 卡面：有美术用美术，没有就用程序化占位 ─────────────────────
