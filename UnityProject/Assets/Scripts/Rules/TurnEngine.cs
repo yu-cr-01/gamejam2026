@@ -86,6 +86,40 @@ namespace GameJam.Rules
         /// <summary>空白卡计数（正文 §2.1：需单独统计数量）</summary>
         public int blankCount;
 
+        /// <summary>
+        /// 本回合**最后登记下来的待献祭目标** —— 吞噬推迟到"回合真正结束"时才判定（正文 §四.5）。
+        ///
+        /// 【为什么必须推迟，不能在启动那一下"当场认"】
+        ///   正文的口径是"每回合**实际使用的**最后一次启动"，而"这一次是不是最后一次"在启动的那一刻
+        ///   **根本不可知**：玩家随时能点「结束回合」（那这一次就是最后一次），也随时能继续启动
+        ///   （那就不是）。以前的判据（行动机会剩 1 / 手牌空了 / 已到目标分）是在猜，两头都会错：
+        ///     · 漏吞：手里还有牌、行动机会还有剩，玩家启动一次就点结束回合 —— 那确实是最后一次，
+        ///       可判据不成立，卡被白丢在桌上；
+        ///     · 早吞：手牌空了**不等于**回合结束（桌面素材还能继续启动，还能把牌收回手牌再打），
+        ///       按它吞就是把"不是最后一次"的那一次当成最后一次。
+        ///   所以这里**只登记、不判定**：同回合里每次启动覆盖一次，留在手上的天然就是"实际最后一次"。
+        ///   等到回合真的结束（行动机会用尽 / 玩家点「结束回合」/ 关卡结束）再拿它去吞噬 ——
+        ///   判据和"实际使用"是同一个事实，不再依赖任何预判。
+        ///
+        /// 【注意它是"每次调用的参数包"上的字段】桌面那一层（TableRulesV21.BuildState / Absorb）
+        ///   必须把它灌进来、读回去，并存进存档，否则"读档后再结束回合"会少吞一次。
+        /// </summary>
+        public MaterialState pendingSacrifice;
+
+        /// <summary>
+        /// 本回合**登记过**待献祭目标没有。必须单独一个 bool：
+        ///   目标可能已被形态变化 / 溶解 / D耗尽移出桌面，那时 <see cref="pendingSacrifice"/> 是 null，
+        ///   但"登记过"这件事仍然成立 —— 回合结束时要照实写一句「本次献祭不生效」，
+        ///   而不是当成"这一回合根本没启动过"。
+        /// </summary>
+        public bool hasPendingSacrifice;
+
+        /// <summary>
+        /// 登记那一刻目标的卡名。目标已离场时 <see cref="pendingSacrifice"/> 是 null（它不在 table 里了），
+        /// 但日志和存档仍然要说清"是哪张卡"。
+        /// </summary>
+        public string pendingSacrificeName = "";
+
         /// <summary>当前回合（从 1 开始）</summary>
         public int turnIndex = 1;
 
@@ -236,8 +270,16 @@ namespace GameJam.Rules
     ///        · 都没让目标消失 → D-1；D≤0 → D耗尽（法术 + 副产物进手牌；无产物则空白卡 +1）
     ///   ③ 结算收益：本次得分 = 目标素材V + 刀片V（目标已移除时用启动时的原始卡 V）
     ///   ④ 检查爆刀：H≤0 → 立即爆刀、关卡结束、**当前分数 ×2**
-    ///   ⑤ 献祭吞噬：若本次是本回合最后一次启动，且目标结算后仍有 D 剩余 → 并入刀片
-    ///        （移出桌面、刀片H += 卡H、刀片V += 卡V；带「献祭」标签的卡在此触发它的献祭效果）
+    ///   ⑤ 献祭登记：把本次目标登记为"本回合最后一个待献祭目标"（**不在这里吞噬**）；
+    ///        回合真正结束时（行动机会用尽 / 玩家点结束回合 / 关卡结束）才对该目标判定：
+    ///        D>0 → 并入刀片（移出桌面、刀片H += 卡H、刀片V += 卡V；带「献祭」标签的卡在此触发它的献祭效果）；
+    ///        已被形态变化 / 溶解 / D耗尽移除 → 打日志「本次献祭不生效」。
+    ///
+    /// 【为什么⑤是"登记"而不是"当场吞"】
+    ///   正文写的是"每回合**实际使用的**最后一次启动"，而启动那一刻没人知道这是不是最后一次
+    ///   （玩家随时能点结束回合、也随时能再启动）。用"行动机会剩 1 / 手牌空了 / 已达标"去猜
+    ///   两头都会错（见 <see cref="LevelRun.pendingSacrifice"/> 的逐条说明），
+    ///   所以判据只能是"回合真的结束了没有"。
     ///
     /// 【为什么顺序写死在这里】
     ///   顺序本身就是规则：②先变形再③算分，所以"用启动时的原始卡V"才有意义；
@@ -401,6 +443,14 @@ namespace GameJam.Rules
             if (state == null) return r;
 
             Log(r, "【回合 " + state.turnIndex + " 结束】");
+
+            // ★ 顺序：**补吞 → 衰减 → 换回合**（用户拍板的顺序，也是唯一说得通的顺序）。
+            //   【为什么补吞必须在衰减之前】献祭效果里有一类是"刀片附带一层**不衰退**的热/冷/酸"
+            //   （火焰/水/熔融铜…），而那层加上去之后如果先跑衰减，刚加的层会当场掉一层 ——
+            //   玩家看到的是"这次献祭白给了"。放在衰减之前，"本回合最后一次启动"拿到的东西
+            //   这一回合就已经到手，衰减从下回合开始算。
+            ResolvePendingSacrifice(r, state, "回合结束");
+
             string before = state.blade.layers.Describe();
             state.blade.layers.DecayTurn();
             Log(r, "　附魔衰减（每类衰退层 -1、归零消失）：" + before + " → " + state.blade.layers.Describe());
@@ -428,23 +478,45 @@ namespace GameJam.Rules
             TurnResult r = New(state);
             if (state == null) return r;
 
+            // 关卡结束 = 本回合不可能再有启动（正文 §八）→ 把最后登记的那个目标补吞掉。
+            //   不补的话，玩家"打完最后一次 → 主动结束关卡"会白丢一张卡（和手动结束回合同一个漏洞）。
+            ResolvePendingSacrifice(r, state, "关卡结束（主动结束）");
+
             state.levelOver = true;
             Log(r, "【主动结束关卡】按当前分数 " + state.score + " 结算（正文 §八：主动结束不触发爆刀双倍）");
             return r;
         }
 
         /// <summary>
+        /// 回合**真正结束**时的补吞 —— 公开入口。
+        ///
+        /// 【谁需要它】引擎自己那三个"回合真的结束了"的时刻都直接调私有实现
+        ///   （EndTurn / EndLevelByChoice / Finish，各自把日志并进自己那份 TurnResult）；
+        ///   这个入口是给**外部**那些不经过 EndTurn 的收尾路径用的：
+        ///     ① 桌面层（TableRulesV21）在"行动机会用尽"这类时刻要单独确认一次补吞；
+        ///     ② 离线探针里要"手工宣布本回合结束"时 —— 它要的只是吞噬，**不是**附魔衰减。
+        ///   没有它，外部就只能去调 EndTurn，而 EndTurn 会顺手把层数衰减一轮、把回合号 +1，
+        ///   那两件事不属于"补吞"（探针里会把层数与回合断言一起带偏）。
+        /// </summary>
+        public TurnResult FlushPendingSacrifice(LevelRun state)
+        {
+            TurnResult r = New(state);
+            ResolvePendingSacrifice(r, state, "回合结束（调用方宣布）");
+            r.summary = state != null ? state.Describe() : "";
+            Log(r, "—— " + r.ScoreLine() + " ｜ " + r.summary);
+            return r;
+        }
+
+        /// <summary>
         /// 跑一个完整回合：回合开始 → 按顺序启动 <paramref name="order"/> 里的目标 → 回合结束。
         ///
-        /// 【"最后一次启动"是这一项决定的】
-        ///   正文 §四 说明："最后一次启动不一定是第 5 次行动" —— 所以这里不做"第 5 次"的判断，
-        ///   而是**把 order 的最后一项当作实际最后一次启动**（行动机会提前用尽的话，结束的那次就是最后一次）。
-        ///   这样加行动机会的卡牌延后最后一次启动时，献祭判定自动跟着走。
+        /// 【"最后一次启动"现在由回合结束那一步决定，不在这里挑】
+        ///   正文 §四 说明"最后一次启动不一定是第 5 次行动" —— 所以这里不做"第几次"的判断，
+        ///   每次启动都**登记**成待献祭目标（后者覆盖前者），最后在 EndTurn 里对**实际最后登记的
+        ///   那一张**执行吞噬。以前那种"order 的最后一项 = 最后一次"的写法在探测/批量跑的场合
+        ///   看着对，在真游戏里不对：玩家根本不会按 order 打完，他随时点「结束回合」。
         ///
-        /// ★ 判据的第二半（"行动机会提前用尽"）必须**当场认**，见下面那一行的说明：
-        ///   只判 `i == list.Count - 1` 的话，"把行动机会打到 0 的那一次"拿到的是 false，
-        ///   第 ⑤ 步就会写"本次不是本回合实际使用的最后一次启动 → 不吞噬"，
-        ///   而它后面那些 order 项全都会被拒（"行动机会已用尽"）—— 真正常用的最后一次漏判了。
+        /// ★ 那个 isLast 标记**只进日志**（见 StartBlade 的 isLastStart 参数）—— 它不决定吞噬。
         /// </summary>
         public RoundResult RunRound(LevelRun state, List<MaterialState> order)
         {
@@ -460,12 +532,10 @@ namespace GameJam.Rules
             List<MaterialState> list = order != null ? order : new List<MaterialState>();
             for (int i = 0; i < list.Count; i++)
             {
-                // ★ "本回合实际使用的最后一次启动" = order 的最后一项，**或者**这一次会把
-                //   最后一个行动机会用掉（actionPoints == 1 → 扣完 = 0，之后 StartBlade 直接拒）。
-                //   行动机会在整条结算链里只减不增（没有任何效果会加它，回合开始那一次重置
-                //   已经在上面 BeginTurn 走过了），所以"扣之前 == 1"就是"扣完 == 0"、
-                //   也就是"本回合不会再有启动"——**当场能确定**，不必等循环自己走到尽头
-                //   （order 比行动机会长时，走到尽头的那一项只会被拒，什么都不会吞）。
+                // 纯标注：给日志读的"调用方以为这是最后一次"。判定不在这里 ——
+                // 行动机会在整条结算链里只减不增，所以"扣之前 == 1"确实是"之后再也启动不了"，
+                // 但那是"登记"这一侧的事实（RegisterSacrifice 里按扣完的值判），
+                // 这个 bool 只是把那件事写进【启动】那一行好读日志。
                 bool isLast = (i == list.Count - 1) || state.actionPoints <= 1;
                 TurnResult st = StartBlade(state, list[i], isLast);
                 round.starts.Add(st);
@@ -493,13 +563,17 @@ namespace GameJam.Rules
         //  启动结算（正文 §四）
         // ══════════════════════════════════════════════════════════════
 
+        /// <param name="isLastStart">
+        /// **只用于日志**的调用方标记（见 <see cref="RegisterSacrifice"/>）。吞噬是否发生由
+        /// "回合有没有真的结束"决定，和这个参数无关 —— 它不再参与任何判定。
+        /// </param>
         public TurnResult StartBlade(LevelRun state, MaterialState target, bool isLastStart)
         {
             TurnResult r = New(state);
             if (state == null) return r;
 
             Log(r, "【启动】目标 " + (target != null ? target.Describe() : "（无）") +
-                    (isLastStart ? "　← 本回合最后一次启动（结算后判定献祭吞噬）" : ""));
+                    (isLastStart ? "　← 调用方标记为本回合最后一次启动（吞噬在回合真正结束时判定）" : ""));
 
             if (state.levelOver)
             {
@@ -510,6 +584,19 @@ namespace GameJam.Rules
             if (target == null || target.removed)
             {
                 Log(r, "　目标不在桌面上（可能已被形态变化 / 溶解 / D耗尽 / 吞噬移走）→ 本次启动无效");
+                r.rejected = true;
+                return r;
+            }
+            // ★ 空白卡（数值全 0、无特性）**不能作为启动目标**（正文 §2.1：无法交互）。
+            //   【为什么这一条必须在引擎里，而不是只由桌面层拦】桌面层拦的是"玩家点的那一下"，
+            //     而启动的规则定义在这里：只要放它进来，一张 D>0 的空白卡就能被反复启动，
+            //     每次都拿到"目标V(0) + 刀片V"里的刀片 V —— 一张 0 值卡成了纯赚分的机器；
+            //     而且它 D 耗尽之后还会再产出一张空白卡（它没有任何 D 耗尽产物）。
+            //     拒绝放在消耗资源之前：不扣行动机会、不扣刀片 H、不登记待献祭、一分不给。
+            if (target.IsBlankCard)
+            {
+                Log(r, "　目标「" + target.name + "」是空白卡（H/D/V 全 0、无特性）→ 正文 §2.1 说它无法交互，不能启动" +
+                        "（不消耗行动机会、不得分、不参与献祭）");
                 r.rejected = true;
                 return r;
             }
@@ -570,8 +657,8 @@ namespace GameJam.Rules
             if (state.blade.IsBursted) Burst(r, state);
             else Log(r, "④ 检查爆刀：H=" + state.blade.H + " > 0，未爆刀");
 
-            // ── ⑤ 献祭吞噬 ────────────────────────────────────────────
-            ResolveSacrifice(r, state, target, isLastStart);
+            // ── ⑤ 献祭**登记**（吞噬推迟到回合真正结束，见 LevelRun.pendingSacrifice）──
+            RegisterSacrifice(r, state, target, isLastStart);
 
             Finish(r, state);
             return r;
@@ -757,29 +844,97 @@ namespace GameJam.Rules
                     (mul != LevelRun.BurstMultiplier ? "（倍率被卡牌改成 ×" + mul + "）" : ""));
         }
 
-        /// <summary>⑤ 献祭吞噬：本回合最后一次启动 + 结算后仍有 D 剩余 → 并入刀片。</summary>
-        private void ResolveSacrifice(TurnResult r, LevelRun state, MaterialState target, bool isLastStart)
+        /// <summary>
+        /// ⑤ 献祭**登记**：把本次启动的目标记成"本回合最后一个待献祭目标"，**不在这里吞噬**。
+        ///
+        /// 【为什么不在这里吞噬 —— 见 <see cref="LevelRun.pendingSacrifice"/> 那段】
+        ///   一句话：启动的那一刻没人知道这是不是"实际使用的最后一次"（玩家随时能点结束回合、
+        ///   也随时能再启动），所以这一下能做的只有"把这一次记下来"。
+        ///   同回合里每次启动覆盖一次登记，于是回合结束时留在手上的必然是最后那一次的目标 ——
+        ///   这里一行"是不是最后一次"的判断都不需要写。
+        ///
+        /// 【isLastStart 现在只影响日志】调用方（RunRound / TableRulesV21）可能仍然会标一个
+        ///   "我猜这是最后一次"，那个标记现在**不参与任何判定** —— 胜负手是"回合有没有真的结束"。
+        ///   留着参数是为了不动已有的调用点（离线断言里有 16 处在用它），并且读日志时能对上
+        ///   调用方当时的意图；判定口径只有一个，就是下面那个 Flush 的时刻。
+        /// </summary>
+        private void RegisterSacrifice(TurnResult r, LevelRun state, MaterialState target, bool isLastStart)
         {
-            Log(r, "⑤ 献祭吞噬判定：");
+            Log(r, "⑤ 献祭登记（本回合真正结束时才判定是否吞噬）：");
 
             if (state.levelOver)
             {
-                Log(r, "　　关卡已结束（爆刀），本次不再吞噬");
+                // 爆刀 = 关卡当场结束（正文 §五）：本回合不会再有任何启动，吞噬判定也不再生效。
+                //   顺手把上一次登记的待办清掉 —— 不清的话它会跟着存档走到下一关的读档里去，
+                //   而那时候"再结束一次回合"就会去吞一张早就该翻篇的卡。
+                state.hasPendingSacrifice  = false;
+                state.pendingSacrifice     = null;
+                state.pendingSacrificeName = "";
+                Log(r, "　　关卡已结束（爆刀），本次不登记、不吞噬；上一张登记的也一并作废");
                 return;
             }
-            if (!isLastStart)
+
+            string who = target != null ? target.name : "（无）";
+
+            if (isLastStart)
+                Log(r, "　　（调用方把这一次标成了「本回合最后一次启动」：标记只用于读日志，吞噬在回合结束时才判定）");
+
+            state.hasPendingSacrifice  = true;
+            state.pendingSacrificeName = who;
+            state.pendingSacrifice     = (target != null && !target.removed) ? target : null;
+
+            if (target != null && target.removed)
+                Log(r, "　　「" + who + "」已因形态变化 / 溶解 / D耗尽移出桌面 → 本次献祭不生效（回合结束时按这条判定）");
+            else
+                Log(r, "　　「" + who + "」登记为待献祭目标：本回合若没有更晚的启动，回合结束时它会被吞进刀片；" +
+                        "有更晚的就换成那一张（真正吞噬那一下才写吞噬日志）");
+
+            // 行动机会用尽 = 本回合**真正结束**（正文 §2.6：一回合 5 次行动机会，用尽之后谁都不能再启动）。
+            //   ★ 这不是"猜最后一次"，是两个事实恰好重合：行动机会在整条结算链里只减不增
+            //     （没有任何效果会加它，回合开始那一次重置已经走过了），扣到 0 之后 StartBlade
+            //     一进门就拒 —— "本回合不会再有启动"在当时就是事实，所以可以当场判定。
+            //     （放在这里也省掉玩家"必须再点一次结束回合才看到卡被吞"的困惑；附魔衰减仍然
+            //       只在 EndTurn 里跑，那一步不属于"补吞"。）
+            if (state.actionPoints <= 0)
+                ResolvePendingSacrifice(r, state, "行动机会用尽");
+        }
+
+        /// <summary>
+        /// 回合真正结束：对**最后登记的那个**待献祭目标执行吞噬（正文 §四.5 / §2.3）。
+        ///
+        /// 【三种"回合真的结束了"】① 行动机会用尽（StartBlade 登记完当场判定）；
+        ///   ② 玩家点「结束回合」（<see cref="EndTurn"/> 的第一件事，在附魔衰减之前）；
+        ///   ③ 关卡结束（<see cref="EndLevelByChoice"/> 与 <see cref="Finish"/> 里"达到目标分"那一下）。
+        ///
+        /// 【爆刀为什么不算】爆刀（H≤0）是"关卡当场结束"，正文 §四.5 的吞噬发生在计分之后、
+        ///   爆刀判定之后 —— 那一次的目标根本没被登记（见 RegisterSacrifice 的第一段），
+        ///   所以下面的断言"爆刀后不再吞噬"照旧成立。
+        /// </summary>
+        private void ResolvePendingSacrifice(TurnResult r, LevelRun state, string when)
+        {
+            if (state == null || !state.hasPendingSacrifice) return;
+
+            MaterialState target = state.pendingSacrifice;
+            string who = !string.IsNullOrEmpty(state.pendingSacrificeName)
+                       ? state.pendingSacrificeName
+                       : (target != null ? target.name : "？");
+
+            // 先清登记：无论这一次吞不吞得成，"这一回合的最后一次启动"都已经用它判过了。
+            // 清在前面还能保证"重复调用幂等"（EndTurn 与外部补吞都调一次也不会吞两张）。
+            state.hasPendingSacrifice  = false;
+            state.pendingSacrifice     = null;
+            state.pendingSacrificeName = "";
+
+            Log(r, "⑤ 献祭吞噬判定（" + when + "）：待献祭目标「" + who + "」");
+
+            if (target == null || target.removed)
             {
-                Log(r, "　　本次不是本回合实际使用的最后一次启动 → 不吞噬");
-                return;
-            }
-            if (target.removed)
-            {
-                Log(r, "　　目标已因形态变化 / 溶解 / D耗尽移出桌面 → 本次献祭不生效");
+                Log(r, "　　「" + who + "」已因形态变化 / 溶解 / D耗尽移出桌面 → 本次献祭不生效");
                 return;
             }
             if (target.D <= 0)
             {
-                Log(r, "　　目标 D 已耗尽 → 本次献祭不生效");
+                Log(r, "　　「" + who + "」D 已耗尽 → 本次献祭不生效");
                 return;
             }
 
@@ -1470,6 +1625,10 @@ namespace GameJam.Rules
             {
                 state.levelOver = true;
                 Log(r, "★ 达到目标分 " + rules.TargetScore + "（当前 " + state.score + "）→ 关卡结束");
+
+                // 关卡结束 = 本回合不可能再有启动（正文 §八的四个结束条件之一）→ 补吞。
+                //   不补的话，"最后一次启动刚好把自己打到目标分"这一下会白丢一张卡。
+                ResolvePendingSacrifice(r, state, "关卡结束（达到目标分）");
             }
 
             r.summary = state.Describe();

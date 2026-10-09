@@ -207,6 +207,24 @@ namespace GameJam.Rules
         /// <summary>空白卡计数（正文 §2.1：需单独统计）</summary>
         public int blankCount;
 
+        /// <summary>
+        /// 本回合**最后登记的那个待献祭目标**在 table 里的下标（-1 = 没有 / 目标已离场）。
+        ///
+        /// 【不存它会怎样】"回合真正结束时才吞噬"意味着这个待办事项会**跨过一次存档**存在：
+        ///   玩家启动一次（登记了目标）→ 存档 → 读档 → 点「结束回合」。
+        ///   不存下标的话，读档后引擎手里没有待献祭目标，那一次吞噬就静默丢了 ——
+        ///   表现和"漏吞"一模一样，而且只在这条路径上出现（比一直不吞更难查）。
+        ///
+        /// 【为什么目标已离场时是 -1 却还要存名字】
+        ///   目标被形态变化 / 溶解 / D耗尽带走之后就**不在 table 里**了，下标无从谈起；
+        ///   但"这一回合登记过、且登记的就是它"这件事必须留着 —— 回合结束时要照实写
+        ///   「本次献祭不生效」，而不是当成"这一回合没启动过"。所以名字单独一个字段。
+        /// </summary>
+        public int pendingSacrificeIndex = -1;
+
+        /// <summary>待献祭目标登记时的卡名（也是"本回合登记过没有"的依据；见 pendingSacrificeIndex）。</summary>
+        public string pendingSacrificeName = "";
+
         public bool levelOver;
         public bool bursted;
 
@@ -524,6 +542,13 @@ namespace GameJam.Rules
             public int targetScore;
             public int startsThisTurn;
             public int blankCount;
+
+            /// <summary>本回合待献祭目标在 table 里的下标（-1 = 没有 / 已离场）</summary>
+            public int pendingSacrificeIndex = -1;
+
+            /// <summary>待献祭目标登记时的卡名</summary>
+            public string pendingSacrificeName = "";
+
             public bool levelOver;
             public bool bursted;
             public string endReason = "";
@@ -636,6 +661,12 @@ namespace GameJam.Rules
             b.targetScore    = d.targetScore;
             b.startsThisTurn = d.startsThisTurn;
             b.blankCount     = d.blankCount;
+
+            // 待献祭目标的**下标**要在桌面建完之后才能校（越界当"已离场"处理）
+            b.pendingSacrificeName  = d.pendingSacrificeName != null ? d.pendingSacrificeName : "";
+            b.pendingSacrificeIndex = (d.pendingSacrificeIndex >= 0 && d.pendingSacrificeIndex < b.table.Count)
+                                    ? d.pendingSacrificeIndex : -1;
+
             b.levelOver      = d.levelOver;
             b.bursted        = d.bursted;
             b.endReason      = d.endReason != null ? d.endReason : "";
@@ -681,6 +712,8 @@ namespace GameJam.Rules
             Diff(diffs, "目标分 targetScore", a.targetScore, b.targetScore);
             Diff(diffs, "本回合已启动 startsThisTurn", a.startsThisTurn, b.startsThisTurn);
             Diff(diffs, "空白卡 blankCount", a.blankCount, b.blankCount);
+            Diff(diffs, "待献祭目标下标 pendingSacrificeIndex", a.pendingSacrificeIndex, b.pendingSacrificeIndex);
+            Diff(diffs, "待献祭目标名字 pendingSacrificeName", a.pendingSacrificeName, b.pendingSacrificeName);
             Diff(diffs, "关卡已结束 levelOver", a.levelOver, b.levelOver);
             Diff(diffs, "爆刀 bursted", a.bursted, b.bursted);
             Diff(diffs, "结束原因 endReason", a.endReason, b.endReason);
@@ -880,6 +913,8 @@ namespace GameJam.Rules
             w.Put("targetScore", s.targetScore);
             w.Put("startsThisTurn", s.startsThisTurn);
             w.Put("blankCount", s.blankCount);
+            w.Put("pendingSacrificeIndex", s.pendingSacrificeIndex);
+            w.Put("pendingSacrificeName", s.pendingSacrificeName);
             w.Put("levelOver", s.levelOver);
             w.Put("bursted", s.bursted);
             w.Put("endReason", s.endReason);
@@ -1052,6 +1087,11 @@ namespace GameJam.Rules
             if (!NeedInt(st,  "targetScore",    out s.targetScore, out error)) return false;
             if (!NeedInt(st,  "startsThisTurn", out s.startsThisTurn, out error)) return false;
             if (!NeedInt(st,  "blankCount",     out s.blankCount, out error)) return false;
+            // ★ 这两个字段是"吞噬推迟到回合结束"带出来的新状态。这里用 Opt*（缺就按空处理）：
+            //   它们缺了只会让"读档之后再结束回合"少吞一次，不至于让整份存档读不了 ——
+            //   为了这两个字段把版本号 +1、把老档全判死，代价比这一条大得多。
+            if (!OptInt(st,   "pendingSacrificeIndex", -1, out s.pendingSacrificeIndex, out error)) return false;
+            if (!OptStr(st,   "pendingSacrificeName", "",  out s.pendingSacrificeName, out error)) return false;
             if (!NeedBool(st, "levelOver",      out s.levelOver, out error)) return false;
             if (!NeedBool(st, "bursted",        out s.bursted, out error)) return false;
             if (!OptStr(st,   "endReason", "",  out s.endReason, out error)) return false;

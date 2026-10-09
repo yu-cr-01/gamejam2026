@@ -98,6 +98,9 @@ namespace GameJam.Prototype
         /// <summary>玩家做过的选择 —— 和 TurnState 互不依赖，各记各的</summary>
         public SelectionLog selections = new SelectionLog();
 
+        /// <summary>本次开局实际展示的牌组候选（v2.1 会过滤掉旧流程牌组）。</summary>
+        private Choice activeDeckChoice;
+
         public TablePhase phase = TablePhase.DeckPick;
 
         /// <summary>
@@ -200,7 +203,7 @@ namespace GameJam.Prototype
         {
             get
             {
-                if (phase == TablePhase.DeckPick)  return FindChoice(GameConfig.DeckPickId);
+                if (phase == TablePhase.DeckPick)  return activeDeckChoice ?? FindChoice(GameConfig.DeckPickId);
                 if (phase == TablePhase.BladePick) return FindChoice(GameConfig.BladePickId);
                 return null;
             }
@@ -443,6 +446,8 @@ namespace GameJam.Prototype
             KillBladeCard();
 
             Choice deckChoice = FindChoice(GameConfig.DeckPickId);
+            activeDeckChoice = MakeDeckChoiceForCurrentRules(deckChoice);
+            deckChoice = activeDeckChoice;
 
             if (deckChoice != null && deckChoice.OptionCount > 0 && choiceRig != null)
             {
@@ -465,6 +470,30 @@ namespace GameJam.Prototype
 
             // 配置里没有牌组环节（或者还没接上选择界面）→ 退回"直接用第一副"
             BeginWithDefaultDeck();
+        }
+
+        /// <summary>
+        /// v2.1 牌组选择只展示卡表中有定义的素材牌组；旧流程仍使用完整配置。
+        /// 这样旧数据可以继续留在配置里供旧模式游玩，但不会误导新规则玩家。
+        /// </summary>
+        private Choice MakeDeckChoiceForCurrentRules(Choice source)
+        {
+            if (!V21 || source == null) return source;
+
+            Choice filtered = source.Clone();
+            filtered.options.RemoveAll(option => !IsV21Deck(option != null ? option.deck : null));
+            return filtered.OptionCount > 0 ? filtered : source;
+        }
+
+        private static bool IsV21Deck(Deck deck)
+        {
+            if (deck == null || deck.ingredients == null || deck.ingredients.Count == 0) return false;
+            for (int i = 0; i < deck.ingredients.Count; i++)
+            {
+                Ingredient ingredient = deck.ingredients[i];
+                if (ingredient == null || CardSpecs.MaterialById(ingredient.id) == null) return false;
+            }
+            return true;
         }
 
         /// <summary>没有牌组选择环节时的兜底：直接用配置表里的第一副。</summary>
@@ -541,7 +570,7 @@ namespace GameJam.Prototype
                 return;
             }
 
-            Choice c = FindChoice(GameConfig.DeckPickId);
+            Choice c = activeDeckChoice ?? FindChoice(GameConfig.DeckPickId);
             if (c == null || idx >= c.options.Count) return;
 
             ChoiceOption o = c.options[idx];

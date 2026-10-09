@@ -88,6 +88,7 @@ namespace GameJam.Tools
                 Scenario11_Explode(cards);
                 Scenario12_SaveLoad(cards);
                 Scenario13_LastStartByActionPoints(cards);
+                Scenario14_DeferredSacrificeAndBlankCard(cards);
                 Report_NoSilentLoss(cards);
 
                 Console.WriteLine();
@@ -887,6 +888,15 @@ namespace GameJam.Tools
             TurnEngine e = new TurnEngine(ProbeRules(), cards);
             TurnResult r = e.StartBlade(s, glass, true);
 
+            // ★★ 语义修正（献祭时机 · 本轮）：吞噬**推迟到"回合真正结束"**才判定 ——
+            //    启动这一下只**登记**目标（见 LevelRun.pendingSacrifice）。
+            //    原判据："启动那一下被标成最后一次 → 当场吞"；
+            //    新判据："回合结束时，对**最后登记的那个目标**吞"。
+            //    所以这一条要显式宣布回合结束。用 FlushPendingSacrifice 而不是 EndTurn：
+            //    它只补吞，**不衰减层数、不换回合** —— 那两件事会把下面的层数/行动机会断言带偏。
+            bool pendingAfterRegister = s.hasPendingSacrifice;   // 补吞之前先看一眼登记（下面要断言它）
+            TurnResult rEnd = e.FlushPendingSacrifice(s);
+
             // ★ 卡表数值化：H/V 从卡表读（v3.0 把玻璃改成 H5 D1 V1、黄金改成 H20 D2 V5）
             int gH = ProbeValues(cards, "玻璃").H, gV = ProbeValues(cards, "玻璃").V;
 
@@ -910,11 +920,15 @@ namespace GameJam.Tools
             //   「每次消耗H时，获得1分」—— 那是**反应式触发**（解析器认不出），
             //   所以这里会报 1 条未识别警告，而且**不再登记刀片被动**。
             //   这两条按 v3.0 数据钉住（不是把断言删掉），缺口报告里单列一条。
-            Check("顺序⑤：玻璃的献祭文本「每次消耗H时，获得1分」是反应式触发 → 会报 1 条未识别警告", 1, r.warnings.Count);
+            Check("顺序⑤：玻璃的献祭文本「每次消耗H时，获得1分」是反应式触发 → 会报 1 条未识别警告", 1, rEnd.warnings.Count);
             Check("顺序⑤：这条「每次消耗H时」不登记为刀片被动（v2.1 的『每次启动』才有触发点）", 0, e.BladePassiveCount);
             CheckLog("顺序⑤：日志说明这是最后一次启动", r, "最后一次启动");
-            CheckLog("顺序⑤：日志说明已移出桌面", r, "移出桌面");
-            CheckLog("顺序⑤：日志说明\"并入刀片\"", r, "并入刀片");
+            CheckLog("顺序⑤：补吞那一下的日志说明已移出桌面", rEnd, "移出桌面");
+            CheckLog("顺序⑤：补吞那一下的日志说明\"并入刀片\"", rEnd, "并入刀片");
+            Check("顺序⑤：登记那一下**没有**吞噬（原判据的『当场吞』已被推迟）",
+                  true, !r.LogContains("并入刀片"));
+            Check("顺序⑤：登记之后引擎手里留着待献祭目标（供回合结束判定）", true, pendingAfterRegister);
+            Check("顺序⑤：补吞之后登记被清空（不会重复吞第二张）", false, s.hasPendingSacrifice);
 
             // (b) 只触发最高优先级一条：酸层再多，H 也只掉 1 点（这个数也要跟卡表走）
             LevelRun s2 = NewLevel(cards, "铁刀片", 5, 5);
@@ -1021,9 +1035,19 @@ namespace GameJam.Tools
             Check("献祭时机：两次启动的 V 得分 = 白磷" + pV + " + 黄金" + auV + " = " + (pV + auV),
                   pV + auV, round.starts[0].activationScore + round.starts[1].activationScore);
             Check("献祭时机：黄金带「献祭」标签 → 献祭效果 30 分也结算", pV + auV + 30, s.score);
-            Check("献祭时机：黄金的献祭效果产出 3 张催化术", 3, round.starts[1].ProducedCount("催化术"));
+            // ★ 语义修正（本轮）：补吞发生在**回合结束**那一步（round.endTurn），
+            //   所以献祭效果产出的 3 张催化术落在 endTurn 上，不在第 2 次启动上。
+            //   原判据 = "最后一次启动那一下当场产出"；新判据 = "回合结束时补吞那一下产出"。
+            Check("献祭时机：黄金的献祭效果产出 3 张催化术（在回合结束的补吞那一步）",
+                  3, round.endTurn != null ? round.endTurn.ProducedCount("催化术") : -1);
             Check("献祭时机：桌面只剩白磷", 1, s.table.Count);
-            CheckLog("献祭时机：日志说明第一次不是最后一次", round, "本次不是本回合实际使用的最后一次启动");
+            // ★ 语义修正（本轮）：启动那一刻不存在"是不是最后一次"这个判断，原来那句
+            //   「本次不是本回合实际使用的最后一次启动」已经不写了。判据换成等价的、且更严的一条：
+            //   第 1 次启动**只登记、不吞噬**（那一下的日志里不该出现"并入刀片"）。
+            Check("献祭时机：第 1 次启动只登记、不吞噬（那一下的日志里没有「并入刀片」）",
+                  true, round.starts[0].LogContains("登记为待献祭目标") && !round.starts[0].LogContains("并入刀片"));
+            Check("献祭时机：第 2 次启动也先只登记（吞噬推迟到回合结束）",
+                  true, round.starts[1].LogContains("登记为待献祭目标") && !round.starts[1].LogContains("并入刀片"));
             CheckLog("献祭时机：日志说明并入刀片", round, "并入刀片");
             Check("献祭时机：回合结束后进入第 2 回合", 2, s.turnIndex);
             Check("献祭时机：回合结束附魔衰减跑过了", true, round.LogContains("附魔衰减"));
@@ -1095,6 +1119,13 @@ namespace GameJam.Tools
             TurnEngine e = new TurnEngine(ProbeRules(), cards);
 
             TurnResult r1 = e.StartBlade(s, glass, true);
+
+            // ★ 语义修正（本轮）：吞噬推迟到回合真正结束 → 显式宣布回合结束补吞。
+            //   原判据 = "启动那一下当场吞，刀片 V 立刻涨"；新判据 = "回合结束时补吞，刀片 V 才涨"。
+            //   下面两条断言（刀片 V、第二次启动的得分）算的都是**补吞之后**的口径，
+            //   所以补吞必须在它们之前发生 —— 这不是放宽，是判据时点变了。
+            e.FlushPendingSacrifice(s);
+
             Check("计分公式：目标V " + gV + " + 刀片V 2 = " + (gV + 2), gV + 2, r1.activationScore);
             Check("计分公式：吞噬后刀片 V = 2 + " + gV + " = " + (2 + gV), 2 + gV, s.blade.V);
             Check("计分公式：玻璃 v3.0 的献祭是反应式（每次消耗H时）→ 不登记刀片被动", 0, e.BladePassiveCount);
@@ -1276,6 +1307,11 @@ namespace GameJam.Tools
             MaterialState glass = Put(cards, s, "玻璃", 3);
             TurnEngine e = new TurnEngine(rules, cards);
             e.StartBlade(s, glass, true);
+
+            // ★ 语义修正（本轮）：吞噬推迟到回合真正结束 → 这里显式宣布回合结束（只补吞、不衰减），
+            //   好让"被吞噬那张已离场、桌面正好 3 张"这条既有断言继续成立（局面不变，只是时点变了）。
+            TurnResult r12End = e.FlushPendingSacrifice(s);
+            Check("存档：补吞那一下确实吞了（日志里有「并入刀片」）", true, r12End.LogContains("并入刀片"));
 
             // ★ v3.0 数据变化：玻璃的献祭文本换成「每次消耗H时，获得1分」（反应式触发，解析器认不出），
             //   所以**吞噬玻璃不再自动登记刀片被动**。这一条要验的是"被动能存能读"，
@@ -1553,10 +1589,10 @@ namespace GameJam.Tools
                         !round.starts[3].rejected && !round.starts[4].rejected);
             Check("AP 用完那一次：行动机会打到 0", 0, s.actionPoints);
 
-            Check("AP 边界：第 4 次（行动机会 2→1）之后还能再启动 → 不是最后一次",
-                  true, round.starts[3].LogContains("本次不是本回合实际使用的最后一次启动"));
+            Check("AP 边界：第 4 次（行动机会 2→1）只登记、不吞噬（那时还能再启动）",
+                  true, round.starts[3].LogContains("登记为待献祭目标") && !round.starts[3].LogContains("并入刀片"));
             Check("AP 边界：第 5 次（行动机会 1→0）按「最后一次」记（标题行写明）",
-                  true, round.starts[4].LogContains("本回合最后一次启动（结算后判定献祭吞噬）"));
+                  true, round.starts[4].LogContains("调用方标记为本回合最后一次启动"));
             CheckLog("AP 边界：第 5 次的目标被吞噬（并入刀片）", round.starts[4], "并入刀片");
             // ★ 卡表数值化：黄金 v3.0 = H20 D2 V5（v2.1 是 H5 D3 V5）；
             //   水 v3.0 的启动带「不消耗刀片H」→ 前 4 次水启动不扣刀片 H（引擎按失效写法跳过）。
@@ -1574,6 +1610,189 @@ namespace GameJam.Tools
             ScenarioEnd("场景13 用掉最后一个行动机会的那一次 = 最后一次启动", mark,
                 "行动机会 5 次、order 6 项：前 4 次不吞、第 5 次（1→0）把 黄金 并进刀片 → 刀片 H=" + s.blade.H +
                 " V=" + auV2 + "、总分 " + s.score + "；第 6 次被拒（行动机会已用尽）");
+        }
+
+        /// <summary>
+        /// 场景 14：本轮修的四条 —— ① 献祭吞噬的**时机**改成"回合真正结束时判定"；
+        /// ② 手牌空**不等于**回合结束（不许早吞）；③ blankCount 双向同步；
+        /// ④ 空白卡不进桌面（不套默认 D、不能启动、不得分）。
+        ///
+        /// 【① ② 为什么是同一个根因】判据原来是"此刻就能确定"的启发式
+        ///   （行动机会剩 1 / 手牌空了 / 已达目标分）。它两头都会错：
+        ///     · 漏吞：手里还有牌、行动机会还有剩 → 启动一次就点「结束回合」→ 那确实是本回合
+        ///       最后一次，可判据不成立，卡白丢在桌上（只做了一次附魔衰减）；
+        ///     · 早吞：手牌空了**不代表回合结束** —— 桌面素材还能继续启动，还能把牌收回手牌再打，
+        ///       按"手牌空"就吞，是把"不是最后一次"的那一次当成最后一次。
+        ///   新的判据只有一个事实："回合有没有真的结束"（行动机会用尽 / 点结束回合 / 关卡结束）。
+        ///
+        /// 【④ 为什么不是"数值问题"】出牌时 `D &lt;= 0 → 默认 D=3` 是给"卡表没写 d 的卡"兜底的，
+        ///   而空白卡的 D=0 是**规则本身**。判错之后它能反复启动、白拿刀片 V 的分 ——
+        ///   所以判据必须是"这张卡是不是空白卡"（身份），不是"D 是不是 0"（数值）。
+        /// </summary>
+        private static void Scenario14_DeferredSacrificeAndBlankCard(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            int auH = ProbeValues(cards, "黄金").H, auV = ProbeValues(cards, "黄金").V;
+
+            // ══ ① 提前结束回合：手牌还有牌、行动机会还剩 3 —— 旧判据在这里是 false（漏吞）══
+            LevelRun s = NewLevel(cards, "铁刀片", 20, 0);
+            MaterialState earlier = Put(cards, s, "水", 99);    // 更早那一次启动的目标
+            MaterialState last    = Put(cards, s, "黄金", 3);   // 最后一次启动的目标（该被吞）
+            s.hand.Add("占位法术");                              // 手牌**故意**不空（旧判据的另一半也不成立）
+
+            TurnEngine e = new TurnEngine(ProbeRules(), cards);
+            TurnResult r1 = e.StartBlade(s, earlier, false);
+            TurnResult r2 = e.StartBlade(s, last, false);
+
+            int hBeforeEnd = s.blade.H;                         // 20 - 2 次启动 = 18
+
+            Check("提前结束回合·前提：启动 2 次之后行动机会还剩 3（旧判据在这里判「不是最后一次」）",
+                  3, s.actionPoints);
+            Check("提前结束回合·前提：手牌不是空的（旧判据的另一半也不成立）", true, s.hand.Count > 0);
+            Check("提前结束回合·前提：启动那两下都没有吞噬", true,
+                  !r1.LogContains("并入刀片") && !r2.LogContains("并入刀片") && !last.removed);
+
+            TurnResult rEnd = e.EndTurn(s);
+
+            Check("提前结束回合：最后一次登记的目标被吞（移出桌面）", true, last.removed);
+            Check("提前结束回合：刀片 H = " + hBeforeEnd + " + 黄金H " + auH + " = " + (hBeforeEnd + auH),
+                  hBeforeEnd + auH, s.blade.H);
+            Check("提前结束回合：刀片 V = 0 + 黄金V " + auV, auV, s.blade.V);
+            Check("提前结束回合：更早那一次的目标**没**被吞（还在桌面上）", false, earlier.removed);
+            CheckLog("提前结束回合：日志里有「并入刀片」", rEnd, "并入刀片");
+            // 顺序：补吞必须在附魔衰减**之前**（否则献祭刚给的"不衰退层"会当场被衰减掉一层）
+            Check("提前结束回合：补吞发生在附魔衰减**之前**",
+                  true, rEnd.LogText().IndexOf("并入刀片") >= 0 &&
+                        rEnd.LogText().IndexOf("并入刀片") < rEnd.LogText().IndexOf("附魔衰减"));
+
+            // ══ ② 手牌空 + 还能启动 → 不许提前吞（旧判据的"早吞"那一档）══
+            LevelRun s2 = NewLevel(cards, "铁刀片", 20, 0);
+            MaterialState only = Put(cards, s2, "水", 99);
+            TurnEngine e2 = new TurnEngine(ProbeRules(), cards);
+
+            Check("手牌空但还能启动·前提：手牌确实是空的", 0, s2.hand.Count);
+
+            // ★ 连"调用方明确标成本回合最后一次"也不许提前吞 —— 标记现在只进日志。
+            TurnResult rEmpty = e2.StartBlade(s2, only, true);
+
+            Check("手牌空但还能启动：行动机会还剩 4（本回合还能继续启动）", 4, s2.actionPoints);
+            Check("手牌空但还能启动：**没有**提前吞（目标还在桌面）", false, only.removed);
+            Check("手牌空但还能启动：那一下的日志里没有「并入刀片」", false, rEmpty.LogContains("并入刀片"));
+            Check("手牌空但还能启动：刀片 V 没涨（还是 0）", 0, s2.blade.V);
+            Check("手牌空但还能启动：目标被登记为待献祭（供回合结束判定）", true,
+                  s2.hasPendingSacrifice && s2.pendingSacrifice == only);
+
+            TurnResult rEmptyEnd = e2.FlushPendingSacrifice(s2);
+            Check("手牌空但还能启动：回合真正结束时才吞掉它", true, only.removed);
+            CheckLog("手牌空但还能启动：补吞那一下的日志里有「并入刀片」", rEmptyEnd, "并入刀片");
+            Check("手牌空但还能启动：补吞之后登记被清空（不会重复吞）", false, s2.hasPendingSacrifice);
+
+            // ══ ③ blankCount 双向同步：引擎加 → 存档 DTO 带着走 → 建回来还是它 ══
+            //   桌面层（TableRulesV21.BuildState / Absorb）搬的就是"引擎字段 ⇄ DTO/LevelRun 字段"
+            //   这一条路，所以离线能验的是引擎侧写入与存档往返；实机那半（HUD 上的张数）
+            //   由 AutoPlayHarness 520+ 那条链的截图与日志取证。
+            LevelRun s3 = NewLevel(cards, "铁刀片", 20, 0);
+            MaterialState ice = Put(cards, s3, "冰", 1);
+            TurnEngine e3 = new TurnEngine(ProbeRules(), cards);
+            TurnResult rIce = e3.StartBlade(s3, ice, false);
+
+            Check("blankCount：引擎 D 耗尽产出空白卡之后计数 = 1", 1, s3.blankCount);
+            Check("blankCount：产出的那张确实是「空白卡」而且在引擎手牌里", true,
+                  rIce.ProducedCount(LevelSave.BlankCardName) == 1 && s3.hand.Contains(LevelSave.BlankCardName));
+
+            LevelSaveData cap = LevelSave.Capture(s3.blade, s3.table, null, null);
+            cap.blankCount = s3.blankCount;      // ← 和 TableRulesV21.CaptureSaveState 里那一句同一个口径
+            Check("blankCount：采集进存档 DTO（桌面层 CaptureSaveState 的同一句）", 1, cap.blankCount);
+
+            SaveFileDto f = new SaveFileDto();
+            f.levelIndex = 0; f.levelId = "lv1"; f.levelName = "第 1 关"; f.deckId = "probe";
+            f.state = cap;
+
+            string j = LevelSaveJson.Write(f);
+            SaveFileDto back;
+            string err;
+            Check("blankCount：写盘再读回来成功", true, LevelSaveJson.Read(j, out back, out err));
+            Check("blankCount：读回来的计数还是 1（存档里没丢）", 1,
+                  back != null && back.state != null ? back.state.blankCount : -1);
+
+            LevelSave.BuiltState b3 = null;
+            Check("blankCount：按存档重建规则侧对象成功", true,
+                  back != null && LevelSave.TryBuild(back.state, ProbeResolver(cards), out b3, out err));
+            Check("blankCount：建出来的状态里计数还是 1（桌面层 Absorb 读的就是它）", 1,
+                  b3 != null ? b3.blankCount : -1);
+
+            // 再产一张：计数继续累加（不是"每次覆盖成 1"）
+            MaterialState bare = new MaterialState(cards.Synthetic("无产物测试卡"), 1, 1, 1);
+            s3.table.Add(bare);
+            TurnResult rBare = e3.StartBlade(s3, bare, false);
+            Check("blankCount：第二次产出后计数 = 2（累加，不是覆盖）", 2, s3.blankCount);
+            Check("blankCount：桌面层读回的那个入口就是 LevelRun.blankCount（同一字段）", 2,
+                  s3.blankCount);
+
+            // ══ ④ 空白卡：不能作为启动目标、不得分、不消耗任何东西 ══
+            Ingredient blank = LevelSave.MakeBlankCard();
+            Check("空白卡：H/D/V 全 0（正文 §2.1）", true, blank.h == 0 && blank.d == 0 && blank.v == 0);
+            Check("空白卡：无形态转换 / 无标签 / 无启动 / 无献祭 / 无D耗尽（结构判据命中它）", true,
+                  (blank.transitions == null || blank.transitions.Length == 0) &&
+                  (blank.tags == null || blank.tags.Length == 0) &&
+                  (blank.exhaust == null || blank.exhaust.Length == 0) &&
+                  string.IsNullOrEmpty(blank.startup) && string.IsNullOrEmpty(blank.sacrifice));
+            Check("空白卡：id / 名字就是 LevelSave 的那一对（身份判据与产出、读档同一份口径）", true,
+                  blank.id == LevelSave.BlankCardId && blank.name == LevelSave.BlankCardName);
+            Check("空白卡：MaterialState.IsBlankCard 认它（桌面层的默认 D / 启动目标判据都走这一条）", true,
+                  new MaterialState(LevelSave.MakeBlankCard(), 0, 0, 0).IsBlankCard);
+            Check("空白卡：D 被套成 3 时**仍然**认它是空白卡（判据不看 D）", true,
+                  new MaterialState(LevelSave.MakeBlankCard(), 3, 0, 0).IsBlankCard);
+
+            // 反例（判据不能误伤）：卡表里的合法素材没有一张会被结构判据命中
+            Ingredient accidental = null;
+            for (int i = 0; i < cards.reportMaterials.Count; i++)
+            {
+                Ingredient m = cards.reportMaterials[i];
+                if (m == null) continue;
+                CardValues cv = cards.ValuesOf(m.name);
+                if (!MaterialState.IsBlankCardOf(m, cv.H, cv.D, cv.V)) continue;
+                accidental = m;
+                break;
+            }
+            Check("空白卡判据：卡表里的合法素材没有一张被误判成空白卡", true, accidental == null);
+
+            // 空白卡上桌（D=0）：启动**被拒**、不得分、不扣行动机会 / 刀片H / 不生成第二张
+            LevelRun s4 = NewLevel(cards, "铁刀片", 20, 7);
+            MaterialState blankOnTable = new MaterialState(LevelSave.MakeBlankCard(), 0, 0, 0);
+            s4.table.Add(blankOnTable);
+            TurnEngine e4 = new TurnEngine(ProbeRules(), cards);
+            TurnResult rBlank = e4.StartBlade(s4, blankOnTable, false);
+
+            Check("空白卡：上桌 D 仍然是 0（没有被套默认 D=3）", 0, blankOnTable.D);
+            Check("空白卡：启动被拒", true, rBlank.rejected);
+            Check("空白卡：不得分（activationScore = 0）", 0, rBlank.activationScore);
+            Check("空白卡：总分不变（0）", 0, s4.score);
+            Check("空白卡：不消耗行动机会（还是 5）", LevelRun.ActionPointsPerTurn, s4.actionPoints);
+            Check("空白卡：不扣刀片 H（还是 20）", 20, s4.blade.H);
+            Check("空白卡：不生成第二张空白卡（计数还是 0）", 0, s4.blankCount);
+            Check("空白卡：也没有留下待献祭登记", false, s4.hasPendingSacrifice);
+            Check("空白卡：日志说清它无法交互", true,
+                  rBlank.LogContains("空白卡") && rBlank.LogContains("无法交互"));
+
+            // 对照：判据是结构化的（"三零 + 无任何规则文本"），不是"看到三个 0 就拦"——
+            //   一张 H/D/V 全 0 但**带标签**的卡不命中，引擎照常结算它（得分 = 目标V0 + 刀片V7）。
+            LevelRun s5 = NewLevel(cards, "铁刀片", 20, 7);
+            MaterialState notBlank = new MaterialState(
+                cards.Synthetic("三零但有标签测试卡", "固体", new string[] { "固体" }), 3, 0, 0);
+            s5.table.Add(notBlank);
+            TurnEngine e5 = new TurnEngine(ProbeRules(), cards);
+            TurnResult rNotBlank = e5.StartBlade(s5, notBlank, false);
+
+            Check("空白卡判据的边界：『三零但有标签』不命中 → 引擎照常结算（得分 = 刀片V 7）",
+                  7, rNotBlank.activationScore);
+            Check("空白卡判据的边界：它没有被拒（判据没有放宽成「数值像就拦」）", false, rNotBlank.rejected);
+
+            ScenarioEnd("场景14 献祭时机（推迟到回合结束）+ 空白卡（不套默认D / 不能启动 / 不得分）", mark,
+                "提前结束回合 → 黄金被吞（刀片 H=" + s.blade.H + " V=" + auV + "）；手牌空但还能启动 → 不早吞；" +
+                "blankCount 往返 = " + (b3 != null ? b3.blankCount : -1) + "→" + s3.blankCount +
+                "；空白卡启动被拒且 0 分（对照：三零但有标签的卡照常结算 " + rNotBlank.activationScore + " 分）");
         }
 
         // ══════════════════════════════════════════════════════════════

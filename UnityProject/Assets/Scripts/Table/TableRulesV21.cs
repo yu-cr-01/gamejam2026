@@ -222,10 +222,47 @@ namespace GameJam.Prototype
 
         /// <summary>
         /// 空白卡计数（正文 §2.1 原话："需单独统计数量"）。
-        /// 引擎里也有一个计数，但那份在每次调用时新建的 LevelRun 上、读不回来，
-        /// 所以桌面这边自己数一份 —— 反正是"这一关产出了几张空白卡"，数起来没有歧义。
+        ///
+        /// ★ 它是**引擎那一份的镜像**：引擎在生成空白卡时加 <see cref="LevelRun.blankCount"/>，
+        ///   桌面层靠 BuildState / Absorb 双向搬运它。以前只搬了别的字段、漏了这一个，
+        ///   于是"手牌里有空白卡、HUD 上还写着 0 张"，存档里的计数也不会涨。
         /// </summary>
         public int blankCount;
+
+        /// <summary>
+        /// 本回合**最后登记的那个待献祭目标**在桌面表 <see cref="table"/> 里的那一张
+        /// （null = 没有 / 目标已离场）。与 <see cref="hasPendingSacrifice"/> 配套。
+        ///
+        /// 【为什么桌面上也要留一份】引擎是"每次调用新建一个 LevelRun"的参数包（见 BuildState 那段），
+        ///   待献祭这个待办事项必须活在**跨调用**的地方 —— 那就是这里。它进 BuildState 灌给引擎、
+        ///   由 Absorb 读回来，并且随存档一起走（否则读档后再结束回合会少吞一次）。
+        /// </summary>
+        private MaterialState pendingSacrifice;
+
+        /// <summary>本回合登记过待献祭目标没有（目标已离场时 pendingSacrifice 是 null，但这件事仍然成立）。</summary>
+        private bool hasPendingSacrifice;
+
+        /// <summary>待献祭目标登记时的卡名（目标已离场时靠它写日志 / 进存档）。</summary>
+        private string pendingSacrificeName = "";
+
+        /// <summary>
+        /// 当前待献祭目标的名字（HUD 用；没有就返回空串）。
+        /// </summary>
+        public string PendingSacrificeName { get { return hasPendingSacrifice ? pendingSacrificeName : ""; } }
+
+        /// <summary>
+        /// 丢掉待献祭登记（**不是**吞噬，是"这一回合的账不认了"）。
+        ///
+        /// 【什么时候必须调】凡是"回合/关卡概念被重置"的地方：开一关、第 1 回合、清桌面、读档落地。
+        ///   漏掉一处的后果是"上一局/上一回合的最后一次启动"被下一局拿去吞 —— 凭空少一张卡，
+        ///   而且日志里那张卡的名字对不上任何操作。
+        /// </summary>
+        private void ClearPendingSacrifice()
+        {
+            pendingSacrifice     = null;
+            hasPendingSacrifice  = false;
+            pendingSacrificeName = "";
+        }
 
         /// <summary>关卡结束的四个条件（正文 §八）：4 回合耗尽 / 爆刀 / 主动结束 / 达到目标分。</summary>
         public bool levelOver;
@@ -435,10 +472,13 @@ namespace GameJam.Prototype
             turnIndex      = 1;
             actionPoints   = LevelRun.ActionPointsPerTurn;
             startsThisTurn = 0;
+            blankCount     = 0;
 
-            // 新的一关 = 新的回合计时，"本回合启动过哪些"必须从零开始
+            // 新的一关 = 新的回合计时，"本回合启动过哪些"必须从零开始；
+            // 上一关登记下来的待献祭目标也一并作废（正文 §2.6：献祭与消耗不影响下一关）。
             startedThisTurnList.Clear();
             sourceOfState.Clear();
+            ClearPendingSacrifice();
 
             // ★ 目标分：v2.1 用 TableSettings.V21TargetScore，**不用** levelTargetScore。
             //   传进来的那个值来自 game_config.json 的 levels[].targetScore（1000/1500/2000），
@@ -705,6 +745,7 @@ namespace GameJam.Prototype
 
             // 第 1 回合 = "本回合启动过哪些"从零开始（和 EndRound 开新回合同一件事）
             startedThisTurnList.Clear();
+            ClearPendingSacrifice();
 
             lastLog.Clear();
             lastLog.Add("【第 1 回合开始】行动机会 " + actionPoints + "/" + LevelRun.ActionPointsPerTurn +
@@ -735,10 +776,13 @@ namespace GameJam.Prototype
             Ingredient ing = mc.card;
             if (ing != null) ApplyValues(ing, mc.source);   // 形态变化产出的卡也走这条，保证 H/D/V 有值
 
-            MaterialState st = new MaterialState(ing,
-                mc.D > 0 ? mc.D : DefaultMaterialD,
-                mc.H,
-                mc.V);
+            // ★ 默认 D 只给"有数值的卡"（卡表还没写 d 的兜底，见 DefaultMaterialD）。
+            //   空白卡（H/D/V 全 0、无特性）**不套默认 D** —— 它的 D=0 是规则，不是"数值没填"。
+            //   判据和理由逐条写在 IsBlankCard 上；套错的后果是它能反复启动、白拿刀片 V 的分。
+            int startD = mc.D;
+            if (startD <= 0 && !IsBlankCard(ing, mc.H, mc.D, mc.V)) startD = DefaultMaterialD;
+
+            MaterialState st = new MaterialState(ing, startD, mc.H, mc.V);
             table.Add(st);
 
             // 记下来源：这张素材被收回手牌时，卡面名字后面那句"（V=0）/（旧配置V=0）"
@@ -781,12 +825,22 @@ namespace GameJam.Prototype
         ///   把桌面状态灌进引擎、把引擎改完的状态读回来、把结果翻译成 3D 表现。
         ///   两边各写一份结算，迟早会出现"界面算的分和引擎算的分不一样"。
         ///
-        /// 【isLastStart 怎么定】
-        ///   正文 §四说明："最后一次启动不一定是第 5 次行动"，所以**不做次数判断** ——
-        ///   玩家每一次启动都可能是最后一次（他随时能点"结束回合"）。
-        ///   只有三种情况是确定的：**这一次会用掉最后一个行动机会（AP 1 → 0）** / 手牌空了 / 已到目标分
-        ///   （判据的边界逐条写在 IsLastStartForSure 上）。
-        ///   那时这一次必然是本回合最后一次，献祭吞噬必须当场生效，否则玩家白丢一张卡。
+        /// 【isLastStart 这一侧不再猜了（本次修正的核心）】
+        ///   正文 §四的原话是"每回合**实际使用的**最后一次启动"，而"这一次是不是最后一次"
+        ///   在启动的那一刻**不可能知道**：玩家随时能点「结束回合」（那这一次就是最后一次），
+        ///   也随时能接着启动（那就不是）。以前这里用三个条件去猜（行动机会剩 1 / 手牌空了 /
+        ///   已达目标分，见已删除的 IsLastStartForSure），两头都会错：
+        ///     · **漏吞**：手里还有牌、行动机会还有剩，玩家启动一次就点「结束回合」——
+        ///       那确实是本回合最后一次，可判据不成立，卡白丢在桌上（只做了一次衰减）；
+        ///     · **早吞**：手牌空了**不等于**回合结束 —— 桌面上的素材还能继续启动，
+        ///       还能把牌收回来再打出去，按"手牌空"吞就是把不是最后一次的那一次当成最后一次。
+        ///   现在这一层一个判断都不做：每次启动都让引擎**登记**目标（后一次覆盖前一次），
+        ///   吞噬由引擎在"回合真正结束"时判定（行动机会用尽 / 点结束回合 / 关卡结束）。
+        ///   判据和"实际使用"变成同一个事实，不再是启发式。
+        ///
+        /// 【isLastStart 参数为什么还传】引擎那个参数现在**只进日志**（见 RegisterSacrifice）——
+        ///   传 false 不影响任何结算，传 true 也不会提前吞。这里传 false，免得日志里出现
+        ///   一句"调用方标记为最后一次"的误导。
         /// </summary>
         public TurnResult TryActivate(MaterialState target)
         {
@@ -798,8 +852,19 @@ namespace GameJam.Prototype
                 return null;
             }
 
-            bool last = IsLastStartForSure();
-            TurnResult r = engine.StartBlade(BuildState(), target, last);
+            // ★ 空白卡（数值全 0、无特性）**不能作为启动目标**：正文 §2.1 说它"所有数值为 0、
+            //   无法交互"，而它一旦被启动就会白拿"刀片 V"对应的分数（见 IsBlankCard 的说明）。
+            //   挡在引擎调用之前，是因为引擎那边"目标在桌上且 D>0"就算合法 —— D=0 的空白卡
+            //   甚至会被引擎判成"启动一下、D 还是 0、立刻 D耗尽"，那是另一条不该走的路。
+            string why;
+            if (!CanActivateTarget(target, out why))
+            {
+                LoopNotice(why);
+                Debug.Log("[V21] 启动被拒：" + why);
+                return null;
+            }
+
+            TurnResult r = engine.StartBlade(BuildState(), target, false);
             Absorb(r);
 
             // ★ 记下"这一张启动过了" —— 收回手牌的限制条件要用（见 startedThisTurnList）。
@@ -808,8 +873,9 @@ namespace GameJam.Prototype
             if (target != null && !startedThisTurnList.Contains(target))
                 startedThisTurnList.Add(target);
 
-            Debug.Log("[V21] 启动（" + (last ? "确定是本回合最后一次 → 结算后判定献祭吞噬" : "可能还有下一次") +
-                      "）\n" + (r != null ? r.LogText() : "（引擎没返回结果）"));
+            Debug.Log("[V21] 启动（献祭登记：吞噬在回合真正结束时判定 —— 行动机会用尽 / 点结束回合 / 关卡结束）" +
+                      (hasPendingSacrifice ? "｜当前待献祭目标「" + pendingSacrificeName + "」" : "") +
+                      "\n" + (r != null ? r.LogText() : "（引擎没返回结果）"));
 
             // ★ 反应特效必须在这里播 —— **在 SyncVisualsAfterActivate 之前**：
             //   那一步会把已经离场的素材交给 PlayCard.ConsumeInto（卡飞向罐口、0.55 秒后自毁）。
@@ -867,41 +933,55 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
-        /// 这一次启动会不会**用掉本回合最后一个行动机会**（或之后根本没牌可打 / 已达标）
-        /// → 是的话它必然是本回合**实际使用的**最后一次启动（正文 §三.5 / §四.5）。
+        /// 这张卡是不是正文 §2.1 的**空白卡**（数值全 0、无特性、不能交互，只能被吞噬）。
         ///
-        /// 【为什么第一条判据是"这一次会消耗掉最后一个行动机会"（== 1），而不是"行动机会已用完"（&lt;= 0）】
-        ///   这个方法是在 <see cref="TryActivate"/> 里、**扣行动机会之前**问的，
-        ///   而走到这里只有两条路：玩家点「启动破壁机」→ TableTurnLoop.ActivateJuicer
-        ///   先过 <see cref="CanActivate"/>（它要求 actionPoints &gt; 0）；或者探针/工具直接调 TryActivate。
-        ///   两条路上 actionPoints 都不可能是 0 —— 原来那句 `if (actionPoints &lt;= 0) return true;`
-        ///   是**死条件**，永远不会命中。后果正是实跑日志里抓到的那一条：
-        ///   **把最后一个行动机会用掉的那一次启动（1 → 0）不被认作"最后一次"**，
-        ///   第 ⑤ 步写"本次不是本回合实际使用的最后一次启动 → 不吞噬"，
-        ///   目标卡带着 D 留在桌上；而这一下之后 CanActivate 当场变 false、
-        ///   本回合再也点不动启动 —— 那一次事实上就是最后一次，献祭吞噬漏判了。
-        ///   改成"这一次会把最后一个行动机会扣掉"就对了：扣完 AP = 0，
-        ///   引擎第①步之后（行动机会已用尽）谁都不可能再启动 → **当场就能确定**，
-        ///   不用等回合真的结束（玩家的原话是"结束回合"随时可点，等不起）。
+        /// 【判据只有一份】真正的判据在 <see cref="MaterialState.IsBlankCardOf"/>（Rules 层）——
+        ///   规则引擎也要用同一条（它自己会拒绝把空白卡当启动目标），
+        ///   两边各写一份的话迟早会出现"引擎认、桌面不认"这种最难查的分歧。
+        ///   这里只是给桌面层的调用点一个顺手的入口，不重复任何逻辑。
         ///
-        /// 【边界表（当前工程里只有"回合开始重置为 5"和"启动 -1"两处会动 actionPoints）】
-        ///   · actionPoints ≥ 2：这一次只扣到 ≥ 1，回合里**还能再启动** → 不是最后一次（false）。
-        ///     （多认这一档会让"还能继续打"的回合提前把目标吞掉，那是另一种漏判。）
-        ///   · actionPoints == 1：扣完 = 0，之后 CanActivate=false → **是**最后一次（true）。
-        ///   · actionPoints ≤ 0：只有绕开 CanActivate 直接调 TryActivate 才到得了，
-        ///     引擎会在第①步之前就拒掉这次启动（"行动机会已用尽 → 不能启动"），
-        ///     拒绝路径走不到第 ⑤ 步，所以**不会重复触发吞噬**；这里仍然返回 true ——
-        ///     "本回合再也不会有启动了"这件事在当时是真的，判据本身没有说谎。
-        ///   · 以后真有卡牌效果加行动机会（正文 §四 说明里留的那个设计空间）：
-        ///     判据要跟着换成"这次扣完之后仍然是 0"（即把这一处换成读扣完之后的值）；
-        ///     现在没有任何效果会加行动机会，所以"扣之前 == 1"与"扣完 == 0"完全等价。
+        /// 【为什么桌面层必须知道它】出牌那一步的 `D &gt; 0 ? D : DefaultMaterialD` 是给
+        ///   "卡表还没写 d 的卡"兜底的，而空白卡的 D=0 是规则本身 —— 套错的后果是它能
+        ///   反复启动、白拿"刀片 V"的分（详见 Rules 层那段说明）。
         /// </summary>
-        private bool IsLastStartForSure()
+        public static bool IsBlankCard(Ingredient card, int h, int d, int v)
         {
-            if (actionPoints <= 1) return true;      // 1 → 0：这一次会把最后一个行动机会用掉
-            if (HandCount == 0) return true;
-            if (targetScore > 0 && score >= targetScore) return true;
-            return false;
+            return MaterialState.IsBlankCardOf(card, h, d, v);
+        }
+
+        /// <summary>这一张桌面素材是不是空白卡（同上，判据在 Rules 层）。</summary>
+        public static bool IsBlankCard(MaterialState st)
+        {
+            return st != null && st.IsBlankCard;
+        }
+
+        /// <summary>
+        /// 这一张桌面素材能不能当启动目标（不能时 <paramref name="reason"/> 是给玩家看的原因）。
+        ///
+        /// 【为什么和 <see cref="CanActivate"/> 分开】启动有两道门，问的问题不一样：
+        ///   CanActivate 问"现在整体能不能启动"（行动机会 / 刀片 / 关卡），
+        ///   这里问"**这一张**能不能被启动"（在桌上 / 还有 D / 不是空白卡）。
+        ///   混在一起会让 HUD 把"这张不能点"说成"你现在不能启动"，玩家找不着北。
+        /// </summary>
+        public bool CanActivateTarget(MaterialState st, out string reason)
+        {
+            reason = "";
+
+            if (st == null) { reason = "先在桌面上点一张素材当启动目标"; return false; }
+            if (st.removed || !st.OnTable) { reason = "「" + st.name + "」已经不在桌面上了"; return false; }
+
+            // ★ 空白卡：数值全 0、正文 §2.1 明说"无法交互"。放它进来就是"启动一次白拿刀片 V 的分"。
+            //   这一条要排在"D 已耗尽"之前：空白卡不是"用完了"，是**永远用不了** ——
+            //   提示写错方向，玩家会以为"等下回合 D 恢复"（而 D 根本不会恢复）。
+            if (IsBlankCard(st))
+            {
+                reason = "「" + st.name + "」是空白卡（H/D/V 全 0、无法交互）→ 不能作为启动目标";
+                return false;
+            }
+
+            if (st.D <= 0) { reason = "「" + st.name + "」D 已耗尽，换一张"; return false; }
+
+            return true;
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -911,6 +991,10 @@ namespace GameJam.Prototype
         /// <summary>
         /// 结束本回合：所有附魔层数 −1、归零消失；桌面素材保留（正文 §三.6）。
         /// 第 4 回合结束时关卡结束（正文 §三.7）。
+        ///
+        /// 【顺序：补吞 → 衰减 → 换回合】补吞由引擎的 <see cref="TurnEngine.EndTurn"/> 在衰减**之前**
+        ///   做掉（理由见那里），桌面这一层只需要在结果回来之后把"目标卡可能已经离场"这件事
+        ///   反映到选中状态上 —— 否则 HUD 会继续指着一张已经并入刀片的卡。
         /// </summary>
         public TurnResult EndRound()
         {
@@ -918,6 +1002,14 @@ namespace GameJam.Prototype
 
             TurnResult r = engine.EndTurn(BuildState());
             Absorb(r);
+
+            // 补吞就发生在上面这一下里（引擎先补吞、再衰减）。被吞掉的那张如果是当前启动目标，
+            // 必须当场换一张 —— 留着一个已离场的引用，HUD 的"目标素材"和权威同步的自检都会报它。
+            if (selected == null || selected.removed || !selected.OnTable || selected.D <= 0)
+            {
+                MaterialState next = FirstLiveTableMaterial();
+                Select(next, next != null);
+            }
 
             if (levelOver && string.IsNullOrEmpty(endReason)) endReason = "4 回合耗尽";
 
@@ -1069,8 +1161,11 @@ namespace GameJam.Prototype
                 if (actionPoints <= 0) return "本回合行动机会已用完（" + LevelRun.ActionPointsPerTurn + " 次）→ 结束回合";
                 if (blade == null || blade.H <= 0) return "刀片 H 已归零（爆刀）";
                 if (selected == null) return "先在桌面上点一张素材当启动目标";
-                if (selected.removed || !selected.OnTable) return "选中的素材已经不在桌面上了";
-                if (selected.D <= 0) return "选中的素材 D 已耗尽，换一张";
+
+                // "这一张能不能启动"和"现在能不能启动"分开问（见 CanActivateTarget）——
+                // 空白卡被排在这里：它数值全 0、无法交互，点它必须给一句明确的话。
+                string why;
+                if (!CanActivateTarget(selected, out why)) return why;
                 return "";
             }
         }
@@ -2352,7 +2447,12 @@ namespace GameJam.Prototype
             MaterialCard mc = new MaterialCard();
             mc.card   = st.card;
             mc.H      = st.H;
-            mc.D      = st.D > 0 ? st.D : DefaultMaterialD;
+
+            // 和 PlayMaterial 完全对称：默认 D 只给"有数值的卡"，空白卡原样带回 0。
+            //   不对称的话会出现"空白卡上桌 D=0、收回来变 D=3、再上桌又能启动了"——
+            //   正是这一条要堵的漏洞，绕一圈又回来了。
+            mc.D      = (st.D > 0 || IsBlankCard(st)) ? st.D : DefaultMaterialD;
+
             mc.V      = st.V;
             mc.source = SourceOf(st);
 
@@ -2448,6 +2548,15 @@ namespace GameJam.Prototype
             st.startsThisTurn = startsThisTurn;
             st.levelOver      = levelOver;
             st.bursted        = bursted;
+
+            // ★ 这两个字段是"引擎改完要不要读回来"的分水岭：
+            //   · blankCount：**引擎是权威**（它才知道这次结算生成了几张空白卡）→ 灌进去、读回来；
+            //   · 待献祭目标：**桌面是权威**（它跨调用活着）→ 灌进去让引擎判定、再读回引擎清空后的值。
+            //   漏掉任何一个的表现都是"数字对不上"，而且只在特定路径上出现（存读档 / 结束回合）。
+            st.blankCount            = blankCount;
+            st.pendingSacrifice      = pendingSacrifice;
+            st.hasPendingSacrifice   = hasPendingSacrifice;
+            st.pendingSacrificeName  = pendingSacrificeName;
             return st;
         }
 
@@ -2467,6 +2576,18 @@ namespace GameJam.Prototype
                 startsThisTurn = r.state.startsThisTurn;
                 levelOver      = r.state.levelOver;
                 bursted        = r.state.bursted;
+
+                // ★ 空白卡计数必须读回来。放在这一段（SyncHandFromEngine 之前）是有意的：
+                //   AddProducedToHand 里那句"当前空白卡 N 张"读的就是这个字段 ——
+                //   顺序反了，日志会比真实值少一张（看起来像"计数没同步"）。
+                blankCount = r.state.blankCount;
+
+                // ★ 待献祭目标：引擎可能在这一次调用里把它吞掉了（行动机会用尽 / 达标 / 结束回合），
+                //   所以这里**照抄引擎的结果**（它会清空登记）。不读回来的话桌面会一直以为
+                //   "还欠一次吞噬"，下一次结束回合就会再吞一张 —— 那是更糟的重复吞噬。
+                pendingSacrifice     = r.state.pendingSacrifice;
+                hasPendingSacrifice  = r.state.hasPendingSacrifice;
+                pendingSacrificeName = r.state.pendingSacrificeName != null ? r.state.pendingSacrificeName : "";
             }
 
             lastLog.Clear();
@@ -2627,6 +2748,7 @@ namespace GameJam.Prototype
             // 桌面清空 = 没有"本回合启动过的卡"可谈了（回菜单 / 重开一关都会走这里）
             startedThisTurnList.Clear();
             sourceOfState.Clear();
+            ClearPendingSacrifice();
 
             SweepUnclaimedViews("ClearTable");
         }
@@ -2658,6 +2780,11 @@ namespace GameJam.Prototype
             d.levelOver      = levelOver;
             d.bursted        = bursted;
             d.endReason      = endReason != null ? endReason : "";
+
+            // ── 待献祭目标（★ 新状态：不存它，"读档 → 结束回合"会少吞一次）──
+            //   下标按 table 现算（目标可能已经离场，那时只能是 -1；名字仍然要存，回合结束时要照着写日志）
+            d.pendingSacrificeIndex = PendingSacrificeIndex();
+            d.pendingSacrificeName  = hasPendingSacrifice ? (pendingSacrificeName != null ? pendingSacrificeName : "") : "";
 
             d.selectedIndex  = SelectedIndex();
             d.selectedAuto   = selectedAuto;
@@ -2705,6 +2832,20 @@ namespace GameJam.Prototype
         {
             if (selected == null) return -1;
             for (int i = 0; i < table.Count; i++) if (table[i] == selected) return i;
+            return -1;
+        }
+
+        /// <summary>
+        /// 待献祭目标在 table 里的下标（-1 = 没有 / 目标已经离场）。
+        ///
+        /// 【为什么要存下标而不是"存个名字、读档再按名字找回来"】名字会重复（同一张卡可以在桌上
+        ///   有两张实例），而"最后登记的是**哪一个实例**"恰恰是这里唯一要保住的东西。
+        ///   名字只用于"目标已离场、下标给不出"时的日志与存档留痕。
+        /// </summary>
+        private int PendingSacrificeIndex()
+        {
+            if (!hasPendingSacrifice || pendingSacrifice == null) return -1;
+            for (int i = 0; i < table.Count; i++) if (table[i] == pendingSacrifice) return i;
             return -1;
         }
 
@@ -2878,6 +3019,7 @@ namespace GameJam.Prototype
             table.Clear();
             startedThisTurnList.Clear();
             sourceOfState.Clear();
+            ClearPendingSacrifice();
 
             for (int i = 0; i < b.table.Count; i++)
             {
@@ -2885,6 +3027,18 @@ namespace GameJam.Prototype
                 if (i < b.started.Count && b.started[i]) startedThisTurnList.Add(b.table[i]);
                 if (i < b.valueSource.Count)
                     sourceOfState[b.table[i]] = (MaterialCard.ValueSource)b.valueSource[i];
+            }
+
+            // ── 待献祭目标（★ 必须在 table 建完之后按下标认回来）──
+            //   读档后引擎手里要有这个待办事项，否则"读档 → 结束回合"那一次吞噬会静默丢掉。
+            //   下标越界（目标已离场）时 pendingSacrifice 留 null，但 hasPendingSacrifice 仍是 true ——
+            //   回合结束时会照实写一句「本次献祭不生效」，和存档前逐字一致。
+            if (!string.IsNullOrEmpty(b.pendingSacrificeName))
+            {
+                hasPendingSacrifice  = true;
+                pendingSacrificeName = b.pendingSacrificeName;
+                pendingSacrifice     = (b.pendingSacrificeIndex >= 0 && b.pendingSacrificeIndex < table.Count)
+                                     ? table[b.pendingSacrificeIndex] : null;
             }
 
             // ── 手牌 ──

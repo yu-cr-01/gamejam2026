@@ -171,7 +171,16 @@ namespace GameJam.EditorTools
         private static bool   cardV3Probe;
 
         /// <summary>
-        /// 相交探针拍完之后回哪一步 —— 进探针时按**来路**记下（开场那条链和牌组/关卡那条链
+        /// 献祭补吞 / 空白卡取证探针（DSH_SACFLUSHPROBE=1）：见 ㊿⓪~㊿⑫。
+        ///
+        /// 验两件本分支刚修的事（都只能在真游戏里取证）：
+        ///   ① 献祭吞噬的时机改成"回合真正结束时判定" —— 「启动一次 → 点结束回合」必须补吞，
+        ///      而"手牌空了但还能启动"不许提前吞；
+        ///   ② 空白卡上桌必须 D=0、不能作为启动目标、不得分。
+        /// </summary>
+        private static bool   sacFlushProbe;
+
+        /// <summary>相交探针拍完之后回哪一步 —— 进探针时按**来路**记下（开场那条链和牌组/关卡那条链
         /// 各有各的下一步：v2.1 是 51/96，旧流程是 31/33/21）。
         /// 用一个字段而不是各写一份 stage，是为了让"拍完接回原链"只有一处实现。
         /// </summary>
@@ -269,6 +278,12 @@ namespace GameJam.EditorTools
             //   但证不了"这些新卡在**游戏里**真的画得出来、点得到"。所以这条链只做一件事：
             //   进到正式回合 → 打开图鉴 → 把新卡那张拍下来，并把每张新卡的注册名/HDV 打进日志。
             cardV3Probe = System.Environment.GetEnvironmentVariable("DSH_CARDV3PROBE") == "1";
+
+            // ★ 献祭补吞 / 空白卡取证探针（DSH_SACFLUSHPROBE=1，见 ㊿⓪~㊿⑫ 那一段）：
+            //   它要证的是"吞噬的时机"（回合结束时补吞）与"空白卡不进桌面"两件事 ——
+            //   前者在真游戏里必须走"启动 → 点结束回合"这条玩家路径，后者的 D 值会进存档，
+            //   都不是离线断言能替代的。单独一条链：它会打到第 3 回合、并把空白卡挂到桌上。
+            sacFlushProbe = System.Environment.GetEnvironmentVariable("DSH_SACFLUSHPROBE") == "1";
 
             // ★ 每次域重载都要订阅，否则进 Play 之后就再也没人推进流程了
             EditorApplication.update += Tick;
@@ -540,6 +555,23 @@ namespace GameJam.EditorTools
                     }
                     // 相交探针要在**开场这一屏**多拍两张（机位 + 相交清单），拍完回 51 接回主链
                     if (overlapProbe) { overlapResume = 51; Stage = 288; stageTime = EditorApplication.timeSinceStartup; return; }
+
+                    // ★ 献祭补吞链 + `DSH_AUTOSTART=1`：开局那几步由**游戏自己的后门**走完
+                    //   （TableTurnLoop.AutoStartFirstLevel 在**同一个调用里**把"选关 → 选牌组 →
+                    //    选核心 → 确认刀片"一次做完，不给外部点击留任何可乘之机）。
+                    //   【为什么要这样】实测被这台机器上别的自动化点歪过三次牌组：它点了一下牌组窗口
+                    //   第 4 行，于是整条链的前提（牌组 0、核心 外星合金）全歪，判词会变成假通过。
+                    //   走 AutoStart 就没有那个窗口可点。所以这里直接跳到"第 1 回合"那一屏，
+                    //   不再走 51~59 的点击链。
+                    if (sacFlushProbe && TableSettings.AutoStart)
+                    {
+                        Debug.Log("[AutoPlay/献祭补吞] 开局走 DSH_AUTOSTART 后门（AutoStartFirstLevel）——" +
+                                  "跳过 51~59 的点链，直接接 ㊿① 第 1 回合。");
+                        Stage = 520;
+                        stageTime = EditorApplication.timeSinceStartup;
+                        return;
+                    }
+
                     Stage = 51;
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
@@ -597,7 +629,8 @@ namespace GameJam.EditorTools
                     // 取景探针在这一屏做（手里 5 张 = 手牌最宽的一档），拍完回 57 接回主链
                     // 献祭探针要点**点名的那张**当核心（硝石 H12 —— 刀片 H 够 5 次启动），
                     // 所以它自己一步（㊲⑨），不走主链的"第一张"
-                    Stage = sacProbe ? 379 : (framingProbe ? 280 : (blackProbe ? 220 : 57));
+                    Stage = sacFlushProbe ? 519
+                          : (sacProbe ? 379 : (framingProbe ? 280 : (blackProbe ? 220 : 57)));
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -624,14 +657,15 @@ namespace GameJam.EditorTools
                     // 提示块只在正式回合画，开局准备那几屏根本没有它）；
                     // 其余支线各走各的（都不设 = 原来的"只用点击"那条路，行为一个字没变）
                     // 献祭吞噬取证探针要从"第 1 回合、什么都没动"这一屏起步（见 ㊲⑧ 那一段）
-                    Stage = cardV3Probe ? 480
+                    Stage = sacFlushProbe ? 520
+                          : (cardV3Probe ? 480
                           : (sacProbe ? 380
                           : (saveProbe ? 340
                           : (framingProbe ? 270
                           : (cardFaceProbe ? 300
                           : (overlapProbe ? 296
                           : (layoutProbe ? 240
-                          : (fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110)))))))));
+                          : (fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110))))))))));
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -3867,6 +3901,292 @@ namespace GameJam.EditorTools
                     return;
 
                 case 486:
+                    if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
+                    Finish();
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㊿⓪~㊿⑫ 献祭补吞 + 空白卡取证链（DSH_SACFLUSHPROBE=1）
+                //
+                //  【为什么要单独一条链】本分支修的两件事都只能在**真游戏里**取证：
+                //    ① 献祭吞噬的时机从"启动那一刻猜"改成"回合真正结束时判定"——
+                //       要证的是"启动一次（手牌还有牌、行动机会还有剩）→ 点结束回合 → 卡真的被吞了"，
+                //       以及它的反面"手牌空了也不许提前吞（回合还没结束）"；
+                //    ② 空白卡上桌必须 D=0、不能作为启动目标、一分不给
+                //       （以前出牌会给它套默认 D=3，于是它能反复启动白拿刀片 V 的分）。
+                //   这条链**走玩家那条路**（TableInteraction.ClickCard / TableTurnLoop.ActivateJuicer /
+                //   EndRoundOrLevel），每一步都把关键数字 + 引擎日志原文打进 Unity 日志，并存截图。
+                //
+                //  【牌组的 H / 分预算】牌组 0「硫硝爆燃」+ 核心点名 外星合金（v3.0 H20 V2）：
+                //   整条链 5 次启动 + 2 次吞噬，刀片 H 只涨不跌（20-3 → 17-1+5=21 → 21-1+3=23），
+                //   不会中途爆刀把链子截断（这正是以前"从没抓到过吞噬"的原因）；
+                //   总分算下来只有 30 上下，离目标分 60 还有一倍 —— 不会半路"达标结束"。
+                //
+                //  【局面怎么排】
+                //   第 1 回合：水（D=3）连打三次 → D耗尽产出「空白卡」（顺手取证 blankCount 同步）；
+                //   第 2 回合：硫磺 上桌 → 启动一次（手牌还有 4 张）→ 点结束回合 = 测试①；
+                //   第 3 回合：硝石 + 空白卡 上桌、法术打掉 → 手牌空 → 测试③（空白卡）
+                //             → 再启动 硝石 = 测试② → 点结束回合；
+                //   第 4 回合：只剩一张空白卡在桌上，跑回归自检收尾。
+                // ══════════════════════════════════════════════════════
+
+                // ㊿⓪ 点名选刀片核心 = 外星合金（v3.0 H20 —— 整条链 5 次启动不爆刀）
+                case 519:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSacPickCore("外星合金");
+                    Stage = 58;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿① 第 1 回合开局（手牌 4 张 = 3 素材 + 1 法术）+ 水 上桌
+                case 520:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!ProbeSacGuardAt("㊿① 第 1 回合开局（手牌 4 张、桌面 0 张）", 1, 0, 4))
+                    {
+                        Stage = 519;
+                        stageTime = EditorApplication.timeSinceStartup;
+                        return;
+                    }
+                    ProbeFlushArm();
+                    ProbeFlushSetupCheck();
+
+                    // ★ 前提不对就**当场收工**，一条判词都不算。
+                    //   【为什么不是"照跑、如实记录"】实测被别的自动化点歪过牌组（换成水·冷热流）：
+                    //   那时"点名 硝石 上桌"会退回打第一张素材、"点硝石"直接找不到人，于是
+                    //   ②的判词退化成"什么都没启动 → 当然没有并入刀片" —— 一条**假通过**。
+                    //   假通过比失败坏得多，所以前提不成立时宁可只留一行 ★ 就退出。
+                    if (!ProbeFlushPremiseOk())
+                    {
+                        FlushExpect("㊿① 本链前提（牌组 0「硫硝爆燃」+ 核心 外星合金）", false,
+                                    "本局核心不是 外星合金 —— 判词全部作废，请重跑（或加 DSH_AUTOSTART=1 走游戏自己的开局后门）");
+                        ProbeFlushSummary();
+                        Finish();
+                        return;
+                    }
+
+                    Debug.Log("[AutoPlay/献祭补吞] ㊿① 开局：" + ProbeSacNumbers());
+                    ProbeSacPlayHandMaterial("水", "㊿① 水 上桌（D=3：连打三次把 D 打到 0 → D耗尽产出「空白卡」）");
+                    Stage = 521;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿② 水 D 3→2（这一下只登记，不吞噬）
+                case 521:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSacSelectTable("水");
+                    ProbeSacActivate("㊿② 启动水 ①（D 3→2）");
+                    Stage = 522;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿③ 水 D 2→1
+                case 522:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSacSelectTable("水");
+                    ProbeSacActivate("㊿③ 启动水 ②（D 2→1）");
+                    Stage = 523;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿④ 水 D 1→0 → D耗尽 → 「空白卡」进手牌（正文 §2.1 的原料）
+                case 523:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSacSelectTable("水");
+                    ProbeSacActivate("㊿④ 启动水 ③（D 1→0 → D耗尽 → 空白卡进手牌；水 移出桌面）");
+                    ProbeSacDumpLastActivate("㊿④ 这一下目标被 D 耗尽带走 → 回合结束补吞时应当写「本次献祭不生效」");
+                    Stage = 524;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿⑤ blankCount 的实机取证：引擎产出的空白卡，桌面层（HUD/存档读的都是它）必须读得到
+                case 524:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("sacflush_01_blank_produced.png")) return;
+                    ProbeFlushExpectBlankCount("㊿⑤ 引擎产出 1 张空白卡之后，桌面层的 blankCount 也是 1", 1);
+                    ProbeFlushExpectHandHas("㊿⑤ 空白卡确实进了手牌（3D 手牌里看得到它）", true);
+                    Stage = 525;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿⑥ 结束第 1 回合：待献祭目标（水）已经离场 → 只能写「本次献祭不生效」，什么都不吞
+                case 525:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSacEndRound();
+                    Stage = 526;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 526:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeFlushExpectTableCount("㊿⑥ 结束回合之后桌面是空的（水 已被 D 耗尽带走，没有被重复吞）", 0);
+                    Stage = 527;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══ 测试① 第 2 回合：启动一次（手牌还有 3 张）→ 点结束回合 → **必须补吞** ══
+                case 527:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!ProbeSacGuardAt("㊿⑦ 第 2 回合开局（第 2 回合、桌面 0 张、手牌 4 张）", 2, 0, 4))
+                    {
+                        Stage = 519;
+                        stageTime = EditorApplication.timeSinceStartup;
+                        return;
+                    }
+                    Debug.Log("[AutoPlay/献祭补吞] ㊿⑦ 第 2 回合开局：" + ProbeSacNumbers());
+                    ProbeSacPlayHandMaterial("硫磺", "㊿⑦ 硫磺 上桌（拿它当『提前结束回合也要吞』的靶子：D=3、无附魔层 → 不会变形）");
+                    Stage = 528;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿⑧ **启动一次**：手牌不空、行动机会 5→4
+                //   ★ 旧判据在这里是 false（"此刻就能确定不是最后一次"）→ 于是不吞（漏吞）。
+                case 528:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("sacflush_02_before_endturn.png")) return;
+                    ProbeSacSelectTable("硫磺");
+                    ProbeSacActivate("㊿⑧ 第 1 次启动（手牌不空、行动机会 5→4 → 新语义下只登记、不吞噬）");
+                    ProbeSacDumpLastActivate("㊿⑧ 这一下**不该**吞噬");
+                    Stage = 529;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 529:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeFlushExpectActivate("㊿⑨ 启动一次（手牌不空、AP 还有剩）时**不该**出现「并入刀片」", false);
+                    ProbeFlushExpectTableCount("㊿⑨ 启动之后桌面素材还在（没被提前吞）", 1);
+                    Stage = 530;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿⑩ 点「结束回合」→ 补吞必须在这里发生（刀片 H/V 各涨 硫磺 的 H/V、卡移出桌面）
+                case 530:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeFlushRememberBlade("㊿⑩ 结束回合之前");
+                    ProbeSacEndRound();
+                    Stage = 531;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 531:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeFlushExpectTableCount("㊿⑪ 结束回合之后桌面清空（硫磺 被并入刀片）", 0);
+                    ProbeFlushExpectAbsorbed("㊿⑪ 结束回合补吞：目标离场 + 刀片 H/V 的净增量正好是它的 H/V");
+                    Stage = 532;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ══ 测试② 第 3 回合：把手里剩下的牌全打出去 → 手牌空，再启动 → **不许提前吞** ══
+                case 532:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!ProbeSacGuardAt("㊿⑫ 第 3 回合开局（第 3 回合、桌面 0 张、手牌 3 张）", 3, 0, 3))
+                    {
+                        Stage = 519;
+                        stageTime = EditorApplication.timeSinceStartup;
+                        return;
+                    }
+                    Debug.Log("[AutoPlay/献祭补吞] ㊿⑫ 第 3 回合开局：" + ProbeSacNumbers());
+                    ProbeSacPlayHandMaterial("硝石", "㊿⑫ 硝石 上桌（惰性：旧配置卡，无形态转换/标签 → 拿它当测试②的靶子）");
+                    Stage = 533;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿⑬ 把**空白卡**也打上桌（出牌不消耗行动机会）→ 它同时是测试③的对象
+                case 533:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSacPlayHandMaterial("空白卡", "㊿⑬ 空白卡 上桌（正文 §2.1 的原料；本回合要验它 D=0、不能启动）");
+                    Stage = 534;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿⑭ 打掉最后一张法术 → 手牌彻底空（这就是旧判据里"HandCount == 0"那一档）
+                case 534:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeSacPlaySpell();
+                    Stage = 535;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿⑮ 测试③前半：空白卡上桌之后 D 必须是 0（**不是**默认的 3）
+                case 535:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeFlushExpectHandEmpty("㊿⑮ 手牌已空（3D 手牌 0 张 = 旧判据里「早吞」那一档）", 0);
+                    if (!Shot("sacflush_03_blank_on_table_d0.png")) return;
+                    ProbeFlushDumpBlankCard("㊿⑮ 空白卡 上桌之后（D 必须是 0）");
+                    Stage = 536;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿⑯ 测试③后半：尝试启动它 → 明确被拒、不得分、不消耗行动机会、不扣刀片 H
+                case 536:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacSelectTable("空白卡");
+                    ProbeFlushBlankAttempt("㊿⑯ 尝试启动 空白卡（期望：明确提示 + 不得分 + 不消耗行动机会）");
+                    Stage = 537;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 537:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("sacflush_04_blank_rejected.png")) return;
+                    ProbeFlushDumpBlankCard("㊿⑰ 拒绝之后再看一眼那张空白卡（H/D/V 应当一个字节都没动）");
+                    Stage = 538;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿⑱ 测试②：手牌空 + 行动机会还有 5 → **不许提前吞**（旧判据在这里会「早吞」）
+                case 538:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacSelectTable("硝石");
+                    ProbeSacActivate("㊿⑱ 手牌空时启动（旧判据在这里会「早吞」→ 新语义下必须只登记）");
+                    ProbeSacDumpLastActivate("㊿⑱ 这一下**不该**吞噬（回合还没结束）");
+                    Stage = 539;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 539:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeFlushExpectActivate("㊿⑲ 手牌空时启动**不该**出现「并入刀片」", false);
+                    ProbeFlushExpectTableCount("㊿⑲ 手牌空时启动之后桌面素材还在（没被提前吞；桌面 = 硝石 + 空白卡）", 2);
+                    Stage = 540;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿⑳ 点「结束回合」→ 这时才吞（手牌空这一档的"回合真正结束"）
+                case 540:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeFlushRememberBlade("㊿⑳ 结束回合之前");
+                    ProbeSacEndRound();
+                    Stage = 541;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 541:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeFlushExpectTableCount("㊿㉑ 结束回合之后桌面只剩 空白卡 一张（硝石 被并入刀片）", 1);
+                    ProbeFlushExpectAbsorbed("㊿㉑ 补吞：目标离场 + 刀片 H/V 的净增量正好是它的 H/V");
+                    Stage = 542;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊿㉒ 收尾：第 4 回合的状态守卫 + 回归自检 + 本链判词汇总
+                case 542:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!ProbeSacGuardAt("㊿㉒ 第 4 回合开局（第 4 回合、桌面 1 张 = 空白卡、手牌 0 张）", 4, 1, 0))
+                    {
+                        Stage = 519;
+                        stageTime = EditorApplication.timeSinceStartup;
+                        return;
+                    }
+                    Debug.Log("[AutoPlay/献祭补吞] ㊿㉒ 第 4 回合开局：" + ProbeSacNumbers());
+                    ProbeLayoutReport("㊿㉒ 献祭补吞链收尾（回归：级联布局不变式）");
+                    ProbeLogSync("㊿㉒ 献祭补吞链收尾（回归：状态与画面一致 / 残留 0 张）");
+                    ProbeSacWoodShader("㊿㉒ 木纹材质读回");
+                    ProbeFlushSummary();
+                    Stage = 543;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 543:
                     if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
                     Finish();
                     return;
@@ -7741,6 +8061,282 @@ namespace GameJam.EditorTools
                       + "｜桌面素材 " + tableBefore + " → " + r.LiveTableCount() + " 张"
                       + "｜3D 手牌 " + handBefore + " → " + (setup.hand != null ? setup.hand.Count : -1) + " 张"
                       + "｜notice " + loop.notice);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  ㊿⓪~㊿㉑ 献祭补吞 / 空白卡取证链的小工具（DSH_SACFLUSHPROBE=1）
+        //
+        //  【为什么这些判词要写成"✓ / ★ 不符合预期 + 明细"而不写成静默的比较】
+        //   探针没有断言框架，判词就是证据。所以每一条都打三样东西：
+        //     ① 期望什么（what）、② 实际是多少（detail 里的数字）、③ 结论（✓ 还是 ★）。
+        //   收尾再打一个"不符合预期 N 条"，让看日志的人一眼知道这条链过没过。
+        //  【为什么不写死数值】被吞的卡的 H/V 随牌组变，刀片 H 又被"启动扣 1 H"一起改 ——
+        //   所以判词一律用**净增量**表达（补吞那一步只有吞噬会动刀片），换牌组照样成立。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>本链"不符合预期"的条数（收尾打出来）。</summary>
+        private static int sacFlushFails;
+
+        /// <summary>补吞判词的基准：记下"结束回合之前"的刀片 H/V 与那个待献祭目标的名字/H/V。</summary>
+        private static int sacFlushBaseBladeH;
+        private static int sacFlushBaseBladeV;
+        private static string sacFlushTargetName = "";
+        private static int sacFlushTargetH;
+        private static int sacFlushTargetV;
+
+        private static void ProbeFlushArm() { sacFlushFails = 0; }
+
+        private static void FlushExpect(string what, bool ok, string detail)
+        {
+            if (!ok) sacFlushFails++;
+            Debug.Log("[AutoPlay/献祭补吞] " + (ok ? "✓ " : "★ 不符合预期 ") + what + "｜" + detail);
+        }
+
+        private static void ProbeFlushSummary()
+        {
+            Debug.Log("[AutoPlay/献祭补吞] ══ 本链判词汇总：不符合预期 " + sacFlushFails + " 条" +
+                      (sacFlushFails == 0 ? "（全部通过）" : "（★ 逐条见上面）") + " ══");
+        }
+
+        /// <summary>
+        /// 这一局的前提对不对（牌组 0「硫硝爆燃」+ 核心 = 外星合金 H20）——
+        /// **不对就整条链作废**（见 ㊿① 那一档的说明：前提歪了会出"假通过"）。
+        /// </summary>
+        private static bool ProbeFlushPremiseOk()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) return false;
+
+            GameJam.Rules.BladeState b = loop.rulesV21.blade;
+            return b != null && !string.IsNullOrEmpty(b.name) && b.name.Contains("外星合金");
+        }
+
+        /// <summary>这一局的前提读一行日志出来（牌组 0 + 核心 外星合金）。</summary>
+        private static void ProbeFlushSetupCheck()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) return;
+
+            GameJam.Rules.BladeState b = loop.rulesV21.blade;
+            bool coreOk = b != null && !string.IsNullOrEmpty(b.name) && b.name.Contains("外星合金");
+
+            Debug.Log("[AutoPlay/献祭补吞] 这一局的前提（期望：牌组 0「硫硝爆燃」、核心 = 外星合金 H20 V2）："
+                      + "刀片 " + (b != null ? b.name : "（无）")
+                      + " H" + (b != null ? b.H : 0) + " V" + (b != null ? b.V : 0)
+                      + "｜起始手牌 " + loop.rulesV21.HandText()
+                      + (coreOk ? "｜✓ 核心 H 够这条链 5 次启动不爆刀"
+                                : "｜★ 核心不是外星合金 —— H 预算可能不够（一爆刀这条链就断），下面照跑、如实记录"));
+        }
+
+        /// <summary>最近一次结算日志里某个关键词出现了几行 —— "日志里有没有出现 X" 必须是个数字。</summary>
+        private static int CountLastLog(string keyword)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) return -1;
+
+            int n = 0;
+            List<string> log = loop.rulesV21.lastLog;
+            for (int i = 0; i < log.Count; i++)
+                if (!string.IsNullOrEmpty(log[i]) && log[i].Contains(keyword)) n++;
+            return n;
+        }
+
+        /// <summary>启动之后立刻判：这次结算的日志里"并入刀片"出现了几次（期望 0 = 只登记、不吞）。</summary>
+        private static void ProbeFlushExpectActivate(string what, bool expectAbsorb)
+        {
+            int n = CountLastLog("并入刀片");
+            FlushExpect(what, expectAbsorb ? n >= 1 : n == 0,
+                        "最近一次结算日志里「并入刀片」出现 " + n + " 次（lastLog " +
+                        (Loop() != null && Loop().rulesV21 != null ? Loop().rulesV21.lastLog.Count : -1) + " 行）");
+        }
+
+        private static void ProbeFlushExpectTableCount(string what, int expect)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) { FlushExpect(what, false, "找不到规则侧"); return; }
+
+            TableRulesV21 r = loop.rulesV21;
+            FlushExpect(what, r.LiveTableCount() == expect,
+                        "桌面素材 " + r.LiveTableCount() + " 张（期望 " + expect + "）｜" + r.TableText());
+        }
+
+        private static void ProbeFlushExpectHandEmpty(string what, int expect)
+        {
+            int n = HandCardCount();
+            FlushExpect(what, n == expect, "3D 手牌 " + n + " 张（期望 " + expect + "）");
+        }
+
+        /// <summary>
+        /// blankCount 的实机取证：引擎产出空白卡之后，**桌面层读到的那个数**必须跟着涨。
+        ///
+        /// 【为什么要看桌面层这一个字段】HUD 显示、存档采集（CaptureSaveState）读的都是
+        ///   `TableRulesV21.blankCount`，而它是引擎每次调用时那个 LevelRun 的镜像 ——
+        ///   修之前 BuildState/Absorb 漏搬这一个字段，于是"手里有空白卡、面板上写 0 张"，
+        ///   存档里的计数也不会涨（读档自检还会因此报差异）。
+        /// </summary>
+        private static void ProbeFlushExpectBlankCount(string what, int expect)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) { FlushExpect(what, false, "找不到规则侧"); return; }
+
+            int n = loop.rulesV21.blankCount;
+            FlushExpect(what, n == expect, "桌面层 blankCount = " + n + "（期望 " + expect + "）");
+        }
+
+        /// <summary>3D 手牌里有没有名字含 <paramref name="namePart"/> 的卡（产出的空白卡要看得见）。</summary>
+        private static void ProbeFlushExpectHandHas(string what, bool expect)
+        {
+            TableSetup setup = Object.FindObjectOfType<TableSetup>();
+            if (setup == null || setup.hand == null) { FlushExpect(what, !expect, "找不到手牌"); return; }
+
+            System.Text.StringBuilder names = new System.Text.StringBuilder();
+            bool found = false;
+            for (int i = 0; i < setup.hand.Count; i++)
+            {
+                PlayCard c = setup.hand[i];
+                if (c == null) continue;
+                if (names.Length > 0) names.Append('、');
+                names.Append(OneLineCardName(c.DisplayName));
+                if (c.DisplayName != null && c.DisplayName.Contains(GameJam.Rules.LevelSave.BlankCardName)) found = true;
+            }
+
+            FlushExpect(what, found == expect,
+                        "3D 手牌 " + setup.hand.Count + " 张：[" + names + "]（找「" +
+                        GameJam.Rules.LevelSave.BlankCardName + "」= " + found + "，期望 " + expect + "）");
+        }
+
+        /// <summary>
+        /// 点「结束回合」**之前**记下基准：刀片 H/V + 当前启动目标（= 本回合最后登记的那个待献祭目标）的名字/H/V。
+        ///
+        /// 【为什么用"当前启动目标"当基准】本回合最后被启动的那张卡就是待献祭目标，而启动之后
+        ///   `selected` 一直指着它（SyncVisualsAfterActivate 只在目标离场时才换人）——
+        ///   所以这一步必须**在结束回合之前**抓，结束回合之后它可能已经被吞走了。
+        /// </summary>
+        private static void ProbeFlushRememberBlade(string what)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) { FlushExpect(what, false, "找不到规则侧"); return; }
+
+            TableRulesV21 r = loop.rulesV21;
+            sacFlushBaseBladeH = r.blade != null ? r.blade.H : 0;
+            sacFlushBaseBladeV = r.blade != null ? r.blade.V : 0;
+
+            GameJam.Rules.MaterialState st = r.selected;
+            sacFlushTargetName = st != null ? st.name : "（没有选中的目标）";
+            sacFlushTargetH = st != null ? st.H : 0;
+            sacFlushTargetV = st != null ? st.V : 0;
+
+            Debug.Log("[AutoPlay/献祭补吞] " + what + "：刀片 H=" + sacFlushBaseBladeH + " V=" + sacFlushBaseBladeV +
+                      "｜本回合最后登记的目标「" + sacFlushTargetName + "」H" + sacFlushTargetH + " V" + sacFlushTargetV);
+        }
+
+        /// <summary>
+        /// 补吞的判词：记下来的那个目标**已经不在桌面上**，且刀片 H/V 的净增量恰好是它的 H/V。
+        ///
+        /// 【为什么净增量就该等于卡的两个数】`EndRound` 这一步本身不做任何启动（不扣 H），
+        ///   它里面唯一会动刀片的就是"补吞" —— 所以 H 的净变化 = 卡 H、V 的净变化 = 卡 V。
+        ///   这条判词因此不写死任何数值（换牌组、换核心都照样成立）。
+        /// </summary>
+        private static void ProbeFlushExpectAbsorbed(string what)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) { FlushExpect(what, false, "找不到规则侧"); return; }
+
+            TableRulesV21 r = loop.rulesV21;
+            int h = r.blade != null ? r.blade.H : 0;
+            int v = r.blade != null ? r.blade.V : 0;
+
+            bool gone = true;
+            for (int i = 0; i < r.table.Count; i++)
+            {
+                GameJam.Rules.MaterialState st = r.table[i];
+                if (st != null && !st.removed && st.name == sacFlushTargetName) { gone = false; break; }
+            }
+
+            bool deltaOk = (h - sacFlushBaseBladeH == sacFlushTargetH) &&
+                           (v - sacFlushBaseBladeV == sacFlushTargetV);
+
+            FlushExpect(what, gone && deltaOk,
+                        "目标「" + sacFlushTargetName + "」（H" + sacFlushTargetH + " V" + sacFlushTargetV + "）" +
+                        "｜桌面上还找得到它吗 " + (!gone ? "★找得到" : "找不到（=已吞）") +
+                        "｜刀片 H " + sacFlushBaseBladeH + " → " + h + "（Δ" + (h - sacFlushBaseBladeH) + "）" +
+                        "｜刀片 V " + sacFlushBaseBladeV + " → " + v + "（Δ" + (v - sacFlushBaseBladeV) + "）");
+        }
+
+        /// <summary>桌面上的空白卡读回来打一行（H/D/V + 判据判定 + 能不能当启动目标）—— 第 4 条修正的证据。</summary>
+        private static void ProbeFlushDumpBlankCard(string what)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) { FlushExpect(what, false, "找不到规则侧"); return; }
+
+            TableRulesV21 r = loop.rulesV21;
+
+            GameJam.Rules.MaterialState blank = null;
+            for (int i = 0; i < r.table.Count; i++)
+            {
+                GameJam.Rules.MaterialState st = r.table[i];
+                if (st != null && !st.removed && st.name == GameJam.Rules.LevelSave.BlankCardName) { blank = st; break; }
+            }
+
+            if (blank == null)
+            {
+                FlushExpect(what, false, "桌面上找不到「" + GameJam.Rules.LevelSave.BlankCardName + "」｜桌面 " + r.TableText());
+                return;
+            }
+
+            string why;
+            bool canActivate = r.CanActivateTarget(blank, out why);
+
+            Debug.Log("[AutoPlay/献祭补吞] " + what + "：" + blank.Describe() +
+                      "｜fullD=" + blank.fullD + "｜IsBlankCard=" + blank.IsBlankCard +
+                      "｜能不能当启动目标 " + canActivate + (canActivate ? "" : "（" + why + "）"));
+
+            FlushExpect(what, blank.H == 0 && blank.D == 0 && blank.V == 0 && blank.IsBlankCard && !canActivate,
+                        "H=" + blank.H + " D=" + blank.D + "/fullD " + blank.fullD + " V=" + blank.V +
+                        "｜IsBlankCard=" + blank.IsBlankCard + "｜可启动=" + canActivate);
+        }
+
+        /// <summary>
+        /// 尝试启动桌面上的空白卡，并把"它有没有进任何一本账"逐条比对：
+        /// 得分 / 行动机会 / 刀片 H / 桌面张数 / D —— 一样都不许动，而且必须给玩家一句明确的话。
+        /// </summary>
+        private static void ProbeFlushBlankAttempt(string what)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) { FlushExpect(what, false, "找不到规则侧"); return; }
+
+            TableRulesV21 r = loop.rulesV21;
+            GameJam.Rules.MaterialState st = r.selected;
+
+            int scoreBefore = r.score;
+            int apBefore = r.actionPoints;
+            int hBefore = r.blade != null ? r.blade.H : 0;
+            int tableBefore = r.LiveTableCount();
+            int dBefore = st != null ? st.D : -999;
+            string name = st != null ? st.name : "（没选）";
+
+            Debug.Log("[AutoPlay/献祭补吞] ▶ " + what + "｜启动前：目标 " +
+                      (st != null ? st.Describe() : "（无）") + "｜" + ProbeSacNumbers());
+
+            loop.ActivateJuicer();
+
+            int scoreAfter = r.score;
+            int apAfter = r.actionPoints;
+            int hAfter = r.blade != null ? r.blade.H : 0;
+            bool stillThere = st != null && !st.removed && st.OnTable;
+
+            FlushExpect("空白卡：上桌之后 D 仍然是 0（没有被套默认 D=3）", dBefore == 0,
+                        "「" + name + "」D=" + dBefore);
+            FlushExpect("空白卡：尝试启动被明确拒绝（提示里点名「空白卡」+「不能作为启动目标」）",
+                        loop.notice != null && loop.notice.Contains("空白卡") && loop.notice.Contains("不能作为启动目标"),
+                        "notice " + loop.notice);
+            FlushExpect("空白卡：得分不变", scoreAfter == scoreBefore, scoreBefore + " → " + scoreAfter);
+            FlushExpect("空白卡：不消耗行动机会", apAfter == apBefore, apBefore + " → " + apAfter);
+            FlushExpect("空白卡：不扣刀片 H", hAfter == hBefore, hBefore + " → " + hAfter);
+            FlushExpect("空白卡：还在桌面上（没有被 D 耗尽带走）", stillThere,
+                        "桌面 " + tableBefore + " → " + r.LiveTableCount() + " 张");
+
+            Debug.Log("[AutoPlay/献祭补吞] ▶ " + what + "｜尝试之后：notice " + loop.notice + "｜" + ProbeSacNumbers());
         }
 
         /// <summary>

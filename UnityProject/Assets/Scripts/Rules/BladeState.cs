@@ -188,6 +188,50 @@ namespace GameJam.Rules
 
         public bool HasTag(string tag) { return card != null && card.HasTag(tag); }
 
+        /// <summary>
+        /// 这张素材是不是正文 §2.1 的**空白卡**（数值全 0、无特性、**无法交互**，只能被吞噬）。
+        ///
+        /// 【为什么"是不是空白卡"必须显式判，不能用 `D &lt;= 0` / `H == 0` 去猜】
+        ///   出牌那一层的 `D &gt; 0 ? D : 默认D` 是给"卡表还没写 d 的卡"兜底的（正文 §2.2：
+        ///   数值待设计），而空白卡的 D=0 是**规则本身**。两者数值一样、含义相反 ——
+        ///   一张卡是"数值没填"还是"按规则就是 0"，只能按身份认。
+        ///   判错的后果不是显示问题：空白卡一旦拿到 D&gt;0 就能**反复启动**，每次都白拿
+        ///   "目标V + 刀片V"里的刀片 V（它自己的 H/V 都是 0，等于净赚）。
+        ///
+        /// 【判据（两条，按优先级）】
+        ///   ① 卡表主键 / 名字就是空白卡 —— 和产出（<see cref="LevelSave.MakeBlankCard"/>）
+        ///      与读档（LevelSave.TryBuild 的解析器）同一份口径（BlankCardId / BlankCardName）；
+        ///   ② 兜底的结构判据：H/D/V 全 0 **且**没有任何形态转换 / 标签 / 启动 / 献祭 / D耗尽文本。
+        ///      现造的空白卡正好命中这一条（它那个"固体"form 是占位，没有任何规则文本）。
+        ///
+        /// 【为什么判据放在 Rules 这一层】规则层（TurnEngine 拒绝启动它）与桌面层
+        ///   （TableRulesV21 不套默认 D、给玩家提示）必须用**同一份**口径 ——
+        ///   各写一份的结果是"引擎认它是空白卡、桌面不认"，那比两边都不认更难查。
+        ///
+        /// ★ 卡表里没有"合法的 D=0 卡"这个概念（v3.0 定稿的 31 张素材 h≥5、d≥1，一张三零卡都没有）。
+        ///   以后真要做"D=0 但仍然可用"的卡，**必须往卡表加一个显式字段**（例如 noActivate），
+        ///   再让这里读它 —— 不许把这条判据放宽成"数值看起来像就算"。
+        /// </summary>
+        public static bool IsBlankCardOf(Ingredient card, int h, int d, int v)
+        {
+            if (card != null &&
+                (card.id == LevelSave.BlankCardId || card.name == LevelSave.BlankCardName))
+                return true;
+
+            if (h != 0 || d != 0 || v != 0) return false;
+            if (card == null) return true;                       // 没有卡又有三个 0：只能按空白卡处理
+
+            if (card.transitions != null && card.transitions.Length > 0) return false;
+            if (card.tags != null && card.tags.Length > 0) return false;
+            if (card.exhaust != null && card.exhaust.Length > 0) return false;
+            if (!string.IsNullOrEmpty(card.startup)) return false;
+            if (!string.IsNullOrEmpty(card.sacrifice)) return false;
+            return true;
+        }
+
+        /// <summary>这张素材是不是空白卡（按上面那个静态判据的同一口径）。</summary>
+        public bool IsBlankCard { get { return IsBlankCardOf(card, H, D, V); } }
+
         public string Describe()
         {
             return name + "（H=" + H + " D=" + D + "/" + fullD + " V=" + V +
