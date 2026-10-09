@@ -180,6 +180,26 @@ namespace GameJam.EditorTools
         /// </summary>
         private static bool   sacFlushProbe;
 
+        /// <summary>卡面「启动」文本取证探针（`DSH_STARTUPPROBE=1`，见 ㊾⓪~㊾⑫ 那一段）。</summary>
+        private static bool   startupProbe;
+
+        /// <summary>本链判词里"不符合预期"的条数（见 <see cref="StartupExpect"/>）。</summary>
+        private static int    startupFails;
+
+        /// <summary>这一次启动之前的刀片 H（判词要的是"变化了多少"）。</summary>
+        private static int    startupBaseBladeH;
+
+        /// <summary>这一次启动之前的分数。</summary>
+        private static int    startupBaseScore;
+
+        /// <summary>补吞基准：结束回合之前的刀片 H/V、桌面张数、待献祭目标的名字与 H/V。</summary>
+        private static int    startupSacBladeH;
+        private static int    startupSacBladeV;
+        private static int    startupSacTable;
+        private static string startupSacName = "";
+        private static int    startupSacH;
+        private static int    startupSacV;
+
         /// <summary>相交探针拍完之后回哪一步 —— 进探针时按**来路**记下（开场那条链和牌组/关卡那条链
         /// 各有各的下一步：v2.1 是 51/96，旧流程是 31/33/21）。
         /// 用一个字段而不是各写一份 stage，是为了让"拍完接回原链"只有一处实现。
@@ -284,6 +304,13 @@ namespace GameJam.EditorTools
             //   前者在真游戏里必须走"启动 → 点结束回合"这条玩家路径，后者的 D 值会进存档，
             //   都不是离线断言能替代的。单独一条链：它会打到第 3 回合、并把空白卡挂到桌上。
             sacFlushProbe = System.Environment.GetEnvironmentVariable("DSH_SACFLUSHPROBE") == "1";
+
+            // ★ 卡面「启动」文本取证探针（DSH_STARTUPPROBE=1，见 ㊾⓪~㊾⑨ 那一段）：
+            //   它证的是"实机真的把 ApplyCardStartupText 打开了"——卡表里 21 张素材卡的
+            //   「启动」句子在此之前**一句都不会执行**（默认 false 且全工程没人设成 true），
+            //   表现是"卡表全绿、卡却是死的"。离线断言只能证规则内核，证不了桌面层这个开关。
+            //   单独一条链：它会往刀片账本上直接写附魔层数、并往手牌里注入一张卡来造局面。
+            startupProbe = System.Environment.GetEnvironmentVariable("DSH_STARTUPPROBE") == "1";
 
             // ★ 每次域重载都要订阅，否则进 Play 之后就再也没人推进流程了
             EditorApplication.update += Tick;
@@ -656,8 +683,10 @@ namespace GameJam.EditorTools
                     // 取景探针要接着在**这一屏**量"提示块压不压手牌"（见 ㉚⓪ 那一段的说明：
                     // 提示块只在正式回合画，开局准备那几屏根本没有它）；
                     // 其余支线各走各的（都不设 = 原来的"只用点击"那条路，行为一个字没变）
-                    // 献祭吞噬取证探针要从"第 1 回合、什么都没动"这一屏起步（见 ㊲⑧ 那一段）
-                    Stage = sacFlushProbe ? 520
+                    // 献祭吞噬取证探针要从"第 1 回合、什么都没动"这一屏起步（见 ㊲⑧ 那一段）；
+                    // 卡面「启动」文本探针也一样（它自己会在 ㊾① 里注入手牌、写附魔层数来造局面）。
+                    Stage = startupProbe ? 560
+                          : (sacFlushProbe ? 520
                           : (cardV3Probe ? 480
                           : (sacProbe ? 380
                           : (saveProbe ? 340
@@ -665,7 +694,7 @@ namespace GameJam.EditorTools
                           : (cardFaceProbe ? 300
                           : (overlapProbe ? 296
                           : (layoutProbe ? 240
-                          : (fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110))))))))));
+                          : (fxProbe ? 170 : (slotProbe ? 120 : (blackProbe ? 190 : 110)))))))))));
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
@@ -4187,6 +4216,183 @@ namespace GameJam.EditorTools
                     return;
 
                 case 543:
+                    if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
+                    Finish();
+                    return;
+
+                // ══════════════════════════════════════════════════════
+                //  ㊾⓪~㊾⑨ 卡面「启动」文本取证（DSH_STARTUPPROBE=1）
+                //
+                //  【要证什么】`TurnRules.ApplyCardStartupText` 打开之后，卡表里那些「启动」句子
+                //    在真游戏里真的会发生 —— 在这之前它是默认 false、全工程没有一处设成 true，
+                //    所以 21 张素材卡的启动效果"一句都不会执行"（缺口报告 §3.6 的根因）。
+                //    ★ ㊾⓪ 第一件事就是把这个开关的值打进日志：它是"接通没接通"的唯一判据，
+                //      比任何间接现象都直接。
+                //
+                //  【三张卡各验一类】水蒸气 + 有热 → 本次启动得分翻倍（且规则表 F 不吃热层数）；
+                //    汞 → 不消耗刀片 H 且刀片 H+1；冰 + 冷≥3 → 额外产出一张「冰霜」进手牌。
+                //  【局面怎么造】牌组 = DSH_AUTOSTART_DECK（建议 3「水 · 冷热流」：水/冰/水蒸气/盐），
+                //    汞由探针注入手牌（牌组里没有它）；附魔层数直接写到刀片账本上 ——
+                //    和 DSH_EXTRA_HEAT 同一性质的"探针调味料"，一行游戏规则都不改。
+                // ══════════════════════════════════════════════════════
+
+                // ㊾⓪ 开局：把引擎开关 + 这一局的数字打进日志（判词从这里开始）
+                //
+                //  【前提不对就当场收工】这条链要在"第 1 回合、什么都没动"的桌面上造局面。
+                //   被别的自动化点歪、或者没走到正式回合的话，"启动没发生"根本说明不了规则的问题 ——
+                //   照跑会得到一条**假通过/假失败**。所以前提不成立时只留一行 ★ 就退出。
+                case 560:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!ProbeStartupReady("㊾⓪ 卡面启动文本探针开局（第 1 回合、阶段 Select、什么都没动）"))
+                    {
+                        ProbeStartupSummary();
+                        Finish();
+                        return;
+                    }
+                    ProbeStartupArm();
+                    Debug.Log("[AutoPlay/启动文本] ㊾⓪ 开局局面：" + ProbeSacNumbers());
+                    ProbeStartupLogSwitch();
+                    Stage = 561;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊾① 注入「水蒸气 / 冰 / 汞」到手牌
+                //   【为什么不靠牌组】v2.1 那三副牌组（水·冷热流 等）在**牌组窗口里选不中**
+                //     （实测 SelectDeck(3) 之后 ConfirmDeckPick 原地不动：选项数 / 选项里的 deck
+                //      为空都会让它早退）。所以这里走"牌组 0 + 注入手牌"——注入用的是和
+                //      "产出进手牌"完全同一套字段（hand + RebuildHand + 卡表 h/d/v），
+                //      比改牌组配置稳，也不会让探针依赖一份被改过的 game_config。
+                case 561:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeStartupInjectMaterial("水蒸气", "㊾① 注入「水蒸气」进手牌（验：有热 → 本次启动得分翻倍）");
+                    ProbeStartupInjectMaterial("汞", "㊾① 注入「汞」进手牌（验：不消耗刀片H + 刀片H+1）");
+                    ProbeStartupInjectMaterial("冰", "㊾① 注入「冰」进手牌（验：冷≥3 → 额外产出「冰霜」）");
+                    Stage = 562;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊾② 造局面：刀片补 2 层热 + 手工艺 水蒸气 上桌（不消耗行动机会）
+                case 562:
+                    if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
+                    ProbeStartupSetLayers("㊾② 给刀片补 2 层热（水蒸气的条件）", GameJam.Rules.LayerKind.Heat, 2);
+                    ProbeSacPlayHandMaterial("水蒸气", "㊾② 水蒸气 上桌（启动目标）");
+                    Stage = 563;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊾③ 启动前的基准 + 截图
+                case 563:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("startup_01_steam_before.png")) return;
+                    ProbeStartupRemember("㊾③ 启动 水蒸气 之前的基准");
+                    Stage = 564;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊾④ ★ 启动 水蒸气（有热）：判"得分翻倍 + 热层数不被规则表F吃掉"
+                case 564:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeSacSelectTable("水蒸气");
+                    ProbeSacActivate("㊾④ 启动 水蒸气（有热 → 期望得分翻倍、热层数保持 2）");
+                    Stage = 565;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊾⑤ 判词 + 抄一次引擎日志原文 + 截图
+                case 565:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeStartupExpectSteam();
+                    ProbeStartupDumpLastActivate("㊾⑤ 水蒸气 那一次的结算日志（引擎原文）");
+                    Stage = 566;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 566:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("startup_02_steam_doubled.png")) return;
+                    // 把热层清掉：汞那一张只看"不消耗 H + H+1"，不要被热附魔的形态变化搅进来
+                    ProbeStartupSetLayers("㊾⑥ 清掉热层（汞只要验「不消耗H + H+1」）",
+                                          GameJam.Rules.LayerKind.Heat, 0);
+                    ProbeSacPlayHandMaterial("汞", "㊾⑥ 汞 上桌（启动目标）");
+                    Stage = 567;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊾⑦ ★ 启动 汞：判"不消耗刀片 H + 刀片 H+1"（净 +1）
+                case 567:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeStartupRemember("㊾⑦ 启动 汞 之前的基准");
+                    ProbeSacSelectTable("汞");
+                    ProbeSacActivate("㊾⑦ 启动 汞（期望：① 不扣 H，卡面再 +1 → 刀片 H 净 +1）");
+                    Stage = 568;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 568:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeStartupExpectMercury();
+                    ProbeStartupDumpLastActivate("㊾⑧ 汞 那一次的结算日志（引擎原文）");
+                    Stage = 569;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 569:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    if (!Shot("startup_03_mercury_h_plus1.png")) return;
+                    // 冷 3 层：冰的启动条件（冷层数≥3）
+                    ProbeStartupSetLayers("㊾⑨ 给刀片补 3 层冷（冰的条件：冷≥3）",
+                                          GameJam.Rules.LayerKind.Cold, 3);
+                    ProbeSacPlayHandMaterial("冰", "㊾⑨ 冰 上桌（启动目标）");
+                    Stage = 570;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊾⑩ ★ 启动 冰：判"冷≥3 → 额外产生一张冰霜法术进手牌"
+                case 570:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeStartupRemember("㊾⑩ 启动 冰 之前的基准");
+                    ProbeSacSelectTable("冰");
+                    ProbeSacActivate("㊾⑩ 启动 冰（期望：手牌法术 +1「冰霜」，冷层数 3→2（规则表F吃 1 层））");
+                    Stage = 571;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 571:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.0) return;
+                    ProbeStartupExpectIce();
+                    ProbeStartupDumpLastActivate("㊾⑪ 冰 那一次的结算日志（引擎原文）");
+                    Stage = 572;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊾⑫ 三张卡都跑完了：判词汇总 + 回归（布局 / 状态与画面一致 / 木纹）+ 截图
+                case 572:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    if (!Shot("startup_04_all_three_done.png")) return;
+                    Debug.Log("[AutoPlay/启动文本] ㊾⑫ 三张卡跑完：" + ProbeSacNumbers());
+                    ProbeLayoutReport("㊾⑫ 卡面启动文本取证收尾（回归：级联布局不变式）");
+                    ProbeLogSync("㊾⑫ 卡面启动文本取证收尾（回归：状态与画面一致 / 残留 0 张）");
+                    ProbeSacWoodShader("㊾⑫ 木纹材质读回");
+                    // 回归：献祭吞噬发生在**回合真正结束时**（正文 §四.5）——
+                    //   三次启动只登记、不吞；这一下会把最后登记的那张（冰）并进刀片。
+                    ProbeStartupArmSacrifice();
+                    ProbeSacEndRound();
+                    Stage = 573;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                // ㊾⑬ ★ 补吞判词 + 截图 + 汇总
+                case 573:
+                    if (EditorApplication.timeSinceStartup - stageTime < 1.2) return;
+                    // ★ 先截图再判：Shot 返回 false 时本阶段会被重入，判词放在它后面会被重复执行
+                    if (!Shot("startup_05_sacrifice_flushed.png")) return;
+                    ProbeStartupExpectSacrificeFlush();
+                    ProbeStartupSummary();
+                    Stage = 574;
+                    stageTime = EditorApplication.timeSinceStartup;
+                    return;
+
+                case 574:
                     if (EditorApplication.timeSinceStartup - stageTime < 3.0) return;
                     Finish();
                     return;
@@ -9042,6 +9248,368 @@ namespace GameJam.EditorTools
             {
                 Debug.LogWarning("[AutoPlay] 没找到 TableInteraction 或手牌，检视面板这次拍不到。");
             }
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  卡面「启动」文本取证探针（DSH_STARTUPPROBE=1，㊾⓪~㊾⑫）
+        // ══════════════════════════════════════════════════════════════
+
+        private static void ProbeStartupArm() { startupFails = 0; }
+
+        /// <summary>补吞判词的基准（结束回合之前记）：刀片 H/V、桌面张数、待献祭目标的名字与 H/V。</summary>
+        private static void ProbeStartupArmSacrifice()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null)
+            {
+                StartupExpect("㊾⑬ 结束回合前记补吞基准", false, "找不到规则侧");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+            startupSacBladeH = r.blade != null ? r.blade.H : 0;
+            startupSacBladeV = r.blade != null ? r.blade.V : 0;
+            startupSacTable  = r.LiveTableCount();
+            startupSacName   = r.PendingSacrificeName;
+            startupSacH = 0;
+            startupSacV = 0;
+
+            for (int i = 0; i < r.table.Count; i++)
+            {
+                GameJam.Rules.MaterialState m = r.table[i];
+                if (m == null || m.removed || m.name != startupSacName) continue;
+                startupSacH = m.H;
+                startupSacV = m.V;
+            }
+
+            Debug.Log("[AutoPlay/启动文本] ㊾⑬ 结束回合之前（补吞基准）：刀片 H" + startupSacBladeH + " V" + startupSacBladeV +
+                      "｜桌面 " + startupSacTable + " 张｜待献祭目标「" + startupSacName + "」H" + startupSacH + " V" + startupSacV +
+                      "\n   " + ProbeSacNumbers());
+        }
+
+        /// <summary>
+        /// ㊾⑬ 回合结束时**补吞**：最后登记的那张（冰）必须并进刀片 ——
+        ///   桌面 -1 张、刀片 H += 它的 H、V += 它的 V、日志里出现「并入刀片」。
+        ///
+        /// 【为什么这一条要在这条链里验】正文 §四.5 的吞噬发生在"回合真正结束时"，
+        ///   三次启动那一下都只**登记**（见 LevelRun.pendingSacrifice）；这是本轮改动最容易
+        ///   连带踩坏的地方（启动流程的时序动过），所以每轮都要真跑一次。
+        /// </summary>
+        private static void ProbeStartupExpectSacrificeFlush()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) { StartupExpect("㊾⑬ 回合结束补吞", false, "找不到规则侧"); return; }
+
+            TableRulesV21 r = loop.rulesV21;
+            int h = r.blade != null ? r.blade.H : 0;
+            int v = r.blade != null ? r.blade.V : 0;
+
+            StartupExpect("㊾⑬ 回合结束时补吞：「" + startupSacName + "」移出桌面",
+                          r.LiveTableCount() == startupSacTable - 1,
+                          "桌面素材 " + startupSacTable + " → " + r.LiveTableCount() + " 张（期望 " + (startupSacTable - 1) + "）｜现在：" + r.TableText());
+            StartupExpect("㊾⑬ 补吞把它并进刀片（刀片 H " + startupSacBladeH + "+" + startupSacH +
+                          "、V " + startupSacBladeV + "+" + startupSacV + "）",
+                          h == startupSacBladeH + startupSacH && v == startupSacBladeV + startupSacV,
+                          "刀片 H " + startupSacBladeH + " → " + h + "（期望 " + (startupSacBladeH + startupSacH) + "）" +
+                          "｜V " + startupSacBladeV + " → " + v + "（期望 " + (startupSacBladeV + startupSacV) + "）");
+            // ★ 这里**故意不去判** lastLog 里的「并入刀片」：EndRound 先 Absorb(结束回合的 TurnResult)
+            //   把日志写进 lastLog，紧接着 BeginTurn 又 Absorb 一次 —— lastLog 被"新回合开始"那份
+            //   覆盖了，读它必然 0 次（第一版就是这么写错的）。"并入刀片"那一行在**控制台日志**里
+            //   （[V21] 回合推进 那一段），验收看的是它；探针这边判的是**同一件事的三个数字**
+            //   （桌面 -1、刀片 H/V 各加上被吞那张的 H/V）+ "待献祭登记被清空"，
+            //   这四个都不可能碰巧成立。逐条见缺口报告 §3.6 的证据段。
+            StartupExpect("㊾⑬ 补吞之后待献祭登记被清空（不会被重复吞一次）",
+                          string.IsNullOrEmpty(r.PendingSacrificeName),
+                          "PendingSacrificeName = 「" + r.PendingSacrificeName + "」");
+        }
+
+        /// <summary>
+        /// 这一局的前提对不对：第 1 回合、阶段 Select（可以出牌 / 启动）、没结束没爆刀。
+        ///
+        /// 【为什么不用 ProbeSacGuardAt】那个守卫生来就会"重开一局再摆一遍"（给献祭链用的），
+        ///   而这条链的重开**改变不了局面**（牌组已经配死），重开只会让日志里多出几条误导性的
+        ///   "局面已经被动过"。这里只判事实，不成立就如实退出。
+        /// </summary>
+        private static bool ProbeStartupReady(string who)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null)
+            {
+                StartupExpect(who, false, "找不到 TableTurnLoop / 规则侧");
+                return false;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+            // 【为什么把"分数 0 / 行动机会满 / 桌面空"也当前提】这台机器上同时跑着别的 Unity
+            //   自动化（它会点到最前面那个窗口），实测踩到过"走到 ㊾⓪ 时这一局已经被打了 5 次启动、
+            //   分数 20、桌上躺着两张空白卡"—— 那时再"造局面"得到的是**假判词**。
+            //   判据必须是"这一局什么都没发生过"，不是"阶段看起来对"。
+            bool ok = loop.phase == TablePhase.Select && r.turnIndex == 1 && !r.levelOver && !r.bursted &&
+                      r.actionPoints == GameJam.Rules.LevelRun.ActionPointsPerTurn &&
+                      r.score == 0 && r.LiveTableCount() == 0;
+
+            StartupExpect(who, ok,
+                "阶段 " + loop.phase + "｜回合 " + r.turnIndex + "｜行动机会 " + r.actionPoints +
+                "｜分数 " + r.score + "｜桌面 " + r.LiveTableCount() +
+                " 张｜3D 手牌 " + HandCardCount() + " 张｜刀片 " + (r.blade != null ? r.blade.Describe() : "（无）") +
+                (ok ? "" : "　★ 前提不成立（这一局已经被动过）→ 本链判词全部作废，请重跑"));
+            return ok;
+        }
+
+        /// <summary>
+        /// 一条判词：不符合预期就把"期望 / 实际"写进日志（㊾⑫ 汇总条数）。
+        /// 和献祭补吞那条链的 <c>FlushExpect</c> 同一个形状，只是各自一个计数器 ——
+        /// 两条链的失败数混在一起会说不清是谁的锅。
+        /// </summary>
+        private static void StartupExpect(string what, bool ok, string detail)
+        {
+            if (!ok) startupFails++;
+            Debug.Log("[AutoPlay/启动文本] " + (ok ? "✓ " : "✗ ★ ") + what + "｜" + detail);
+        }
+
+        private static void ProbeStartupSummary()
+        {
+            Debug.Log("[AutoPlay/启动文本] ══ 本链判词汇总：不符合预期 " + startupFails + " 条" +
+                      (startupFails == 0 ? "（全部通过）" : "（★ 逐条见上面）") + " ══");
+        }
+
+        /// <summary>
+        /// 把"引擎那个开关到底开没开"打进日志 —— 这是本链唯一的直接判据。
+        /// 读的就是实机正在用的那一份 <c>TurnRules</c>（<c>TableRulesV21.rules</c>）。
+        /// </summary>
+        private static void ProbeStartupLogSwitch()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null || loop.rulesV21.rules == null)
+            {
+                StartupExpect("㊾⓪ 能读到实机的 TurnRules", false, "找不到 TableTurnLoop / 规则侧");
+                return;
+            }
+
+            GameJam.Rules.TurnRules rules = loop.rulesV21.rules;
+            StartupExpect("㊾⓪ 实机打开了卡面「启动」文本（ApplyCardStartupText）",
+                          rules.ApplyCardStartupText,
+                          "ApplyCardStartupText = " + rules.ApplyCardStartupText +
+                          "｜ConsumeLayerOnActivate = " + rules.ConsumeLayerOnActivate +
+                          "（前者关着的话，卡表里 21 张素材卡的「启动」句子一句都不会执行）");
+        }
+
+        /// <summary>启动之前记基准：刀片 H + 分数（判词要的是"变化了多少"）。</summary>
+        private static void ProbeStartupRemember(string what)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) { StartupExpect(what, false, "找不到规则侧"); return; }
+
+            TableRulesV21 r = loop.rulesV21;
+            startupBaseBladeH = r.blade != null ? r.blade.H : 0;
+            startupBaseScore  = r.score;
+
+            Debug.Log("[AutoPlay/启动文本] " + what + "：刀片 H=" + startupBaseBladeH + "｜分数=" + startupBaseScore +
+                      "｜附魔 " + (r.blade != null ? r.blade.layers.Describe() : "（无）") +
+                      "｜手牌 " + r.hand.Count + " 素材 + " + r.handSpells.Count + " 法术");
+        }
+
+        /// <summary>
+        /// 给刀片**直接**补 N 层某类附魔（N=0 时清空）。
+        ///
+        /// 【为什么可以直接写】这是"造局面"的探针调味料，和 <c>DSH_EXTRA_HEAT</c> 同一性质：
+        ///   游戏里玩家要靠打附魔法术才凑得出层数，而这条链要验的是"启动那一下卡面文本生不生效"，
+        ///   层数怎么来的不是它要证的东西。写的是公开的刀片账本（<c>blade.layers</c>），
+        ///   一行游戏规则都不改。
+        /// </summary>
+        private static void ProbeStartupSetLayers(string what, GameJam.Rules.LayerKind kind, int n)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null || loop.rulesV21.blade == null)
+            {
+                Debug.LogWarning("[AutoPlay/启动文本] " + what + "：找不到规则侧，跳过。");
+                return;
+            }
+
+            GameJam.Rules.BladeState b = loop.rulesV21.blade;
+            string before = b.layers.Describe();
+
+            b.layers.ConsumeAll(kind);
+            if (n > 0) b.layers.Add(kind, n);
+
+            Debug.Log("[AutoPlay/启动文本] ★" + what + "：附魔 " + before + " → " + b.layers.Describe());
+        }
+
+        /// <summary>
+        /// 把手牌里没有的素材**注入手牌**（走的是和"产出进手牌"同一套字段：hand + RebuildHand）。
+        ///
+        /// 【为什么要这一手】牌组是 game_config 里配死的（v2.1 那三副只有水/冰/水蒸气/盐…），
+        ///   而这条链点名要验"汞"；没有它就只能改配置文件，那会让探针依赖一份被改过的卡表。
+        ///   数值口径走 <see cref="TableRulesV21.ApplyValues"/> + 卡表 h/d/v —— 和正常发牌完全一致。
+        /// </summary>
+        private static void ProbeStartupInjectMaterial(string namePart, string what)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null)
+            {
+                Debug.LogWarning("[AutoPlay/启动文本] " + what + "：找不到规则侧，跳过。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+
+            GameJam.Data.Ingredient tpl = CardSpecs.MaterialByName(namePart);
+            if (tpl == null)
+            {
+                Debug.LogWarning("[AutoPlay/启动文本] " + what + "：卡表里找不到「" + namePart + "」，跳过。");
+                return;
+            }
+
+            GameJam.Data.Ingredient copy = tpl.Clone();
+            MaterialCard.ValueSource src = MaterialCard.ValueSource.CardTable;
+            r.ApplyValues(copy, src);
+
+            MaterialCard mc = new MaterialCard();
+            mc.card = copy;
+            mc.H = copy.h;
+            mc.D = copy.d > 0 ? copy.d : TableRulesV21.DefaultMaterialD;
+            mc.V = copy.v;
+            mc.source = src;
+
+            r.hand.Add(mc);
+            r.RebuildHand();
+
+            Debug.Log("[AutoPlay/启动文本] ★" + what + "：「" + copy.name + "」H" + mc.H + " D" + mc.D + " V" + mc.V +
+                      " 已进手牌｜手牌 " + r.HandText() +
+                      "\n   " + ProbeSacNumbers());
+        }
+
+        /// <summary>
+        /// 把**这一次启动**的引擎日志原文里"判词要看的那几行"抄出来（顺序原样）。
+        ///
+        /// 【为什么不整坨翻】一次启动有几十行（每一步的中间说明都在里面），判词夹在中间很难复核。
+        ///   这里只挑：startup 的分段计划行 / 每句「…」/ ① 的资源行 / 进手牌 / 消耗层数 /
+        ///   得分倍率与归零 / 规则表 F —— 拿这一行就能对着 <c>[V21] 启动…</c> 那一大坨原文复核。
+        /// </summary>
+        private static void ProbeStartupDumpLastActivate(string what)
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null)
+            {
+                Debug.LogWarning("[AutoPlay/启动文本] " + what + "：找不到规则侧，日志抄不了。");
+                return;
+            }
+
+            TableRulesV21 r = loop.rulesV21;
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+            for (int i = 0; i < r.lastLog.Count; i++)
+            {
+                string s = r.lastLog[i];
+                if (string.IsNullOrEmpty(s)) continue;
+
+                bool keep = s.StartsWith("【启动】")
+                         || s.StartsWith("① 消耗资源")
+                         || s.StartsWith("③ 结算收益")
+                         || s.StartsWith("　· 卡牌自身的「启动」文本")
+                         || s.StartsWith("　　· ")
+                         || s.StartsWith("　　「")
+                         || s.StartsWith("　　（本句前面")
+                         || s.Contains("进手牌：")
+                         || s.Contains("消耗所有")
+                         || s.Contains("得分倍率")
+                         || s.Contains("得分为0")
+                         || s.Contains("层数翻倍")
+                         || s.Contains("加刀片 H")
+                         || s.Contains("扣刀片 H")
+                         || s.StartsWith("　· 启动消耗附魔");
+
+                if (keep) sb.Append("\n   第 ").Append(i).Append(" 行｜").Append(s);
+            }
+
+            Debug.Log("[AutoPlay/启动文本] " + what + "｜本次启动日志共 " + r.lastLog.Count + " 行，抄 " +
+                      (sb.Length > 0 ? "如下" : "不到任何一行（★ 可疑）") + "：" + sb);
+            Debug.Log("[AutoPlay/启动文本] " + what + "｜抄完之后的数字：" + ProbeSacNumbers());
+        }
+
+        /// <summary>
+        /// ㊾⑤ 水蒸气（有热）：本次启动得分翻倍，且**热层数不被规则表 F 吃掉**（卡面「不消耗热层数」）。
+        ///
+        /// 【期望怎么算】激活分 = 目标卡 V + 刀片 V；「得分翻倍」= 再加一份同样的分
+        ///   （见 TurnEngine.ExecuteAction 的 MultiplyScore：gain =（激活分 + 规则分）×（倍率−1））。
+        ///   所以这一次结算净得分 = 2 ×（卡V + 刀片V）。
+        /// </summary>
+        private static void ProbeStartupExpectSteam()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) { StartupExpect("㊾⑤ 水蒸气", false, "找不到规则侧"); return; }
+
+            TableRulesV21 r = loop.rulesV21;
+            int delta = r.score - startupBaseScore;
+            int cardV = 0;
+            if (r.selected != null && r.selected.card != null) cardV = r.selected.V;
+            int bladeV = r.blade != null ? r.blade.V : 0;
+
+            StartupExpect("㊾⑤ 水蒸气（有热）· 本次启动得分翻倍",
+                          delta == 2 * (cardV + bladeV),
+                          "这一次净得分 " + delta + "（期望 2×(卡V " + cardV + " + 刀片V " + bladeV + ") = " +
+                          2 * (cardV + bladeV) + "）｜总分 " + r.score);
+            StartupExpect("㊾⑤ 水蒸气（有热）· 卡面「不消耗热层数」→ 规则表 F 没吃热",
+                          r.blade != null && r.blade.layers.Count(GameJam.Rules.LayerKind.Heat) == 2,
+                          "热层数 = " + (r.blade != null ? r.blade.layers.Count(GameJam.Rules.LayerKind.Heat) : -1) +
+                          "（期望 2：这一次启动前是 2，规则表 F 应当让位给卡面）");
+            StartupExpect("㊾⑤ 水蒸气 · 日志里出现了「得分倍率」",
+                          CountLastLog("得分倍率") >= 1,
+                          "「得分倍率」出现 " + CountLastLog("得分倍率") + " 次");
+            StartupExpect("㊾⑤ 水蒸气 · 日志里出现了「豁免」",
+                          CountLastLog("豁免") >= 1,
+                          "「豁免」出现 " + CountLastLog("豁免") + " 次");
+        }
+
+        /// <summary>
+        /// ㊾⑧ 汞：卡面「不消耗刀片H，同时刀片额外获得1H」→ ① 不扣那 1 点，卡面再 +1，净 **+1**。
+        /// 【为什么净 +1 是判据】普通卡这一次启动要 -1（正文 §四.1），汞既豁免又加 1 → 一进一出 +1。
+        ///   把两个效果分开算的话，"不消耗"失败会表现成 0，"+1"失败会表现成 -1，都能被这一条抓住。
+        /// </summary>
+        private static void ProbeStartupExpectMercury()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) { StartupExpect("㊾⑧ 汞", false, "找不到规则侧"); return; }
+
+            TableRulesV21 r = loop.rulesV21;
+            int h = r.blade != null ? r.blade.H : 0;
+
+            StartupExpect("㊾⑧ 汞 · 不消耗刀片H + 卡面 H+1 → 刀片 H 净 +1",
+                          h == startupBaseBladeH + 1,
+                          "刀片 H " + startupBaseBladeH + " → " + h + "（期望 " + (startupBaseBladeH + 1) +
+                          "：豁免 -0 再加 1）");
+            StartupExpect("㊾⑧ 汞 · 日志里出现了「卡面「不消耗刀片H」优先于 §四.1」",
+                          CountLastLog("优先于 §四.1") >= 1,
+                          "「优先于 §四.1」出现 " + CountLastLog("优先于 §四.1") + " 次");
+            StartupExpect("㊾⑧ 汞 · 日志里出现了「加刀片 H+1」",
+                          CountLastLog("加刀片 H+1") >= 1,
+                          "「加刀片 H+1」出现 " + CountLastLog("加刀片 H+1") + " 次");
+        }
+
+        /// <summary>
+        /// ㊾⑪ 冰（冷≥3）：卡面「若刀片冷层数≥3，则本次启动额外产生一张冰霜法术进手牌」
+        ///   → 规则侧法术手牌 +1（3D 手牌也要跟着多一张）；冷层数 3 → 2（规则表 F 照常吃 1 层）。
+        /// </summary>
+        private static void ProbeStartupExpectIce()
+        {
+            TableTurnLoop loop = Loop();
+            if (loop == null || loop.rulesV21 == null) { StartupExpect("㊾⑪ 冰", false, "找不到规则侧"); return; }
+
+            TableRulesV21 r = loop.rulesV21;
+            bool hasFrost = false;
+            for (int i = 0; i < r.handSpells.Count; i++)
+                if (r.handSpells[i] != null && r.handSpells[i].spell != null && r.handSpells[i].spell.name == "冰霜")
+                    hasFrost = true;
+
+            StartupExpect("㊾⑪ 冰 · 冷≥3 → 产出「冰霜」进手牌（规则侧法术手牌）",
+                          hasFrost,
+                          "法术手牌 " + r.handSpells.Count + " 张：" + r.HandText() + "（找「冰霜」= " + hasFrost + "）");
+            StartupExpect("㊾⑪ 冰 · 冷层数 3 → 规则表 F 吃 1 → 2",
+                          r.blade != null && r.blade.layers.Count(GameJam.Rules.LayerKind.Cold) == 2,
+                          "冷层数 = " + (r.blade != null ? r.blade.layers.Count(GameJam.Rules.LayerKind.Cold) : -1) + "（期望 2）");
+            StartupExpect("㊾⑪ 冰 · 日志里出现了「进手牌：冰霜」",
+                          CountLastLog("进手牌：冰霜") >= 1,
+                          "「进手牌：冰霜」出现 " + CountLastLog("进手牌：冰霜") + " 次");
         }
     }
 }

@@ -1426,6 +1426,22 @@ namespace GameJam.Rules
                         break;
                     }
                     clause.actions.Add(a);
+
+                    // ★「消耗所有X层数、**以及和X层数相当的H**」（熔融铁那一句）：一条小句里其实是两件事，
+                    //   而段解析器一条小句只产出一个动作 —— 于是"扣 H"那一半以前被**静默丢掉**了
+                    //   （<see cref="FixUp"/> 里"类别取自本句前面那次消耗"那段就是为它写的，
+                    //     只是一直等不到这条动作）。
+                    //   这里顺手补一条"扣刀片 H = 本句已消耗掉的该类层数"：amountSource = ConsumedLayers，
+                    //   量在执行那一刻才求值（所以"先消耗、后扣 H"的顺序天然正确），
+                    //   类别由 FixUp 从前面那次消耗补上。正文没给比例，按 1 层 = 1 点 H。
+                    if (a.op == RuleOp.ConsumeAllLayers && segs[k].Contains("相当的H"))
+                    {
+                        RuleAction h = Act(RuleOp.BladeDamageH, segs[k],
+                            "半句「以及和层数相当的H」：扣刀片 H = 本句已消耗的层数（正文没给比例，按 1:1）");
+                        h.amountSource = RuleAmountSource.ConsumedLayers;
+                        h.layers = a.layers;
+                        clause.actions.Add(h);
+                    }
                 }
 
                 if (!ok)
@@ -1758,7 +1774,15 @@ namespace GameJam.Rules
         /// <summary>正文自相矛盾 / 没写清的地方（照抄 EnchantRules.Conflicts）。</summary>
         public readonly List<string> conflicts = new List<string>();
 
-        /// <summary>v3 正文已经取消、但卡表里还留着的 v2.1 写法（写了也不生效）。</summary>
+        /// <summary>
+        /// 「正文与卡面冲突」的写法：卡面写了，正文 §四.1 却是另一套口径
+        /// （当前只有「不消耗刀片H / 不消耗H」这一族，8 张卡）。
+        ///
+        /// 【名字为什么还叫 superseded】离线探针有一批金丝雀断言按这个名字数条数（= 8），
+        ///   本轮任务边界是"只追加断言、不改老断言"，所以字段名保留，**口径改了**：
+        ///   这一族不是"写了也不生效"，而是"按卡面优先接通、等策划拍板"
+        ///   （引擎侧见 TurnEngine 的成本豁免段，实机由 TableRulesV21.NewTableRules 打开）。
+        /// </summary>
         public readonly List<string> superseded = new List<string>();
 
         /// <summary>有文本、但一条句子都没解析出来（说明切句 / 字段读取出了岔子，不是策划的问题）。</summary>
@@ -1858,8 +1882,9 @@ namespace GameJam.Rules
                     unsupported.Add(where + "：「" + a.text + "」→ " + a.unsupportedReason);
 
                 if (a.op == RuleOp.BladeNoConsumeH)
-                    superseded.Add(where + "：「" + a.text + "」—— v3 正文 §四.1 改为启动固定消耗 1 刀片H，" +
-                                   "没有豁免机制，这条写法已失效（引擎会跳过它并打警告）");
+                    superseded.Add(where + "：「" + a.text + "」—— v3 正文 §四.1 写「启动固定消耗 1 刀片H」，" +
+                                   "卡面写「不消耗」，两句冲突；**按卡面优先接通**（TurnEngine 的启动成本豁免段，" +
+                                   "实机由 TableRulesV21.NewTableRules 打开），待策划拍板（缺口报告 §3.1）");
 
                 if (a.amount == RuleText.PlaceholderAmount)
                     placeholders.Add(where + "：「" + a.text + "」（正文写「一定分数」，占位值见 TurnRules.PlaceholderScorePerLayer）");
@@ -1970,7 +1995,7 @@ namespace GameJam.Rules
                    " 条：已解析 " + ParsedSentences + " · 未识别 " + unrecognized.Count +
                    " ｜ 执行不了 " + unsupported.Count + " · 占位数值 " + placeholders.Count +
                    " · 可疑产出 " + unknownProducts.Count + " · 规则表接不上 " + tableGaps.Count +
-                   " · v3 已失效写法 " + superseded.Count + " · 半懂字段 " + partialFields.Count;
+                   " · 正文/卡面冲突写法 " + superseded.Count + " · 半懂字段 " + partialFields.Count;
         }
 
         public void Print(System.IO.TextWriter w)
@@ -2001,7 +2026,7 @@ namespace GameJam.Rules
             Section(w, "规则表接不上（标签标了、连锁产物没写：启动时规则命中却不变形）", tableGaps.Count);
             for (int i = 0; i < tableGaps.Count; i++) w.WriteLine(" · " + tableGaps[i]);
 
-            Section(w, "v3 已取消、卡表里还留着的 v2.1 写法（写了也不生效）", superseded.Count);
+            Section(w, "正文与卡面冲突的写法（已按「卡面优先」接通，待策划拍板）", superseded.Count);
             for (int i = 0; i < superseded.Count; i++) w.WriteLine(" · " + superseded[i]);
 
             Section(w, "正文自相矛盾 / 没写清（按一个明确选择实现了，待策划拍板）", conflicts.Count);

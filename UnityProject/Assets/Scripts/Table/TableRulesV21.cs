@@ -288,8 +288,35 @@ namespace GameJam.Prototype
 
         // ── 规则的"旋钮"（正文没写数的都在这里）────────────────────────
 
-        /// <summary>引擎的结算参数。每关一份 —— 关卡之间不继承（正文 §八：每关独立）。</summary>
-        public TurnRules rules = new TurnRules();
+        /// <summary>
+        /// 引擎的结算参数。每关一份 —— 关卡之间不继承（正文 §八：每关独立）。
+        /// 初始化走 <see cref="NewTableRules"/>（实机要打开卡牌「启动」文本，见那里）。
+        /// </summary>
+        public TurnRules rules = NewTableRules();
+
+        /// <summary>
+        /// 实机（桌面层）用的引擎旋钮：在 <see cref="TurnRules"/> 的默认值之上，
+        /// **打开"执行卡牌自己的「启动」文本"**（<c>ApplyCardStartupText</c>）。
+        ///
+        /// 【为什么默认值是 false，却必须在这里打开】v3 正文 §四 的启动流程里没有这一步，
+        ///   所以 <see cref="TurnRules.ApplyCardStartupText"/> 的默认值保持 false（离线探针有一批
+        ///   断言钉着"开关关着"的老行为，不许改）；但**卡表**里 21 张素材卡写了「启动」文本
+        ///   （水蒸气的"得分翻倍"、汞的"不消耗刀片H 且 H+1"、冰的"冷≥3 产冰霜"…），
+        ///   一句都不执行的话这些卡就是"解析得到、永远不会发生"的死卡 —— 那正是缺口报告 §3.6 的根因。
+        ///   所以桌面层显式打开：卡面文本优先。
+        ///
+        /// 【三处创建点必须走同一个工厂】<c>BeginLevel</c>（开新关）、
+        ///   <c>EnsureEngine</c>（读档那条路）、以及字段初始化 —— 只要有一处漏了，
+        ///   就会出现"读档回来卡就变死了"这种只在某一条路上复现的怪事。
+        ///
+        /// 【它不改任何别的规则】只多跑"卡面启动文本"这一段；开关关着时引擎行为与老版逐字一致。
+        /// </summary>
+        private static TurnRules NewTableRules()
+        {
+            TurnRules r = new TurnRules();
+            r.ApplyCardStartupText = true;
+            return r;
+        }
 
         private TurnEngine engine;
 
@@ -497,7 +524,8 @@ namespace GameJam.Prototype
             }
 
             // 规则旋钮每关一份。TargetScore 必须填进去 —— 引擎的 Finish() 靠它判"达到目标分"。
-            rules = new TurnRules();
+            // ★ 必须走 NewTableRules（不是 new TurnRules）：实机要打开卡牌「启动」文本，见那里。
+            rules = NewTableRules();
             rules.TargetScore = targetScore;
 
             // 引擎的卡表查询：规则文本里写的是**中文卡名**，必须由这里翻回卡对象。
@@ -3084,7 +3112,9 @@ namespace GameJam.Prototype
         /// </summary>
         private void EnsureEngine()
         {
-            if (rules == null) rules = new TurnRules();
+            // ★ 走 NewTableRules：读档这条路也必须带着"执行卡面启动文本"这个开关，
+            //   否则会出现"开新关时卡是活的、读档回来卡就死了"（两处构造点漏一个就会这样）。
+            if (rules == null) rules = NewTableRules();
             if (engine == null || engine.rules != rules) engine = new TurnEngine(rules, new V21CardLookup());
         }
 

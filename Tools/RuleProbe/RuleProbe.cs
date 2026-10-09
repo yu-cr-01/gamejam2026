@@ -72,6 +72,8 @@ namespace GameJam.Tools
                 Console.WriteLine("  素材 " + cards.materials.Count + " 张 · 法术 " + cards.spells.Count + " 张");
                 Table_MatchCases(cards);
                 V3_NewMechanics(cards);
+                // ★ 本轮追加：卡面「启动」文本接通之后的断言（老断言一条没改，见 V3_StartupText 的说明）
+                V3_StartupText(cards);
 
                 Console.WriteLine();
                 Console.WriteLine("=== 端到端场景（cards_v21.json 真实文案 + v3 启动流程）===");
@@ -2932,6 +2934,195 @@ namespace GameJam.Tools
                         System.Globalization.CultureInfo.InvariantCulture, out d)) return d;
                 return t;
             }
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  五、卡牌「启动」文本（本轮接通；逐条对照缺口报告 §3.6）
+        //
+        //  【这一段为什么单独有自己的一套规则构造】TurnRules.ApplyCardStartupText 的默认值
+        //    仍是 false —— 本文件里有一批老断言钉着"开关关着"的行为（场景13：水的「不消耗刀片H」
+        //    按失效写法跳过 → 每一次启动照扣 1 刀片H）。本轮任务边界是"只追加断言、不许改老断言"，
+        //    所以默认值不动，**实机由 TableRulesV21.NewTableRules 显式打开**；
+        //    这里用 StartupRules() 造一份和实机同口径的规则 —— 两边测的是同一条路。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>startup 断言用的规则：镜像实机（TableRulesV21.NewTableRules）。</summary>
+        private static TurnRules StartupRules()
+        {
+            TurnRules r = new TurnRules();
+            r.ApplyCardStartupText = true;
+            return r;
+        }
+
+        /// <summary>造"刀片 + 桌上一张目标卡"的局面，跑一次启动（startup 断言用）。</summary>
+        private static TurnResult StartupRun(JsonCards cards, string targetName, int bladeH, int bladeV,
+                                             LayerKind[] kinds, int[] counts,
+                                             out LevelRun state, out MaterialState target)
+        {
+            state = NewLevel(cards, "铁刀片", bladeH, bladeV);
+            if (kinds != null)
+                for (int i = 0; i < kinds.Length; i++) state.blade.layers.Add(kinds[i], counts[i]);
+
+            target = Put(cards, state, targetName, 3);
+            TurnEngine e = new TurnEngine(StartupRules(), cards);
+            return e.StartBlade(state, target, true);
+        }
+
+        private static void V3_StartupText(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // ── ① 得分翻倍（水蒸气：有热附魔）+ 反例（没有热/冷）────────────────
+            LevelRun s1a; MaterialState t1a;
+            TurnResult r1a = StartupRun(cards, "水蒸气", 20, 5,
+                new LayerKind[] { LayerKind.Heat }, new int[] { 2 }, out s1a, out t1a);
+            int steamV = ProbeValues(cards, "水蒸气").V;
+
+            Check("startup①·水蒸气有热：激活分 = 卡V " + steamV + " + 刀片V 5", steamV + 5, r1a.activationScore);
+            Check("startup①·水蒸气有热：规则分 = 激活分（本次得分翻倍）", steamV + 5, r1a.ruleScore);
+            Check("startup①·水蒸气有热：本次净得分 = 2 ×（卡V + 刀片V）", 2 * (steamV + 5), r1a.ScoreDelta);
+            Check("startup①·水蒸气有热：卡面「不消耗热层数」→ 规则表 F 不吃热", 2, s1a.blade.layers.Count(LayerKind.Heat));
+            CheckLog("startup①·水蒸气有热：日志写了得分倍率", r1a, "得分倍率");
+            CheckLog("startup①·水蒸气有热：日志写了「豁免」", r1a, "豁免");
+
+            LevelRun s1b; MaterialState t1b;
+            TurnResult r1b = StartupRun(cards, "水蒸气", 20, 5, null, null, out s1b, out t1b);
+            Check("startup①反例·水蒸气没有热/冷附魔：不翻倍（规则分 0）", 0, r1b.ruleScore);
+            Check("startup①反例·水蒸气没有热/冷附魔：净得分就是激活分", steamV + 5, r1b.ScoreDelta);
+            Check("startup①反例·水蒸气没有热/冷附魔：日志里写了「条件不成立」", true, r1b.LogContains("条件不成立"));
+
+            // ── ② 不消耗刀片 H（汞：不消耗H + H+1）──────────────────────────
+            LevelRun s2a; MaterialState t2a;
+            TurnResult r2a = StartupRun(cards, "汞", 20, 0, null, null, out s2a, out t2a);
+            Check("startup②·汞：① 不扣那 1 点刀片H，卡面再 H+1 → 20+1=21", 21, s2a.blade.H);
+            CheckLog("startup②·汞：日志写明卡面优先于 §四.1", r2a, "优先于 §四.1");
+            CheckLog("startup②·汞：日志写了加刀片 H+1", r2a, "加刀片 H+1");
+
+            // 反例：卡面没写「不消耗H」的卡照扣（硫磺液：① -1、卡面再 -2）
+            LevelRun s2b; MaterialState t2b;
+            TurnResult r2b = StartupRun(cards, "硫磺液", 20, 0, null, null, out s2b, out t2b);
+            Check("startup②反例·硫磺液：没有豁免 → ① 扣 1 + 卡面扣 2 → H=17", 17, s2b.blade.H);
+            Check("startup②反例·硫磺液：日志里**没有**「刀片 H 不变」那句", false, r2b.LogContains("刀片 H 不变"));
+
+            // ── ③ 阈值型「额外消耗H + 得分翻倍」（铜：酸≥3）──────────────────
+            LevelRun s3; MaterialState t3;
+            TurnResult r3 = StartupRun(cards, "铜", 20, 5,
+                new LayerKind[] { LayerKind.Acid }, new int[] { 3 }, out s3, out t3);
+            int copperV = ProbeValues(cards, "铜").V;
+            Check("startup③·铜酸3：① 扣 1 + 卡面额外消耗 1 → H=18", 18, s3.blade.H);
+            Check("startup③·铜酸3：得分翻倍（激活 " + (copperV + 5) + " → 净 " + (2 * (copperV + 5)) + "）",
+                  2 * (copperV + 5), r3.ScoreDelta);
+            Check("startup③·铜酸3：规则表照旧把铜变成「铜溶液」进手牌（卡面效果与规则表各发生一次）",
+                  1, r3.ProducedCount("铜溶液"));
+
+            // ── ④ 消耗所有层数换分（汞蒸气：热2 × 2分/层）────────────────────
+            LevelRun s4a; MaterialState t4a;
+            TurnResult r4a = StartupRun(cards, "汞蒸气", 20, 0,
+                new LayerKind[] { LayerKind.Heat }, new int[] { 2 }, out s4a, out t4a);
+            Check("startup④·汞蒸气热2：消耗所有热层数（2 → 0）", 0, s4a.blade.layers.Count(LayerKind.Heat));
+            Check("startup④·汞蒸气热2：每消耗一层 2 分 = 4 分", 4, r4a.ruleScore);
+            CheckLog("startup④·汞蒸气热2：日志写了「消耗所有热层数」", r4a, "消耗所有热层数");
+
+            // ── ⑤ 「每有 1 层 X 得 N 分」要读到**这次启动开始时**的层数 ────────
+            LevelRun s4b; MaterialState t4b;
+            TurnResult r4b = StartupRun(cards, "熔融玻璃", 20, 0,
+                new LayerKind[] { LayerKind.Cold }, new int[] { 2 }, out s4b, out t4b);
+            Check("startup⑤·熔融玻璃冷2：卡面「不消耗H」→ 刀片 H 不变（20）", 20, s4b.blade.H);
+            Check("startup⑤·熔融玻璃冷2：每层 2 分 × **启动时的 2 层** = 4 分（不是被 F 吃完后的 1 层）",
+                  4, r4b.ruleScore);
+            Check("startup⑤·熔融玻璃冷2：规则表 F 之后只剩 1 层冷（4 分读的是启动时的层数）",
+                  1, s4b.blade.layers.Count(LayerKind.Cold));
+
+            // 盐溶液：同样"每有1层冷/热/酸得1分"，用酸层（酸不会触发它的形态变化）
+            LevelRun s4c; MaterialState t4c;
+            TurnResult r4c = StartupRun(cards, "盐溶液", 20, 0,
+                new LayerKind[] { LayerKind.Acid }, new int[] { 2 }, out s4c, out t4c);
+            Check("startup⑤·盐溶液酸2：每有 1 层冷/热/酸得 1 分 = 2 分", 2, r4c.ruleScore);
+            Check("startup⑤·盐溶液酸2：卡面「不消耗H」→ 刀片 H 不变（20）", 20, s4c.blade.H);
+
+            // ── ⑥ 条件型「额外产生某卡进手牌」（冰：冷≥3 → 冰霜）─────────────
+            LevelRun s5a; MaterialState t5a;
+            TurnResult r5a = StartupRun(cards, "冰", 20, 0,
+                new LayerKind[] { LayerKind.Cold }, new int[] { 3 }, out s5a, out t5a);
+            Check("startup⑥·冰冷3：产出一张「冰霜」", 1, r5a.ProducedCount("冰霜"));
+            CheckKind("startup⑥·冰冷3：「冰霜」是法术卡", ProduceKind.Spell, r5a.KindOfProduced("冰霜"));
+            Check("startup⑥·冰冷3：卡面效果发生过之后，规则表 F 才吃掉 1 层冷 → 剩 2", 2,
+                  s5a.blade.layers.Count(LayerKind.Cold));
+
+            // 反例：冷只有 2（阈值 3）→ 不产卡
+            LevelRun s5b; MaterialState t5b;
+            TurnResult r5b = StartupRun(cards, "冰", 20, 0,
+                new LayerKind[] { LayerKind.Cold }, new int[] { 2 }, out s5b, out t5b);
+            Check("startup⑥反例·冰只有冷2（阈值3）：不产「冰霜」", 0, r5b.ProducedCount("冰霜"));
+            Check("startup⑥反例·冰只有冷2：日志里写了「条件不成立」", true, r5b.LogContains("条件不成立"));
+
+            // ── ⑦ 「消耗所有X层数 → 额外产生一张卡」：真消耗到才产出 ──────────
+            LevelRun s6a; MaterialState t6a;
+            TurnResult r6a = StartupRun(cards, "水", 20, 5,
+                new LayerKind[] { LayerKind.Heat }, new int[] { 1 }, out s6a, out t6a);
+            Check("startup⑦·水有热1：消耗所有热层数（1 → 0）", 0, s6a.blade.layers.Count(LayerKind.Heat));
+            Check("startup⑦·水有热1：产出「水蒸气」1 张", 1, r6a.ProducedCount("水蒸气"));
+            Check("startup⑦·水没有冷/酸层数：既不产「冰」也不产「空白卡」（卡面是「拿层数换卡」）",
+                  0, r6a.ProducedCount("冰") + r6a.ProducedCount("空白卡"));
+            Check("startup⑦·水：卡面「不消耗刀片H」→ 刀片 H 不变（20）", 20, s6a.blade.H);
+
+            // ── ⑧ 层数翻倍（盐：有热 2 → 4，随后规则表 F 再吃 1）─────────────
+            LevelRun s7; MaterialState t7;
+            TurnResult r7 = StartupRun(cards, "盐", 20, 0,
+                new LayerKind[] { LayerKind.Heat }, new int[] { 2 }, out s7, out t7);
+            Check("startup⑧·盐有热2：层数翻倍（2 → 4）", true, r7.LogContains("层数翻倍"));
+            Check("startup⑧·盐有热2：翻倍之后规则表 F 再吃 1 层 → 剩 3", 3, s7.blade.layers.Count(LayerKind.Heat));
+
+            // 反例：一层附魔都没有 → 条件不成立、不翻倍
+            LevelRun s7b; MaterialState t7b;
+            TurnResult r7b = StartupRun(cards, "盐", 20, 0, null, null, out s7b, out t7b);
+            Check("startup⑧反例·盐没有冷/热/酸：不翻倍", false, r7b.LogContains("层数翻倍："));
+            Check("startup⑧反例·盐没有冷/热/酸：日志里写了「条件不成立」", true, r7b.LogContains("条件不成立"));
+
+            // ── ⑨ 额外消耗**其他**素材的 H（外星合金）────────────────────────
+            LevelRun s8 = NewLevel(cards, "铁刀片", 20, 0);
+            MaterialState alloy = Put(cards, s8, "外星合金", 3);
+            MaterialState victim = Put(cards, s8, "水", 3);
+            int victimH = ProbeValues(cards, "水").H;
+            TurnEngine e8 = new TurnEngine(StartupRules(), cards);
+            TurnResult r8 = e8.StartBlade(s8, alloy, true);
+            Check("startup⑨·外星合金：额外消耗其他素材 H 1 点（水 " + victimH + " → " + (victimH - 1) + "）",
+                  victimH - 1, victim.H);
+            Check("startup⑨·外星合金：自己那一张不受影响（H 仍是卡面的 " + ProbeValues(cards, "外星合金").H + "）",
+                  ProbeValues(cards, "外星合金").H, alloy.H);
+
+            // ── ⑩ 「得分为 0 但产卡」（皮革：有酸附魔；酸≥2 走"仅改属性"那条、不会先变形）──
+            LevelRun s9; MaterialState t9;
+            TurnResult r9 = StartupRun(cards, "皮革", 20, 5,
+                new LayerKind[] { LayerKind.Acid }, new int[] { 2 }, out s9, out t9);
+            Check("startup⑩·皮革酸2：本次启动得分为 0", 0, r9.ScoreDelta);
+            Check("startup⑩·皮革酸2：仍然产出「法术卷轴」1 张", 1, r9.ProducedCount("法术卷轴"));
+
+            // ── ⑪ 开关关着 = 老行为（防止"接通"顺手改掉默认口径）───────────
+            LevelRun s10 = NewLevel(cards, "铁刀片", 20, 0);
+            MaterialState mercury0 = Put(cards, s10, "汞", 3);
+            TurnResult r10 = new TurnEngine(ProbeRules(), cards).StartBlade(s10, mercury0, false);
+            Check("startup⑪·开关关着（ProbeRules）：汞照扣 1 点刀片H（老行为一字未动）", 19, s10.blade.H);
+            Check("startup⑪·开关关着：不产任何卡", 0, r10.produced.Count);
+
+            // ── ⑫ 熔融铁（有冷）：一条小句里的两件事都要发生 ─────────────────
+            //   卡面：「消耗所有冷层数、**以及和冷层数相当的H**，每消耗一层获得5分」——
+            //   后半句以前被解析器静默丢掉（FixUp 里为它写的那段补全一直等不到这条动作）。
+            LevelRun s11; MaterialState t11;
+            TurnResult r11 = StartupRun(cards, "熔融铁", 20, 0,
+                new LayerKind[] { LayerKind.Cold }, new int[] { 2 }, out s11, out t11);
+            Check("startup⑫·熔融铁冷2：消耗所有冷层数（2 → 0）", 0, s11.blade.layers.Count(LayerKind.Cold));
+            Check("startup⑫·熔融铁冷2：每消耗一层 5 分 = 10 分", 10, r11.ruleScore);
+            Check("startup⑫·熔融铁冷2：不消耗H（20）+ 卡面 H+1 − 与冷层数相当的 2 点 = 19", 19, s11.blade.H);
+            Check("startup⑫·熔融铁冷2：日志里写了「扣刀片 H-2」", true, r11.LogContains("扣刀片 H-2"));
+
+            ScenarioEnd("startup 文本接通（卡面优先 · 21 张素材卡）", mark,
+                "水蒸气有热翻倍 " + r1a.ScoreDelta + " 分（不翻倍 " + r1b.ScoreDelta + "）｜汞 H→" + s2a.blade.H +
+                "（不豁免的硫磺液 H→" + s2b.blade.H + "）｜铜酸3 净 " + r3.ScoreDelta + " 分且变铜溶液｜汞蒸气热2 换 " +
+                r4a.ruleScore + " 分｜熔融玻璃冷2 换 " + r4b.ruleScore + " 分（F 后剩 " +
+                s4b.blade.layers.Count(LayerKind.Cold) + " 层）｜冰冷3 产 " + r5a.ProducedText() +
+                "｜水有热1 产 " + r6a.ProducedText() + "｜盐翻倍后剩 " + s7.blade.layers.Count(LayerKind.Heat) +
+                " 层｜皮革酸2 得 " + r9.ScoreDelta + " 分产 " + r9.ProducedText());
         }
     }
 }

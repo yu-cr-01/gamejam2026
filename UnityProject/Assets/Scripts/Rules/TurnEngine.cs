@@ -31,14 +31,18 @@ namespace GameJam.Rules
         public bool ConsumeLayerOnActivate = true;
 
         /// <summary>
-        /// 【正文没写这一步】要不要执行卡牌自己的「启动」文本。
+        /// 【正文没写这一步，但卡表 21 张素材卡都写了「启动」文本】要不要执行卡牌自己的「启动」文本。
         ///
-        ///   v3 §四 的启动流程里**没有**"按素材的启动文本结算"这一步 —— 形态变化全由附魔规则表驱动。
-        ///   卡表里的 startup 是 v2.1 的遗留写法（例如水的"消耗刀片所有热层数，额外产生一张水蒸气"），
-        ///   v3 用规则表 + transitions 表达了同一件事。
+        ///   v3 §四 的启动流程里**没有**"按素材的启动文本结算"这一步 —— 形态变化全由附魔规则表驱动，
+        ///   卡表里的 startup 是 v2.1 的遗留写法。但实机（<c>TableRulesV21</c>）**按卡面优先打开它**：
+        ///   21 张卡的启动文本一句都不执行的话，那些卡就是"解析得到、永远不会发生"的死卡
+        ///   （缺口报告 §3.6 的根因）。打开之后的三段落点见 <c>TurnEngine.StartBlade</c> 里 startup ⓪。
         ///
-        ///   默认 false = 严格按 v3 跑；打开就多跑一步（位置：附魔链之后、D-1 之前），
-        ///   把卡表里那些 v2.1 文本也执行掉。RuleReport 会把它们列出来供策划决定删还是留。
+        ///   ★ 这里默认仍是 false：离线探针（Tools/RuleProbe）有一批断言钉着"开关关着"的老行为
+        ///     （例如"水的『不消耗刀片H』按失效写法跳过、每一次启动照扣 1 H"），本轮任务边界是
+        ///     **只追加断言、不许改老断言**，所以默认值不动，由实机那一层显式打开
+        ///     （<c>TableRulesV21.NewTableRules</c>，逐条说明见那里）。探针新增的 startup 断言
+        ///     自己构造"打开"的规则（<c>RuleProbe.StartupRules</c>），两边口径一致。
         /// </summary>
         public bool ApplyCardStartupText = false;
 
@@ -262,14 +266,21 @@ namespace GameJam.Rules
     /// <summary>
     /// 启动结算引擎（正文 §四「启动结算流程」，顺序写死在这里）：
     ///
-    ///   ① 消耗资源：1 行动机会 + 1 刀片H
+    ///   ⓪ 卡牌自身的「启动」文本：**先读成计划**（条件在"本次启动开始时"求值一次），
+    ///      按落点分三段执行 —— 成本豁免（① 之前）/ 层数·刀片·产出（①b，规则表之前）/ 改本次得分（③ 之后）。
+    ///      开关（<see cref="TurnRules.ApplyCardStartupText"/>）关着时这一步完全不存在。
+    ///   ① 消耗资源：1 行动机会 + 1 刀片H（卡面写「不消耗刀片H」时，从 ⓪ 拿到豁免、这 1 点不扣）
+    ///   ①b 卡面启动文本的"层数 / 刀片 / 产出"段（**必须在 ② 之前**，理由逐条写在 StartBlade 那里）
     ///   ② 素材结算：按 热 → 冷 → 酸 查附魔规则表（催化只降阈值），每种只触发最高优先级一条
     ///        · 形态变化 → 旧卡移出桌面、新卡进手牌（D 重置为满）、本次不再 D-1、素材结算结束
     ///        · 溶解移除 → 旧卡移出桌面、素材结算结束
     ///        · 仅改属性（H-1 / H-2 / 刀片热+1）→ 继续检查下一个附魔
     ///        · 都没让目标消失 → D-1；D≤0 → D耗尽（法术 + 副产物进手牌；无产物则空白卡 +1）
+    ///        · ★ 规则表 F（启动消耗 1 层附魔）仍在这一段的末尾 —— 但卡面的「消耗所有X层数」已经在 ①b
+    ///          跑过，所以 F 看到的是"卡面用剩下的"层数；卡面写「不消耗X层数」的类别在这里被跳过。
     ///   ③ 结算收益：本次得分 = 目标素材V + 刀片V（目标已移除时用启动时的原始卡 V）
-    ///   ④ 检查爆刀：H≤0 → 立即爆刀、关卡结束、**当前分数 ×2**
+    ///       （卡面的「得分翻倍 / 得分为 0 / 每层加分」在 ③ 之后执行，所以它改的就是这个数）
+    ///   ④ 检查爆刀：H≤0 → 立即爆刀、关卡结束、**当前分数 ×2**（吃到 ③ 与卡面得分改动的结果）
     ///   ⑤ 献祭登记：把本次目标登记为"本回合最后一个待献祭目标"（**不在这里吞噬**）；
     ///        回合真正结束时（行动机会用尽 / 玩家点结束回合 / 关卡结束）才对该目标判定：
     ///        D>0 → 并入刀片（移出桌面、刀片H += 卡H、刀片V += 卡V；带「献祭」标签的卡在此触发它的献祭效果）；
@@ -607,14 +618,68 @@ namespace GameJam.Rules
                 return r;
             }
 
+            // ── startup 阶段 ⓪：把卡牌自己的「启动」文本读成一份**分三段执行**的计划 ──
+            //
+            // 【为什么必须赶在 ① 之前读】卡表里 8 张卡写着「不消耗刀片H / 不消耗H」，而 ① 就是扣 H 那一步：
+            //   等到 ②b 再读，H 已经扣掉了，"不消耗"永远无从生效 —— 这正是这批卡过去
+            //   "解析得到、却永远不会发生"的原因之一。
+            //
+            // 【为什么读成"计划"，而不是在 ②b 就地执行】同一张卡的 startup 里三类句子的落点各不相同：
+            //   · 成本豁免（不消耗H / 不消耗X层数）→ 必须赶在 ① 与规则表 F 之前；
+            //   · 层数 / 刀片 H / 其他素材 / 产出 / "每（消耗）一层加分" → 在 ①b（② 之前，见那里的取舍）；
+            //   · 「本次启动得分翻倍 / 得分为 0」→ 必须等 ③ 把 activationScore 算出来。
+            //     若放在 ①b：翻倍翻的是 0（activationScore 还是 0）、皮革的"得分为 0"
+            //     只清得掉规则分，启动分照拿 —— 两种错都不报错，只是数不对。
+            //
+            // 【条件为什么只求值一次（就在这一步）】条件描述的是"**本次启动开始时**刀片的样子"。
+            //   汞蒸气那句「若刀片有热附魔，则消耗所有热层数，每消耗一层获得2分」是同一句里的两半：
+            //   若让后半句在"消耗完热层数之后"再判条件，"有热附魔"当场就不成立了，分一分都拿不到。
+            StartupPlan startup = BuildStartupPlan(r, state, target);
+
             // ── ① 消耗资源 ────────────────────────────────────────────
             state.actionPoints--;
             state.startsThisTurn++;
-            int hp = state.blade.Damage(1);
-            Log(r, "① 消耗资源：行动机会 -1（剩 " + state.actionPoints + "/" + LevelRun.ActionPointsPerTurn + "）" +
-                    "｜ 刀片 H-" + hp + " → H=" + state.blade.H);
+            if (startup.noBladeH)
+            {
+                // 卡面文本优先：`TurnRules.ApplyCardStartupText` 打开时，「不消耗刀片H」的卡本次不扣 H。
+                //   （与正文 §四.1"启动固定扣 1H"冲突，裁决与逐条清单见缺口报告 §3.1）
+                Log(r, "① 消耗资源：行动机会 -1（剩 " + state.actionPoints + "/" + LevelRun.ActionPointsPerTurn + "）" +
+                        "｜ 刀片 H 不变 = H" + state.blade.H +
+                        "（卡面「不消耗刀片H」优先于 §四.1 的固定扣 1）");
+            }
+            else
+            {
+                int hp = state.blade.Damage(1);
+                Log(r, "① 消耗资源：行动机会 -1（剩 " + state.actionPoints + "/" + LevelRun.ActionPointsPerTurn + "）" +
+                        "｜ 刀片 H-" + hp + " → H=" + state.blade.H);
+            }
+
+            ExecuteStartupStage(r, state, target, startup, StartupStageCost);
 
             ApplyBladePassives(r, state);
+
+            // ── ①b 卡牌自己的「启动」文本（层数 / 刀片 H / 其他素材 / 产出）────────────
+            //
+            // 【★ 为什么放在 ② 附魔规则表**之前**（取舍写在这里）】
+            //   规则表一旦命中形态变化 / 溶解，目标就离场了；老版 ②b 那条"目标已离场就不执行"的守卫
+            //   会让**一整族卡**的效果永远不发生 —— 而它们的条件（有热 / 有酸 / 有冷）恰恰就是
+            //   触发那张卡变形的那一类附魔：
+            //     · 铜 / 铁 / 熔融铜 的「酸层数≥3」：酸≥1 就已经让规则表把它们变成 xx溶液（形态变化）；
+            //     · 碳 / 硫磺 的「热层数≥2/3」：热≥1 就已经让「易燃」规则把它们烧掉；
+            //     · 硫磺气 的「有冷附魔」：冷≥1 就命中「遇冷」规则变成硫磺液；
+            //     · 皮革 的「有热/酸」、熔融铁 的「有冷层数」同理。
+            //   实测 9 张卡里 6 张彻底死掉。所以顺序定成"**先算这张卡自己的启动文本，再让规则表
+            //   看剩下的层数怎么反应**"：
+            //     · 好处：21 张卡的启动效果真的都会发生，而且**每一层只被用一次**——
+            //       不会出现"规则表变形给一张 + 卡面消耗层数再给一张"的双领（放在 ②b 且不设守卫
+            //       就会这样：水 热2 会拿到两张水蒸气）；
+            //     · 代价：像 水 / 熔融铁 这种「消耗所有X层数」的卡，层数被卡面自己消耗掉了，
+            //       规则表因此不再对它变形（水 热2 不再走"液体+热→水蒸气"那条路，而是消耗 2 层热
+            //       产出一张水蒸气、水留在桌上）。这与"形态变化全由规则表驱动"的 v3 口径有出入，
+            //       已列进缺口报告 §3.6 请策划拍板。
+            //     · 开关关着时这一整段一条动作都不会执行（plan.active == false），
+            //       引擎行为与老版逐字一致。
+            ExecuteStartupStage(r, state, target, startup, StartupStageBody);
 
             // ── ② 素材结算 ────────────────────────────────────────────
             Log(r, "② 素材结算：" + target.name + "（" + target.card.FormAndTags() + "）" +
@@ -622,11 +687,7 @@ namespace GameJam.Rules
 
             int originalV = target.V;
             List<TransitionRule> reactions = TransitionsOf(target.card).transitions;
-            bool removedByEnchant = ResolveEnchantChain(r, state, target, reactions);
-
-            // ②b 卡牌自己的「启动」文本（v2.1 卡表遗留；v3 正文没有这一步，默认不跑 —— 见 TurnRules）
-            if (rules.ApplyCardStartupText && !removedByEnchant && !target.removed)
-                ExecuteCardStartupText(r, state, target);
+            bool removedByEnchant = ResolveEnchantChain(r, state, target, reactions, startup);
 
             // ⑤ 目标还在 → D-1；D≤0 → D 耗尽
             if (!target.removed)
@@ -653,6 +714,14 @@ namespace GameJam.Rules
             Log(r, "③ 结算收益：目标 V=" + targetV + (target.removed ? "（目标已移除 → 用启动时的原始卡 V=" + originalV + "）" : "") +
                     " + 刀片 V=" + bladeV + " = " + r.activationScore + " 分　→ 总分 " + state.score);
 
+            // ③b 卡牌自己的「启动」文本里**改本次得分**的那一档 —— 必须等 ③ 把 activationScore
+            //   算出来才执行（见 startup ⓪ 的说明）。放在 ④ 之前：这样"得分翻倍"之后再爆刀，
+            //   爆刀吃到的就是翻倍后的分数（正文 §四.4：爆刀在收益结算之后）。
+            //   ★ 目标已被形态变化 / 溶解移走时**照样执行**：那是"本次启动"的得分修正
+            //     （铜/铁的"得分翻倍"、皮革的"得分为 0"），与目标最后在不在桌面上无关 ——
+            //     它们挪到 ①b 之后就不再受那条守卫影响，这里保持一致。
+            ExecuteStartupStage(r, state, target, startup, StartupStageScore);
+
             // ── ④ 检查爆刀 ────────────────────────────────────────────
             if (state.blade.IsBursted) Burst(r, state);
             else Log(r, "④ 检查爆刀：H=" + state.blade.H + " > 0，未爆刀");
@@ -664,8 +733,14 @@ namespace GameJam.Rules
             return r;
         }
 
-        /// <summary>热 → 冷 → 酸 依次查规则表。返回"目标是否已被形态变化/溶解移除"。</summary>
-        private bool ResolveEnchantChain(TurnResult r, LevelRun state, MaterialState target, List<TransitionRule> reactions)
+        /// <summary>
+        /// 热 → 冷 → 酸 依次查规则表。返回"目标是否已被形态变化/溶解移除"。
+        ///
+        /// 【startup 参数只用来让位】卡面写了「不消耗X层数」（水蒸气）时，规则表 F 那一步
+        ///   不从这些类别里扣（见 <see cref="ConsumeActivationLayer"/>）。
+        /// </summary>
+        private bool ResolveEnchantChain(TurnResult r, LevelRun state, MaterialState target,
+                                         List<TransitionRule> reactions, StartupPlan startup)
         {
             LayerKind triggeredKind = LayerKind.Catalyst;
             bool anyTrigger = false;
@@ -730,8 +805,10 @@ namespace GameJam.Rules
             if (!anyTrigger)
                 Log(r, "　（热/冷/酸三种附魔都没有触发规则）");
 
-            // 规则表 F：启动消耗 1 层附魔（正文自相矛盾，见 TurnRules.ConsumeLayerOnActivate）
-            ConsumeActivationLayer(r, state, anyTrigger, triggeredKind);
+            // 规则表 F：启动消耗 1 层附魔（正文自相矛盾，见 TurnRules.ConsumeLayerOnActivate）。
+            //   位置与老版**逐字一致**（附魔链末尾）—— 卡面的「消耗所有X层数」已经在 ①b 跑过了，
+            //   所以这里看到的是"卡面用剩下的"层数；卡面写了「不消耗X层数」的类别在这里被跳过。
+            ConsumeActivationLayer(r, state, anyTrigger, triggeredKind, startup);
 
             return removed;
         }
@@ -1039,21 +1116,223 @@ namespace GameJam.Rules
         }
 
         // ══════════════════════════════════════════════════════════════
-        //  卡牌文本 op 的执行
+        //  卡牌「启动」文本：分三段执行的计划
+        //
+        //  【为什么不是"走到哪执行到哪"】卡表里 21 张素材卡的 startup 有三类句子，
+        //    落点各不相同（详见 StartBlade 里 startup ⓪ 那段）：
+        //      · 成本豁免（不消耗H / 不消耗X层数）—— 要赶在 ① 扣 H 与规则表 F 之前；
+        //      · 层数 / 刀片 H / 其他素材 / 产出 / 「每（消耗）一层加分」—— 在 ①b（② 之前，理由见 StartBlade）；
+        //      · 「本次启动得分翻倍 / 得分为 0」—— 要等 ③ 把 activationScore 算出来。
+        //    所以这里先把整张卡的句子读成一张"动作表"（条件**当场求值一次**），
+        //    再由 StartBlade 在三个时点各跑一段。这样"条件在什么时候判、动作在什么时候生效"
+        //    是同一份数据结构说了算，不会出现"某张卡的条件在它自己的动作之后才判"。
         // ══════════════════════════════════════════════════════════════
 
-        private void ExecuteCardStartupText(TurnResult r, LevelRun state, MaterialState target)
-        {
-            RuleParseResult pr = StartupOf(target.card);
-            if (pr.clauses.Count == 0 && pr.unrecognized.Count == 0) return;
+        /// <summary>成本豁免段（① 扣 H 与规则表 F 之前）。</summary>
+        private const int StartupStageCost = 0;
 
-            Log(r, "　（卡牌自身的「启动」文本 —— v3 正文没有这一步，这里按 v2.1 卡表保留执行）");
+        /// <summary>主体段（①b：扣完资源、**在 ② 附魔规则表之前** —— 理由见 StartBlade）。</summary>
+        private const int StartupStageBody = 1;
+
+        /// <summary>得分段（③ 算完本次得分之后、④ 爆刀之前）。</summary>
+        private const int StartupStageScore = 2;
+
+        /// <summary>一个 clause 拆到三段之后的样子（原句照抄，日志里能对回卡面）。</summary>
+        private class StartupClausePlan
+        {
+            public string sentence = "";
+            public readonly List<RuleAction> cost = new List<RuleAction>();
+            public readonly List<RuleAction> body = new List<RuleAction>();
+            public readonly List<RuleAction> score = new List<RuleAction>();
+
+            public List<RuleAction> Stage(int stage)
+            {
+                return stage == StartupStageCost ? cost : (stage == StartupStageBody ? body : score);
+            }
+        }
+
+        /// <summary>一张卡的「启动」文本读完之后的执行计划。</summary>
+        private class StartupPlan
+        {
+            /// <summary>这张卡有 startup 文本、而且 <see cref="TurnRules.ApplyCardStartupText"/> 是开的。</summary>
+            public bool active;
+
+            /// <summary>卡面写了「不消耗刀片H / 不消耗H」→ ① 不扣那 1 点 H。</summary>
+            public bool noBladeH;
+
+            /// <summary>卡面写了「不消耗X层数」→ 规则表 F 不从这些类别里扣。</summary>
+            public readonly List<LayerKind> noConsumeLayers = new List<LayerKind>();
+
+            public readonly List<StartupClausePlan> clauses = new List<StartupClausePlan>();
+
+            public bool Protects(LayerKind k)
+            {
+                for (int i = 0; i < noConsumeLayers.Count; i++)
+                    if (noConsumeLayers[i] == k) return true;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 把这次启动目标的「启动」文本读成一份计划（条件在这一刻求值一次）。
+        ///
+        /// 【为什么要先读再执行】见上面那段。开关关着时返回一个 active=false 的空计划 ——
+        ///   调用方那三处判断全都不成立，行为与"从来没有 startup 这一步"逐字一致。
+        /// </summary>
+        private StartupPlan BuildStartupPlan(TurnResult r, LevelRun state, MaterialState target)
+        {
+            StartupPlan plan = new StartupPlan();
+            if (!rules.ApplyCardStartupText) return plan;
+            if (target == null || target.card == null) return plan;
+
+            RuleParseResult pr = StartupOf(target.card);
+            if (pr.clauses.Count == 0 && pr.unrecognized.Count == 0) return plan;
+
+            plan.active = true;
+
+            Log(r, "　· 卡牌自身的「启动」文本（v3 正文没有这一步；卡面优先，见 TurnRules.ApplyCardStartupText）—— 分三段执行：");
+            Log(r, "　　· ① 之前：成本豁免（不消耗H / 不消耗X层数）");
+            Log(r, "　　· ①b（附魔规则表之前）：层数 / 刀片 H / 其他素材 / 产出 / 每（消耗）一层加分");
+            Log(r, "　　· ③ 之后（本次得分算完）：得分翻倍 / 得分为 0");
+
             if (pr.unrecognized.Count > 0)
                 Warn(r, target.name + " 的「启动」有 " + pr.unrecognized.Count + " 句没解析成功（见规则解析报告）—— 这几条不会生效");
 
-            ExecuteClauses(r, state, target, pr, "启动文本");
+            for (int i = 0; i < pr.clauses.Count; i++)
+            {
+                RuleClause clause = pr.clauses[i];
+
+                string why;
+                if (!ConditionHolds(clause.condition, state, target, out why))
+                {
+                    Log(r, "　　「" + clause.sentence + "」条件不成立" + why + " → 跳过");
+                    continue;
+                }
+
+                StartupClausePlan cp = new StartupClausePlan();
+                cp.sentence = clause.sentence;
+
+                for (int k = 0; k < clause.actions.Count; k++)
+                {
+                    RuleAction a = clause.actions[k];
+
+                    if (a.op == RuleOp.BladeNoConsumeH)
+                    {
+                        plan.noBladeH = true;
+                        cp.cost.Add(a);
+                    }
+                    else if (a.op == RuleOp.NoConsumeLayer)
+                    {
+                        for (int n = 0; n < a.layers.Length; n++)
+                            if (!plan.noConsumeLayers.Contains(a.layers[n])) plan.noConsumeLayers.Add(a.layers[n]);
+                        cp.cost.Add(a);
+                    }
+                    else if (IsStartupLateScoreOp(a.op))
+                    {
+                        cp.score.Add(a);
+                    }
+                    else
+                    {
+                        cp.body.Add(a);
+                    }
+                }
+
+                plan.clauses.Add(cp);
+
+                Log(r, "　　「" + cp.sentence + "」→ " + StartupStageName(cp));
+            }
+
+            return plan;
         }
 
+        /// <summary>
+        /// 哪些 op **必须**等 ③ 把 activationScore 算出来才能执行（放 ①b 会算错，见 startup ⓪）。
+        ///
+        /// 【只有这两个】「本次启动得分翻倍」（拿激活分当基数，激活分为 0 时翻倍等于没翻）与
+        ///   「本次启动得分为 0」（要把激活分清零，早执行只清得掉规则分）。
+        ///   其余得分 op —— 「每有 1 层 X 得 N 分」「每消耗一层得 N 分」「固定加分」——
+        ///   都不依赖激活分，而且**放在 ①b 才对得上量**：卡面写的是"你有多少层"，
+        ///   那指的是这次启动开始时的层数；挪到 ③ 之后，规则表 F 已经吃掉 1 层、规则表也可能
+        ///   把层数翻倍/清空，同一个数会读出另一个值（熔融玻璃"冷2 → 每层2分"就会变成 2 分）。
+        /// </summary>
+        private static bool IsStartupLateScoreOp(RuleOp op)
+        {
+            switch (op)
+            {
+                case RuleOp.MultiplyScore:
+                case RuleOp.ZeroScore:
+                    return true;
+            }
+            return false;
+        }
+
+        private static string StartupStageName(StartupClausePlan cp)
+        {
+            string s = "";
+            if (cp.cost.Count > 0)  s += (s.Length > 0 ? " + " : "") + "① 之前（成本豁免）";
+            if (cp.body.Count > 0)  s += (s.Length > 0 ? " + " : "") + "①b（层数/产出，规则表之前）";
+            if (cp.score.Count > 0) s += (s.Length > 0 ? " + " : "") + "③ 之后（本次得分）";
+            return s.Length > 0 ? s : "（声明句）";
+        }
+
+        /// <summary>
+        /// 跑到计划里的某一段。
+        ///
+        /// 【「消耗所有 X 层数，额外产生一张 Y」为什么要绑在一起】水那张卡的三句是
+        ///   「消耗刀片所有热层数，额外产生一张水蒸气」这样的**一对**：产出的前提是"真的消耗到了层数"。
+        ///   不绑的话，一次启动会不管有没有热/冷/酸层数都把 水蒸气 + 冰 + 空白卡 三张一起塞进手牌
+        ///   （卡面上写的是"额外产生"，不是"无条件产生"）。这是**口径**决定，列在缺口报告里请策划确认。
+        /// </summary>
+        private void ExecuteStartupStage(TurnResult r, LevelRun state, MaterialState target, StartupPlan plan, int stage)
+        {
+            if (!plan.active) return;
+
+            for (int i = 0; i < plan.clauses.Count; i++)
+            {
+                StartupClausePlan cp = plan.clauses[i];
+                List<RuleAction> acts = cp.Stage(stage);
+                if (acts.Count == 0) continue;
+
+                Log(r, "　　「" + cp.sentence + "」");
+
+                int consumedInClause = 0;
+                for (int k = 0; k < acts.Count; k++)
+                {
+                    RuleAction a = acts[k];
+
+                    if (a.op == RuleOp.ProduceCard && ConsumedBefore(acts, k) && consumedInClause == 0)
+                    {
+                        Log(r, "　　（本句前面那次「消耗层数」一层都没消耗到 → 不产生「" + a.cardName +
+                                "」（卡面写的是「额外产生」，按「拿层数换卡」执行））");
+                        continue;
+                    }
+
+                    int before = ConsumedTotal(r);
+                    ExecuteAction(r, state, target, a);
+                    consumedInClause += ConsumedTotal(r) - before;
+                }
+            }
+        }
+
+        /// <summary>这一条之前（同一句里）有没有"消耗层数"—— 有的话它就是"换来的产出"。</summary>
+        private static bool ConsumedBefore(List<RuleAction> acts, int index)
+        {
+            for (int i = 0; i < index; i++)
+                if (acts[i].op == RuleOp.ConsumeAllLayers || acts[i].op == RuleOp.ConsumeLayer) return true;
+            return false;
+        }
+
+        private static int ConsumedTotal(TurnResult r)
+        {
+            int n = 0;
+            foreach (KeyValuePair<LayerKind, int> kv in r.consumed) n += kv.Value;
+            return n;
+        }
+
+        /// <summary>
+        /// 「条件 → 动作」逐句跑（**法术 / 献祭 / D耗尽**这些一次性字段走这里；
+        /// 「启动」文本不走这里 —— 它要按落点分三段，见上面的 StartupPlan）。
+        /// </summary>
         private void ExecuteClauses(TurnResult r, LevelRun state, MaterialState self, RuleParseResult pr, string from)
         {
             for (int i = 0; i < pr.clauses.Count; i++)
@@ -1147,8 +1426,11 @@ namespace GameJam.Rules
 
                 // ── 刀片 ──
                 case RuleOp.BladeNoConsumeH:
-                    Warn(r, "「" + a.text + "」在 v3 已失效：启动固定消耗 1 刀片H（§四.1），没有豁免机制");
-                    Log(r, "　　⚠ 「不消耗刀片H」已失效（v3 改为启动固定扣 1 H，且扣在结算之前）→ 跳过");
+                    // 这句在启动流程里由"成本豁免段"提前处理（StartBlade 的 startup ⓪ → ① 之前），
+                    // 走到这里说明它出现在**别的字段**（献祭 / D耗尽 / 法术）里 —— 那里没有"启动扣 H"可豁免，
+                    // 所以只留一行说明，不假装做了什么。
+                    Log(r, "　　「" + a.text + "」：这是「本次启动不扣刀片 H」的声明，只对启动那一步有意义" +
+                            "（启动流程里由成本豁免段处理；出现在别的字段里没有作用对象）");
                     break;
 
                 case RuleOp.BladeDamageH:
@@ -1235,7 +1517,10 @@ namespace GameJam.Rules
                     break;
 
                 case RuleOp.NoConsumeLayer:
-                    Log(r, "　　（「" + a.text + "」：v3 里附魔层数只在回合末衰减，启动本来就不按这个条目标记处理）");
+                    // 同 BladeNoConsumeH：启动里由成本豁免段处理（规则表 F 不从这一类里扣），
+                    // 这里只处理"它出现在别的字段"的情况。
+                    Log(r, "　　（「" + a.text + "」：启动流程里由成本豁免段让规则表 F 跳过这些类别；" +
+                            "出现在别的字段里没有作用对象）");
                     break;
 
                 case RuleOp.DoubleLayers:
@@ -1315,15 +1600,26 @@ namespace GameJam.Rules
                     "：" + before + " → " + blade.layers.Count(kind) + "（" + blade.layers.Describe() + "）");
         }
 
-        /// <summary>规则表 F：启动消耗 1 层附魔（正文自相矛盾，默认按 F 实现）。</summary>
-        private void ConsumeActivationLayer(TurnResult r, LevelRun state, bool anyTrigger, LayerKind triggeredKind)
+        /// <summary>
+        /// 规则表 F：启动消耗 1 层附魔（正文自相矛盾，默认按 F 实现）。
+        ///
+        /// 【卡面「不消耗X层数」怎么让位】水蒸气写着「若刀片有热附魔，则不消耗热层数」——
+        ///   那是**卡面**对 F 这一条的部分豁免，所以两句话合起来读是：
+        ///   "本次启动照例消耗 1 层附魔，但不从被豁免的那一类里扣"。
+        ///   也就是说：被保护的那一类从"候选"里去掉，还有别的类有层就从别的类扣，
+        ///   一类都不剩就本次不消耗（并留一行日志 —— 不然"有热却没消耗"看起来像 F 没跑）。
+        ///   （这条口径与「不消耗刀片H」一起列在缺口报告 §3.1，待策划拍板。）
+        /// </summary>
+        private void ConsumeActivationLayer(TurnResult r, LevelRun state, bool anyTrigger, LayerKind triggeredKind,
+                                            StartupPlan startup)
         {
             if (!rules.ConsumeLayerOnActivate) return;
 
             LayerKind k = LayerKind.Catalyst;
             bool found = false;
 
-            if (anyTrigger && triggeredKind != LayerKind.Catalyst && state.blade.layers.Has(triggeredKind))
+            if (anyTrigger && triggeredKind != LayerKind.Catalyst && state.blade.layers.Has(triggeredKind) &&
+                !(startup != null && startup.Protects(triggeredKind)))
             {
                 k = triggeredKind;
                 found = true;
@@ -1332,18 +1628,25 @@ namespace GameJam.Rules
             {
                 for (int i = 0; i < EnchantRules.MaterialCheckOrder.Length; i++)
                 {
-                    if (state.blade.layers.Has(EnchantRules.MaterialCheckOrder[i]))
-                    {
-                        k = EnchantRules.MaterialCheckOrder[i];
-                        found = true;
-                        break;
-                    }
+                    if (!state.blade.layers.Has(EnchantRules.MaterialCheckOrder[i])) continue;
+                    if (startup != null && startup.Protects(EnchantRules.MaterialCheckOrder[i])) continue;
+                    k = EnchantRules.MaterialCheckOrder[i];
+                    found = true;
+                    break;
                 }
             }
 
             if (!found)
             {
-                Log(r, "　· 启动消耗附魔：热/冷/酸都没有层数，没有可消耗的");
+                bool protectedSome = false;
+                for (int i = 0; i < EnchantRules.MaterialCheckOrder.Length; i++)
+                    if (state.blade.layers.Has(EnchantRules.MaterialCheckOrder[i]) &&
+                        startup != null && startup.Protects(EnchantRules.MaterialCheckOrder[i])) { protectedSome = true; break; }
+
+                if (protectedSome)
+                    Log(r, "　· 启动消耗附魔：有层数的那几类被卡面「不消耗X层数」豁免了 → 本次不消耗（卡面优先于规则表 F）");
+                else
+                    Log(r, "　· 启动消耗附魔：热/冷/酸都没有层数，没有可消耗的");
                 return;
             }
 
