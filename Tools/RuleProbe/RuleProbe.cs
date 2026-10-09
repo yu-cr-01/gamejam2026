@@ -89,6 +89,22 @@ namespace GameJam.Tools
                 Scenario12_SaveLoad(cards);
                 Scenario13_LastStartByActionPoints(cards);
                 Scenario14_DeferredSacrificeAndBlankCard(cards);
+
+                Console.WriteLine();
+                Console.WriteLine("=== v3.0 新增卡牌（相对 v2.1 卡表，逐卡对定稿）===");
+                V30_GeneralAndSpecial(cards);
+                V30_Water(cards);
+                V30_Wood(cards);
+                V30_Leather(cards);
+                V30_Copper(cards);
+                V30_Iron(cards);
+                V30_Gold(cards);
+                V30_Salt(cards);
+                V30_Mercury(cards);
+                V30_Sulfur(cards);
+                V30_Sand(cards);
+                V30_Spells(cards);
+                V30_Behavior(cards);
                 Report_NoSilentLoss(cards);
 
                 Console.WriteLine();
@@ -1796,6 +1812,517 @@ namespace GameJam.Tools
         }
 
         // ══════════════════════════════════════════════════════════════
+        //  五、v3.0 新增卡牌（相对 v2.1 卡表）
+        //
+        //  【这一节验什么，和上面四节的分工】
+        //    上面四节验的是**规则**（层数语义 / 中文解析 / 附魔规则表 / 启动流程）。
+        //    这一节验的是**卡表数据本身**：v3.0 定稿（2026-10-08，docs/卡牌数值定稿_v3.0.md）
+        //    相对 v2.1 新增/改写的那些卡，每一张的
+        //        标签 / 形态转换 / H·D·V / 启动 / 献祭 / D耗尽产物
+        //    都要和定稿逐条对得上；再对每张卡跑一遍附魔规则表（可熔+热 / 易燃+热 /
+        //    遇冷+冷 / 遇酸+酸 …），把"规则命中哪一条、产物是什么"钉住。
+        //
+        //  【为什么这里的 H/D/V 写死、不像别处那样用 ProbeValues】
+        //    ProbeValues 的口径是"算规则的期望值"——卡表改了数，规则断言不该跟着红；
+        //    这一节反过来：它就是**定稿↔卡表的转写保真检查**，所以数字照定稿写死，
+        //    卡表一旦偏离定稿，这里就应该红（并提示回去核对定稿）。
+        //
+        //  【文档没给数值的地方】
+        //    v3.0 给每张素材都写了 H/D/V（5/10/20 三档），唯独**法术不标 H/D/V、只标稀有度**；
+        //    个别效果里的"每层多少分"（酸爆）也没数。这类一律按夹具/占位值口径处理，
+        //    注释里写明「文档未给数值，用夹具值」。
+        // ══════════════════════════════════════════════════════════════
+
+        /// <summary>标签串（规则引擎就按这串匹配——断言它 = 断言这张卡的标签没被改过）。</summary>
+        private static string TagText(JsonCards cards, string name)
+        {
+            Ingredient m = cards.Material(name);
+            if (m == null || m.tags == null) return "";
+            return string.Join("/", m.tags);
+        }
+
+        /// <summary>形态转换整段（"易燃 + 热 → 火焰；遇冷 + 冷 → 冰"）；触发为空时只留结果（"无"）。</summary>
+        private static string TransitionText(JsonCards cards, string name)
+        {
+            Ingredient m = cards.Material(name);
+            if (m == null || m.transitions == null || m.transitions.Length == 0) return "";
+            List<string> parts = new List<string>();
+            for (int i = 0; i < m.transitions.Length; i++)
+            {
+                FormChange f = m.transitions[i];
+                if (f == null) continue;
+                parts.Add(string.IsNullOrEmpty(f.trigger) ? f.result : f.trigger + " → " + f.result);
+            }
+            return string.Join("；", parts);
+        }
+
+        /// <summary>D 耗尽产物串（"水/空白卡"）。</summary>
+        private static string ExhaustText(JsonCards cards, string name)
+        {
+            Ingredient m = cards.Material(name);
+            if (m == null || m.exhaust == null) return "";
+            return string.Join("/", m.exhaust);
+        }
+
+        /// <summary>H·D·V 一行（"H20 D2 V2"）—— 从卡表读，再和定稿数字比。</summary>
+        private static string HdvText(JsonCards cards, string name)
+        {
+            CardValues cv = ProbeValues(cards, name);
+            return "H" + cv.H + " D" + cv.D + " V" + cv.V;
+        }
+
+        /// <summary>把一张素材按 v3.0 定稿逐项对照（期望值全部照定稿写死；"无"就写"无"、没内容就写空串）。</summary>
+        private static void CardV30(JsonCards cards, string name,
+                                    string tags, string transitions, string hdv,
+                                    string startup, string sacrifice, string exhaust)
+        {
+            Check("v3.0·" + name + "：标签", tags, TagText(cards, name));
+            Check("v3.0·" + name + "：形态转换", transitions, TransitionText(cards, name));
+            Check("v3.0·" + name + "：H/D/V（定稿转写）", hdv, HdvText(cards, name));
+            Check("v3.0·" + name + "：启动", startup, StartupText(cards, name));
+            Check("v3.0·" + name + "：献祭", sacrifice, SacrificeText(cards, name));
+            Check("v3.0·" + name + "：D耗尽产物", exhaust, ExhaustText(cards, name));
+        }
+
+        private static string StartupText(JsonCards cards, string name)
+        {
+            Ingredient m = cards.Material(name);
+            return m != null ? m.startup : "";
+        }
+
+        private static string SacrificeText(JsonCards cards, string name)
+        {
+            Ingredient m = cards.Material(name);
+            return m != null ? m.sacrifice : "";
+        }
+
+        /// <summary>
+        /// 一张法术按 v3.0 定稿对照：附魔类型 / 分类 / 稀有度 / 需求原文。
+        /// ★ 法术**没有 H/D/V**（定稿「法术卡不标 H/D/V，只标稀有度」），所以这里不查数值
+        ///   —— 这正是"文档未给数值"的那一类，稀有度就是它唯一的数值口径。
+        /// </summary>
+        private static void SpellV30(JsonCards cards, string name,
+                                     string enchant, string category, string rarity, string requirement)
+        {
+            SpellSpec s = cards.Spell(name);
+            Check("v3.0·" + name + "（法术）：附魔类型", enchant, s.enchant);
+            Check("v3.0·" + name + "（法术）：分类", category, s.category);
+            Check("v3.0·" + name + "（法术）：稀有度（法术不标 H/D/V）", rarity, s.rarity);
+            Check("v3.0·" + name + "（法术）：需求原文", requirement, s.requirement);
+        }
+
+        /// <summary>探针用的带层数刀片（给"附魔规则表逐卡命中"用）。</summary>
+        private static BladeState LayerBlade(LayerKind kind, int n)
+        {
+            BladeState b = new BladeState("probe", "刀片", 10, 0);
+            b.layers.Add(kind, n);
+            return b;
+        }
+
+        // ── 一、通用与特殊 ────────────────────────────────────────────
+
+        private static void V30_GeneralAndSpecial(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 外星合金：形态转换 无（不响应热/冷/酸）；D耗尽 空白卡；启动 额外消耗其他素材H。
+            CardV30(cards, "外星合金", "固体/献祭", "无", "H20 D2 V2",
+                    "额外消耗其他素材 H 1 点", "", "空白卡");
+
+            // 白磷：易燃+热 → 火焰（D立即归零）；D耗尽 火焰；献祭 附带不衰退的热。
+            CardV30(cards, "白磷", "固体/易燃/遇热/献祭", "易燃 + 热 → 火焰（D立即归零）", "H10 D1 V2",
+                    "", "刀片附带一层不衰退的热", "火焰");
+
+            ScenarioEnd("v3.0·通用与特殊（外星合金 / 白磷）", mark,
+                "外星合金 不响应热冷酸、H20 D2 V2；白磷 易燃+热→火焰、H10 D1 V2");
+        }
+
+        // ── 二、水系列 ────────────────────────────────────────────────
+
+        private static void V30_Water(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 水：遇热+热→水蒸气；遇冷+冷→冰；D耗尽 空白卡；启动扩写（含失效的"不消耗刀片H"）。
+            CardV30(cards, "水", "液体/遇热/遇冷/献祭", "遇热 + 热 → 水蒸气；遇冷 + 冷 → 冰", "H5 D3 V2",
+                    "不消耗刀片H；消耗刀片所有热层数，额外产生一张水蒸气；消耗所有冷层数，额外产生一张冰；消耗所有酸层数，额外产生一张空白卡",
+                    "刀片附带一层不衰退的冷", "空白卡");
+
+            // 冰：可熔+热→水；D耗尽 水 + 空白卡（**两张**，v3.0 改写点之一）；启动 冷≥3 产冰霜。
+            CardV30(cards, "冰", "固体/可熔/遇热/献祭", "可熔 + 热 → 水", "H5 D3 V2",
+                    "若刀片冷层数≥3，则本次启动额外产生一张冰霜法术进手牌",
+                    "刀片附带一层不衰退的冷", "水/空白卡");
+
+            // 水蒸气：遇冷+冷→水；启动 有热/冷附魔则得分翻倍。
+            CardV30(cards, "水蒸气", "气体/遇冷/献祭", "遇冷 + 冷 → 水", "H5 D2 V2",
+                    "若刀片有热附魔，则不消耗热层数，且本次启动得分翻倍；若刀片有冷附魔，则不消耗冷层数，且本次启动得分翻倍",
+                    "刀片附带一层不衰退的冷", "空白卡");
+
+            ScenarioEnd("v3.0·水系列（水 / 冰 / 水蒸气）", mark,
+                "水 遇热→水蒸气 遇冷→冰、H5 D3 V2；冰 D耗尽 水+空白卡；水蒸气 遇冷→水、H5 D2 V2");
+        }
+
+        // ── 三、木头系列 ──────────────────────────────────────────────
+
+        private static void V30_Wood(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 木头：易燃+热 → 火焰、碳（**双产物**）；启动 无；献祭 是"遇到水时"的写法（解析器认不出，见缺口报告）。
+            CardV30(cards, "木头", "固体/易燃/遇热/献祭", "易燃 + 热 → 火焰、碳", "H5 D3 V2",
+                    "", "若桌面上的卡牌为水，启动时，刀片V+1", "空白卡");
+
+            // 碳：易燃+热→余温；D耗尽 火焰 + 余温；启动 热≥3 产火焰；献祭 一次性 6 层热。
+            CardV30(cards, "碳", "固体/易燃/遇热/献祭", "易燃 + 热 → 余温", "H10 D2 V3",
+                    "若刀片热层数≥3，则本次启动产生一张火焰法术进手牌",
+                    "一次性获得6层热", "火焰/余温");
+
+            ScenarioEnd("v3.0·木头系列（木头 / 碳）", mark,
+                "木头 易燃+热→火焰、碳、H5 D3 V2；碳 易燃+热→余温、D耗尽 火焰+余温、H10 D2 V3");
+        }
+
+        // ── 四、皮革系列 ──────────────────────────────────────────────
+
+        private static void V30_Leather(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 皮革：定稿明确「无献祭」；易燃+热 / 遇酸+酸 都 → 空白卡；D耗尽 法术卷轴。
+            CardV30(cards, "皮革", "固体/易燃/遇热/遇酸", "易燃 + 热 → 空白卡；遇酸 + 酸 → 空白卡", "H5 D3 V2",
+                    "若刀片有热/酸附魔，则本次启动得分为0，但产生一张法术卷轴进手牌",
+                    "", "法术卷轴");
+
+            // 法术卷轴：易燃+热 / 遇酸+酸 都 → 灰烬（灰烬不在 32 张卡表里，见"可疑产出"）；
+            //           D耗尽 变为随机法术卡；献祭 是"指定手牌法术卡复制2张"（要选牌 → 缺口报告）。
+            CardV30(cards, "法术卷轴", "固体/易燃/遇热/遇酸/献祭", "易燃 + 热 → 灰烬；遇酸 + 酸 → 灰烬", "H10 D2 V2",
+                    "", "指定手牌中的1张法术卡，复制2张", "变为一张随机法术卡");
+
+            ScenarioEnd("v3.0·皮革系列（皮革 / 法术卷轴）", mark,
+                "皮革 无献祭、易燃/遇酸→空白卡；法术卷轴 易燃/遇酸→灰烬、D耗尽 随机法术");
+        }
+
+        // ── 五、铜系列 ────────────────────────────────────────────────
+
+        private static void V30_Copper(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 铜：可熔+热→熔融铜；遇酸+酸→铜溶液；献祭 被动"其他素材D-2"。
+            CardV30(cards, "铜", "固体/金属/可熔/遇热/遇酸/献祭", "可熔 + 热 → 熔融铜；遇酸 + 酸 → 铜溶液", "H10 D2 V3",
+                    "若刀片酸层数≥3，则本次启动额外消耗1点刀片H，但得分翻倍",
+                    "刀片每次启动，其他素材D-2", "空白卡");
+
+            // 熔融铜：遇冷+冷→铜；遇酸+酸→铜溶液；启动 酸≥3 产酸蚀。
+            CardV30(cards, "熔融铜", "液体/金属/遇冷/遇酸/献祭", "遇冷 + 冷 → 铜；遇酸 + 酸 → 铜溶液", "H10 D2 V3",
+                    "若刀片酸层数≥3，则本次启动额外产生一张酸蚀法术进手牌",
+                    "刀片附带一层不衰退的热", "空白卡");
+
+            // 铜溶液：遇冷+冷→铜；液体+热→铜蒸气；D耗尽 酸蚀+空白卡。
+            CardV30(cards, "铜溶液", "液体/金属/遇冷/献祭", "遇冷 + 冷 → 铜；液体 + 热 → 铜蒸气", "H5 D3 V2",
+                    "不消耗刀片H；若刀片有酸，则本次启动得分翻倍",
+                    "刀片附带一层不衰退的酸", "酸蚀/空白卡");
+
+            // 铜蒸气：遇冷+冷→铜溶液；D耗尽 空白卡+酸爆；献祭 产 1 张酸爆。
+            CardV30(cards, "铜蒸气", "气体/金属/遇冷/献祭", "遇冷 + 冷 → 铜溶液", "H10 D2 V3",
+                    "", "产生1张酸爆", "空白卡/酸爆");
+
+            // 行为：铜 + 酸1 → 酸规则1（金属→溶液），H-2，产物 铜溶液。
+            EnchantMatch mCu = MatchCase(cards, LayerBlade(LayerKind.Acid, 1), cards.Material("铜"), "铜", LayerKind.Acid);
+            Check("v3.0·铜：酸1 → 金属→溶液（优先级1）", 1, mCu.priority);
+            Check("v3.0·铜：金属被酸蚀 H-2", 2, mCu.targetHDamage);
+            Check("v3.0·铜：产物 铜溶液", "铜溶液", mCu.productName);
+
+            // 行为：铜蒸气 + 冷2 → 冷规则1（气体→液态），产物 铜溶液。
+            EnchantMatch mCv = MatchCase(cards, LayerBlade(LayerKind.Cold, 2), cards.Material("铜蒸气"), "铜蒸气", LayerKind.Cold);
+            Check("v3.0·铜蒸气：冷2 → 气体→液态（优先级1）", 1, mCv.priority);
+            Check("v3.0·铜蒸气：产物 铜溶液", "铜溶液", mCv.productName);
+
+            // 行为：铜溶液 + 冷2 → 冷规则3（溶液析出，目标保留）。
+            EnchantMatch mCs = MatchCase(cards, LayerBlade(LayerKind.Cold, 2), cards.Material("铜溶液"), "铜溶液", LayerKind.Cold);
+            CheckOutcome("v3.0·铜溶液：冷2 → 析出（副产物，目标保留）", EnchantOutcome.ByProduct, mCs.outcome);
+            Check("v3.0·铜溶液：析出 铜", "铜", mCs.productName);
+
+            // ★ 缺口：铜带「遇热」标签，热2 就被热规则4（遇热反应）抢先，而卡表只写了「可熔 + 热」
+            //   的产物 → 报 productMissing（这是 22 条规则表缺口里的一条，不是静默不变）。
+            EnchantMatch mCuHeat = MatchCase(cards, LayerBlade(LayerKind.Heat, 2), cards.Material("铜"), "铜", LayerKind.Heat);
+            Check("v3.0·铜：热2 被「热规则4 遇热」抢先（可熔+热走不到，优先级4）", 4, mCuHeat.priority);
+            Check("v3.0·铜：因此缺「遇热 + 热」产物（productMissing，见缺口报告）", true, mCuHeat.productMissing);
+
+            ScenarioEnd("v3.0·铜系列（铜 / 熔融铜 / 铜溶液 / 铜蒸气）", mark,
+                "铜 酸1→铜溶液(H-2)、熔融铜 遇冷→铜、铜溶液 溶出铜、铜蒸气 冷2→铜溶液");
+        }
+
+        // ── 六、铁系列 ────────────────────────────────────────────────
+
+        private static void V30_Iron(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 铁：可熔+热→熔融铁；遇酸+酸→铁溶液；献祭 被动"其他素材D-3"。
+            CardV30(cards, "铁", "固体/金属/可熔/遇热/遇酸/献祭", "可熔 + 热 → 熔融铁；遇酸 + 酸 → 铁溶液", "H10 D2 V3",
+                    "若刀片热层数≥3，则本次启动额外消耗1点刀片H，但得分翻倍",
+                    "刀片每次启动，其他素材D-3", "空白卡");
+
+            // 熔融铁：遇冷+冷→铁；遇酸+酸→铁溶液；启动 是一长串（含"每消耗一层获得5分"）。
+            CardV30(cards, "熔融铁", "液体/金属/遇冷/遇酸/献祭", "遇冷 + 冷 → 铁；遇酸 + 酸 → 铁溶液", "H10 D2 V3",
+                    "若刀片热层数≥3，则本次启动额外产生一张火焰法术进手牌；若刀片有冷层数，消耗所有冷层数、以及和冷层数相当的H，每消耗一层获得5分；不消耗刀片H，且刀片H+1",
+                    "刀片附带一层不衰退的热", "空白卡");
+
+            // 铁溶液：遇冷+冷→铁；液体+热→铁蒸气、酸蚀（**双产物**）；D耗尽 酸蚀+空白卡。
+            CardV30(cards, "铁溶液", "液体/金属/遇冷/献祭", "遇冷 + 冷 → 铁；液体 + 热 → 铁蒸气、酸蚀", "H5 D3 V2",
+                    "不消耗刀片H", "刀片附带一层不衰退的冷", "酸蚀/空白卡");
+
+            // 铁蒸气：遇冷+冷→铁溶液；**V8 是全文最高分（极高档）**。
+            CardV30(cards, "铁蒸气", "气体/金属/遇冷/献祭", "遇冷 + 冷 → 铁溶液", "H10 D2 V8",
+                    "", "刀片附带一层不衰退的热", "空白卡");
+
+            // 行为：铁 + 酸1 → 酸规则1，产物 铁溶液。
+            EnchantMatch mFe = MatchCase(cards, LayerBlade(LayerKind.Acid, 1), cards.Material("铁"), "铁", LayerKind.Acid);
+            Check("v3.0·铁：酸1 → 金属→溶液，产物 铁溶液", "铁溶液", mFe.productName);
+
+            // 行为：铁蒸气 + 冷2 → 气体→液态，产物 铁溶液。
+            Check("v3.0·铁蒸气：冷2 → 铁溶液",
+                  "铁溶液", MatchCase(cards, LayerBlade(LayerKind.Cold, 2), cards.Material("铁蒸气"), "铁蒸气", LayerKind.Cold).productName);
+
+            ScenarioEnd("v3.0·铁系列（铁 / 熔融铁 / 铁溶液 / 铁蒸气）", mark,
+                "铁 酸1→铁溶液、熔融铁 长启动串、铁溶液 双产物、铁蒸气 V8（全文最高）");
+        }
+
+        // ── 七、黄金系列 ──────────────────────────────────────────────
+
+        private static void V30_Gold(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 黄金：可熔+热→熔融金；D耗尽 催化术+空白卡；献祭 一次性 30 分 + 3 张催化术；H20（传说档）。
+            CardV30(cards, "黄金", "固体/金属/可熔/献祭", "可熔 + 热 → 熔融金", "H20 D2 V5",
+                    "", "一次性获得30分，获得3张催化术", "催化术/空白卡");
+
+            // 熔融金：遇冷+冷→黄金；D耗尽 催化术+空白卡；启动 不消耗H（失效写法）；献祭 减5H加10V。
+            CardV30(cards, "熔融金", "液体/金属/遇冷/献祭", "遇冷 + 冷 → 黄金", "H20 D2 V8",
+                    "刀片不消耗H", "刀片减少5H，额外增加10V", "催化术/空白卡");
+
+            // 行为：黄金**不带「遇热」标签**，所以热3 能走到热规则5（金属→熔融），产物 熔融金。
+            //   （对比：铜/铁/冰/沙/固态汞带遇热，热2 就被规则4截胡 → 见缺口报告。）
+            EnchantMatch mAu = MatchCase(cards, LayerBlade(LayerKind.Heat, 3), cards.Material("黄金"), "黄金", LayerKind.Heat);
+            Check("v3.0·黄金：热3 → 金属→熔融（优先级5）", 5, mAu.priority);
+            Check("v3.0·黄金：产物 熔融金", "熔融金", mAu.productName);
+
+            // 行为：黄金 + 酸1 → 酸规则1（金属）会命中，但定稿删了「遇酸 + 酸」那一行 → 缺产物、只扣 H-2。
+            EnchantMatch mAuAcid = MatchCase(cards, LayerBlade(LayerKind.Acid, 1), cards.Material("黄金"), "黄金", LayerKind.Acid);
+            Check("v3.0·黄金：酸1 → 金属→溶液（优先级1，H-2）", 1, mAuAcid.priority);
+            Check("v3.0·黄金：缺「遇酸 + 酸」产物（定稿只留了可熔+热，见规则表缺口）", true, mAuAcid.productMissing);
+
+            ScenarioEnd("v3.0·黄金系列（黄金 / 熔融金）", mark,
+                "黄金 热3→熔融金(H20 D2 V5)、献祭 30分+3催化术；熔融金 遇冷→黄金、H20 D2 V8");
+        }
+
+        // ── 八、盐系列 ────────────────────────────────────────────────
+
+        private static void V30_Salt(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 盐：可溶+酸→盐溶液；D耗尽 结晶+空白卡；启动 层数翻倍；献祭 1 层不衰退催化。
+            CardV30(cards, "盐", "固体/可溶/遇酸/献祭", "可溶 + 酸 → 盐溶液", "H10 D2 V2",
+                    "若有冷/热/酸，层数翻倍", "获得1层不衰退的催化", "结晶/空白卡");
+
+            // 盐溶液：遇冷+冷→盐；遇热+热→水蒸气；启动 每 1 层冷/热/酸 +1 分。
+            CardV30(cards, "盐溶液", "液体/遇冷/遇热/献祭", "遇冷 + 冷 → 盐；遇热 + 热 → 水蒸气", "H5 D3 V2",
+                    "不消耗H，同时每有1层冷/热/酸，获得1分", "获得1层不衰退的催化", "结晶/空白卡");
+
+            // 行为：盐 + 酸1 → 酸规则2（可溶→溶液），产物 盐溶液。
+            EnchantMatch mSalt = MatchCase(cards, LayerBlade(LayerKind.Acid, 1), cards.Material("盐"), "盐", LayerKind.Acid);
+            Check("v3.0·盐：可溶+酸 → 盐溶液（优先级2）", 2, mSalt.priority);
+            Check("v3.0·盐：产物 盐溶液", "盐溶液", mSalt.productName);
+
+            ScenarioEnd("v3.0·盐系列（盐 / 盐溶液）", mark,
+                "盐 可溶+酸→盐溶液、H10 D2 V2；盐溶液 遇冷→盐 遇热→水蒸气、H5 D3 V2");
+        }
+
+        // ── 九、汞系列 ────────────────────────────────────────────────
+
+        private static void V30_Mercury(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 汞：液体+热→汞蒸气；遇冷+冷→固态汞；启动 不消耗H 且 H+1。
+            CardV30(cards, "汞", "液体/金属/遇热/遇冷/献祭", "液体 + 热 → 汞蒸气；遇冷 + 冷 → 固态汞", "H10 D2 V3",
+                    "不消耗刀片H，同时刀片额外获得1H", "刀片附带1层不衰退的冷", "空白卡");
+
+            // 汞蒸气：遇冷+冷→汞；启动 消耗所有热层、每层 2 分（v3.0 把 v2.1 的"一定分数"写实成 2）。
+            CardV30(cards, "汞蒸气", "气体/金属/遇冷/献祭", "遇冷 + 冷 → 汞", "H10 D2 V3",
+                    "若刀片有热附魔，则本次启动消耗刀片所有热层数，每消耗一层获得2分",
+                    "刀片附带一层不衰退的冷", "空白卡");
+
+            // 固态汞：可熔+热→汞；献祭 是"受击时减伤"的反应式写法（引擎没有该触发点 → 缺口报告）。
+            CardV30(cards, "固态汞", "固体/金属/可熔/遇热/献祭", "可熔 + 热 → 汞", "H10 D2 V3",
+                    "", "刀片每次受到大于等于2点H的损伤时，减少1点", "空白卡");
+
+            // 行为：汞蒸气 + 冷2 → 气体→液态，产物 汞。
+            Check("v3.0·汞蒸气：冷2 → 汞",
+                  "汞", MatchCase(cards, LayerBlade(LayerKind.Cold, 2), cards.Material("汞蒸气"), "汞蒸气", LayerKind.Cold).productName);
+
+            ScenarioEnd("v3.0·汞系列（汞 / 汞蒸气 / 固态汞）", mark,
+                "汞 液体+热→汞蒸气、遇冷→固态汞；汞蒸气 冷2→汞、每层2分；固态汞 反应式献祭（缺口）");
+        }
+
+        // ── 十、硫系列 ────────────────────────────────────────────────
+
+        private static void V30_Sulfur(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 硫磺：易燃+热→硫磺气；D耗尽 火焰+硫磺气；启动 热≥2 产酸蚀。
+            CardV30(cards, "硫磺", "固体/易燃/可熔/遇热/献祭", "易燃 + 热 → 硫磺气", "H5 D3 V3",
+                    "若刀片热层数≥2，则本次启动产生一张酸蚀法术进手牌",
+                    "刀片附带一层不衰退的热", "火焰/硫磺气");
+
+            // 硫磺气：遇冷+冷→硫磺液；D耗尽 酸蚀；启动 有冷附魔产酸蚀。
+            CardV30(cards, "硫磺气", "气体/遇冷/献祭", "遇冷 + 冷 → 硫磺液", "H5 D2 V3",
+                    "若刀片有冷附魔，则本次启动产生一张酸蚀法术进手牌",
+                    "刀片附带一层不衰退的酸", "酸蚀");
+
+            // 硫磺液：遇冷+冷→硫磺粉；液体+热→硫磺气；D耗尽 酸蚀+硫磺粉。
+            CardV30(cards, "硫磺液", "液体/可溶/遇冷/献祭", "遇冷 + 冷 → 硫磺粉；液体 + 热 → 硫磺气", "H5 D2 V2",
+                    "使刀片额外消耗2H", "刀片附带一层不衰退的酸", "酸蚀/硫磺粉");
+
+            // 硫磺粉：形态转换 无；D耗尽 空白卡；启动 无；献祭 刀片H+10 且附带不衰退的酸。
+            CardV30(cards, "硫磺粉", "粉末/献祭", "无", "H10 D1 V1",
+                    "", "刀片H增加10；附带1层不衰退的酸", "空白卡");
+
+            // 行为：硫磺（易燃）热1 → 燃烧（优先级1，抢在"可熔"之前），产物 硫磺气。
+            EnchantMatch mS = MatchCase(cards, LayerBlade(LayerKind.Heat, 1), cards.Material("硫磺"), "硫磺", LayerKind.Heat);
+            Check("v3.0·硫磺：易燃+热 → 燃烧（优先级1）", 1, mS.priority);
+            Check("v3.0·硫磺：产物 硫磺气", "硫磺气", mS.productName);
+
+            // 行为：硫磺气 + 冷2 → 气体→液态，产物 硫磺液。
+            Check("v3.0·硫磺气：冷2 → 硫磺液",
+                  "硫磺液", MatchCase(cards, LayerBlade(LayerKind.Cold, 2), cards.Material("硫磺气"), "硫磺气", LayerKind.Cold).productName);
+
+            // 行为：硫磺粉（粉末）+ 酸1 → 溶解移除（优先级4）。
+            CheckOutcome("v3.0·硫磺粉：酸1 → 溶解移除（优先级4）", EnchantOutcome.Dissolve,
+                  MatchCase(cards, LayerBlade(LayerKind.Acid, 1), cards.Material("硫磺粉"), "硫磺粉", LayerKind.Acid).outcome);
+
+            ScenarioEnd("v3.0·硫系列（硫磺 / 硫磺气 / 硫磺液 / 硫磺粉）", mark,
+                "硫磺 易燃+热→硫磺气；硫磺气 冷2→硫磺液；硫磺液 双产物；硫磺粉 溶解移除");
+        }
+
+        // ── 十一、沙系列 ──────────────────────────────────────────────
+
+        private static void V30_Sand(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 沙：定稿明确「无献祭」；可熔+热→熔融玻璃。
+            CardV30(cards, "沙", "固体/可熔/遇热", "可熔 + 热 → 熔融玻璃", "H5 D3 V2",
+                    "", "", "空白卡");
+
+            // 熔融玻璃：遇冷+冷→玻璃；启动 每 1 层冷 +2 分；献祭 是"每次获得冷层数时翻倍"（反应式 → 缺口）。
+            CardV30(cards, "熔融玻璃", "液体/遇冷/献祭", "遇冷 + 冷 → 玻璃", "H10 D2 V3",
+                    "不消耗H，每有1层冷层数，获得2分", "每次获得冷层数时，翻倍", "空白卡");
+
+            // 玻璃：形态转换 无；启动 无；献祭 是"每次消耗H时 +1 分"（反应式 → 缺口）；H5 D1 V1。
+            CardV30(cards, "玻璃", "固体/献祭", "无", "H5 D1 V1",
+                    "", "每次消耗H时，获得1分", "空白卡");
+
+            // 行为：熔融玻璃带「遇冷」标签，冷2 走冷规则4（遇冷反应），产物 玻璃。
+            EnchantMatch mMg2 = MatchCase(cards, LayerBlade(LayerKind.Cold, 2), cards.Material("熔融玻璃"), "熔融玻璃", LayerKind.Cold);
+            Check("v3.0·熔融玻璃：冷2 → 冷反应（优先级4）", 4, mMg2.priority);
+            Check("v3.0·熔融玻璃：产物 玻璃", "玻璃", mMg2.productName);
+            // 冷3 → 冷规则2（液体→固态）先命中，产物同样是 玻璃。
+            EnchantMatch mMg3 = MatchCase(cards, LayerBlade(LayerKind.Cold, 3), cards.Material("熔融玻璃"), "熔融玻璃", LayerKind.Cold);
+            Check("v3.0·熔融玻璃：冷3 → 液体→固态（优先级2）", 2, mMg3.priority);
+            Check("v3.0·熔融玻璃：产物 玻璃", "玻璃", mMg3.productName);
+
+            // 行为：玻璃对热完全无反应（定稿「形态转换 无」）。
+            EnchantMatch mGlass = MatchCase(cards, LayerBlade(LayerKind.Heat, 3), cards.Material("玻璃"), "玻璃", LayerKind.Heat);
+            Check("v3.0·玻璃：热3 不命中任何热规则", false, mGlass.triggered);
+
+            ScenarioEnd("v3.0·沙系列（沙 / 熔融玻璃 / 玻璃）", mark,
+                "沙 可熔+热→熔融玻璃；熔融玻璃 冷2（遇冷反应）/冷3（液体→固态）都→玻璃；玻璃 对热无反应");
+        }
+
+        // ── 十二、法术（不标 H/D/V，只标稀有度）──────────────────────
+
+        private static void V30_Spells(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 火焰：v3.0 改为附魔 2 层热（v2.1 是 1 层）。
+            SpellV30(cards, "火焰", "热", "", "普通", "附魔2层热到刀片，可叠加。每回合结束衰减");
+            // 余温：v3.0 新增法术，火焰的强化卡。
+            SpellV30(cards, "余温", "热", "", "稀有", "所有“火焰”法术，附加“热”的层数+1");
+            // 冰霜：v3.0 改为附魔 2 层冷（v2.1 是 1 层），并使刀片 H+1。
+            SpellV30(cards, "冰霜", "冷", "", "普通", "附魔2层冷到刀片，可叠加。使刀片H+1");
+            // 酸蚀：v3.0 新增法术（铁溶液/铜蒸气等会产出它）。
+            SpellV30(cards, "酸蚀", "酸", "", "普通", "附魔2层酸到刀片，可叠加。每回合结束衰减");
+            // 酸爆：无附魔类型；★ 文档未给"每层多少分"的数值 → 按占位值（见下一条断言）。
+            SpellV30(cards, "酸爆", "", "", "传说",
+                     "使当前所有酸层数翻倍，减少刀片等同于当前酸层数的H，同时获得等同于当前酸层数的分数。如果通过此卡达成爆刀，爆刀产生的分数翻倍变为3倍");
+            // 催化术：v3.0 新增法术；"最多降低2点"是 v3.0 新写死的上限。
+            SpellV30(cards, "催化术", "催化", "", "稀有", "附魔1层催化到刀片，可叠加。每层催化降低热/冷/酸附魔触发阈值1点，最多降低2点");
+            // 结晶：分类 直接得分；每层冷 2 分。
+            SpellV30(cards, "结晶", "", "直接得分", "普通", "根据当前刀片冷层数直接加分，每层冷得2分");
+            // 硬化：刀片 H+10（和 v2.1 一致，v3.0 补了稀有度）。
+            SpellV30(cards, "硬化", "", "", "普通", "刀片H+10");
+
+            // 文档未给数值，用夹具值：酸爆"每层多少分"没写数。
+            //   正文（定稿 §十二 酸爆）只写"获得等同于当前酸层数的分数"，没给每层分值；
+            //   规则解析报告里它也是唯一的「占位数值」（按 TurnRules.ScorePerLayerDefault）。
+            //   这里断言这个占位口径没有变 —— 一旦策划补了数值，这条会提醒回改。
+            Check("v3.0·酸爆：每层分值文档未给数值，用夹具/占位值（ScorePerLayerDefault=1）",
+                  true, ProbeRules().ScorePerLayerDefault == 1);
+
+            ScenarioEnd("v3.0·法术（8 张，只标稀有度）", mark,
+                "火焰/余温 热、冰霜 冷、酸蚀 酸、催化术 催化、酸爆 无附魔（传说）、结晶 直接得分、硬化 H+10");
+        }
+
+        // ── 行为：附魔规则表逐卡命中（把上面的"数据"落到"规则怎么触发"上）──
+
+        private static void V30_Behavior(JsonCards cards)
+        {
+            int mark = ScenarioStart();
+
+            // 易燃 + 热 → 燃烧（优先级1）：v3.0 新增的易燃卡都走这条，产物各按卡表。
+            EnchantMatch mWP = MatchCase(cards, LayerBlade(LayerKind.Heat, 1), cards.Material("白磷"), "白磷", LayerKind.Heat);
+            Check("v3.0 行为·白磷：热1 → 燃烧（优先级1）", 1, mWP.priority);
+            Check("v3.0 行为·白磷：产物 火焰", "火焰", mWP.productName);
+
+            EnchantMatch mWood = MatchCase(cards, LayerBlade(LayerKind.Heat, 1), cards.Material("木头"), "木头", LayerKind.Heat);
+            Check("v3.0 行为·木头：易燃+热 → 主产物 火焰", "火焰", mWood.productName);
+            Check("v3.0 行为·木头：碳是额外产物", "碳", string.Join("/", mWood.extraProducts));
+
+            Check("v3.0 行为·碳：易燃+热 → 余温",
+                  "余温", MatchCase(cards, LayerBlade(LayerKind.Heat, 1), cards.Material("碳"), "碳", LayerKind.Heat).productName);
+            Check("v3.0 行为·皮革：易燃+热 → 空白卡",
+                  "空白卡", MatchCase(cards, LayerBlade(LayerKind.Heat, 1), cards.Material("皮革"), "皮革", LayerKind.Heat).productName);
+            Check("v3.0 行为·法术卷轴：易燃+热 → 灰烬（灰烬不在卡表，见可疑产出）",
+                  "灰烬", MatchCase(cards, LayerBlade(LayerKind.Heat, 1), cards.Material("法术卷轴"), "法术卷轴", LayerKind.Heat).productName);
+
+            // 遇酸 + 酸：金属走酸规则1、可溶走酸规则2。
+            Check("v3.0 行为·铜：酸1 → 铜溶液",
+                  "铜溶液", MatchCase(cards, LayerBlade(LayerKind.Acid, 1), cards.Material("铜"), "铜", LayerKind.Acid).productName);
+            Check("v3.0 行为·盐：酸1 → 盐溶液",
+                  "盐溶液", MatchCase(cards, LayerBlade(LayerKind.Acid, 1), cards.Material("盐"), "盐", LayerKind.Acid).productName);
+
+            // 遇冷 + 冷：气体走冷规则1、液体走冷规则2/4。
+            Check("v3.0 行为·水蒸气：冷2 → 水",
+                  "水", MatchCase(cards, LayerBlade(LayerKind.Cold, 2), cards.Material("水蒸气"), "水蒸气", LayerKind.Cold).productName);
+            Check("v3.0 行为·水：冷3 → 冰",
+                  "冰", MatchCase(cards, LayerBlade(LayerKind.Cold, 3), cards.Material("水"), "水", LayerKind.Cold).productName);
+
+            // ★ 可熔 + 热 的缺口（22 条里的一条）：带「遇热」标签的可熔卡，热2 被热规则4抢先，
+            //   卡表却没有「遇热 + 热」的产物 → productMissing（不是静默不变）。
+            EnchantMatch mIceHeat = MatchCase(cards, LayerBlade(LayerKind.Heat, 2), cards.Material("冰"), "冰", LayerKind.Heat);
+            Check("v3.0 行为·冰：热2 被「热规则4 遇热」抢先（可熔+热走不到）", 4, mIceHeat.priority);
+            Check("v3.0 行为·冰：因此缺「遇热 + 热」产物（productMissing，见缺口报告）", true, mIceHeat.productMissing);
+
+            ScenarioEnd("v3.0 卡牌·行为（附魔规则表逐卡命中）", mark,
+                "易燃卡→燃烧（白磷火焰/木头火焰+碳/碳余温/皮革空白卡/卷轴灰烬）；金属/可溶→溶液；气体→液态；冰 遇热抢先（缺口）");
+        }
+
+        // ══════════════════════════════════════════════════════════════
         //  报告检查：不许静默失效
         // ══════════════════════════════════════════════════════════════
 
@@ -2151,7 +2678,7 @@ namespace GameJam.Tools
                     if (d == null) continue;
                     c.AddSpell(new SpellSpec(
                         GetStr(d, "id"), GetStr(d, "name"), GetStr(d, "enchant"),
-                        GetStr(d, "category"), GetStr(d, "requirement")));
+                        GetStr(d, "category"), GetStr(d, "requirement"), GetStr(d, "rarity")));
                 }
 
                 return c;
