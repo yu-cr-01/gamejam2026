@@ -163,9 +163,9 @@ namespace GameJam.Prototype
                     if (d == null || string.IsNullOrEmpty(d.id)) continue;
 
                     AttrSet attrs = new AttrSet();
-                    attrs.Set(AttrId.Salt, d.h);
-                    attrs.Set(AttrId.Mercury, d.d);
-                    attrs.Set(AttrId.Sulfur, d.v);
+                    attrs.Set(AttrId.H, d.h);
+                    attrs.Set(AttrId.D, d.d);
+                    attrs.Set(AttrId.V, d.v);
 
                     IngredientCatalog.Register(new Ingredient(d.id, d.name, attrs));
                 }
@@ -304,9 +304,9 @@ namespace GameJam.Prototype
 
                 // 卡面属性区读的是 attrs（沿用旧玩法那套），同步一份 ——
                 // 否则桌上这张卡的属性区显示的是旧配置的 1/9/1，和结算用的 H/D/V 对不上。
-                v21.attrs.Set(AttrId.Salt,    v21.h);
-                v21.attrs.Set(AttrId.Mercury, v21.d);
-                v21.attrs.Set(AttrId.Sulfur,  v21.v);
+                v21.attrs.Set(AttrId.H,    v21.h);
+                v21.attrs.Set(AttrId.D, v21.d);
+                v21.attrs.Set(AttrId.V,  v21.v);
 
                 return v21;
             }

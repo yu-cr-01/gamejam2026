@@ -571,10 +571,10 @@ namespace GameJam.Prototype
         {
             switch (kind)
             {
-                case AttrId.Mercury:
+                case AttrId.D:
                     return Mathf.Abs(new Vector2(px, py).magnitude - r);
 
-                case AttrId.Sulfur:
+                case AttrId.V:
                     return Mathf.Abs(Mathf.Abs(px) + Mathf.Abs(py) - r * 1.25f);
 
                 default:   // Salt
@@ -585,7 +585,7 @@ namespace GameJam.Prototype
         /// <summary>三属性里数值最高的那个 —— 决定印记形状。没有数据时按盐性算。</summary>
         public static AttrId DominantAttr(Ingredient ing)
         {
-            AttrId best = AttrId.Salt;
+            AttrId best = AttrId.H;
             if (ing == null || ing.attrs == null) return best;
 
             int bestValue = int.MinValue;

@@ -25,13 +25,13 @@ namespace GameJam.Data
         public string id;
         public string name;
 
-        /// <summary>H 盐性（固体倾向）</summary>
+        /// <summary>H 硬度</summary>
         public int h;
 
-        /// <summary>D 汞性（液体倾向）</summary>
+        /// <summary>D 耐久</summary>
         public int d;
 
-        /// <summary>V 硫性（气体倾向）</summary>
+        /// <summary>V 计分倾向</summary>
         public int v;
     }
 

@@ -117,9 +117,9 @@ namespace GameJam.Prototype
             GUI.Label(new Rect(panel.x + pad, panel.y + panel.height - 22f,
                                panel.width - pad * 2f, 18f),
                       "杯内 " + sim.particles.Count + " 份食材　｜　"
-                      + "盐性 " + sim.CupAttr(AttrId.Salt)
-                      + "　汞性 " + sim.CupAttr(AttrId.Mercury)
-                      + "　硫性 " + sim.CupAttr(AttrId.Sulfur), hint);
+                      + "H " + sim.CupAttr(AttrId.H)
+                      + "　D " + sim.CupAttr(AttrId.D)
+                      + "　V " + sim.CupAttr(AttrId.V), hint);
         }
 
         // ── 杯子本体 ─────────────────────────────────────────────────

@@ -3658,7 +3658,7 @@ namespace GameJam.EditorTools
                     stageTime = EditorApplication.timeSinceStartup;
                     return;
 
-                // ㊹⑦ 结束回合 → 第 2 回合（行动机会重置 5；附魔层数每回合结束 −1）
+                // ㊹⑦ 结束回合 → 第 2 回合（行动机会重置 5；附魔层数保留）
                 case 447:
                     if (EditorApplication.timeSinceStartup - stageTime < 0.8) return;
                     ProbeSacEndRound();
@@ -8948,9 +8948,9 @@ namespace GameJam.EditorTools
             GameJam.Data.Ingredient ing = card.card != null ? card.card.ingredient : null;
             if (ing == null || ing.attrs == null) return label + "（模块 / 没有三属性）";
 
-            return label + "　H=" + ing.attrs.Get(GameJam.Data.AttrId.Salt)
-                         + " D=" + ing.attrs.Get(GameJam.Data.AttrId.Mercury)
-                         + " V=" + ing.attrs.Get(GameJam.Data.AttrId.Sulfur);
+            return label + "　H=" + ing.attrs.Get(GameJam.Data.AttrId.H)
+                         + " D=" + ing.attrs.Get(GameJam.Data.AttrId.D)
+                         + " V=" + ing.attrs.Get(GameJam.Data.AttrId.V);
         }
 
         /// <summary>
@@ -9192,9 +9192,9 @@ namespace GameJam.EditorTools
             }
 
             GameJam.Data.Ingredient ing = src.card.ingredient;
-            int h0 = ing.attrs.Get(GameJam.Data.AttrId.Salt);
-            int d0 = ing.attrs.Get(GameJam.Data.AttrId.Mercury);
-            int v0 = ing.attrs.Get(GameJam.Data.AttrId.Sulfur);
+            int h0 = ing.attrs.Get(GameJam.Data.AttrId.H);
+            int d0 = ing.attrs.Get(GameJam.Data.AttrId.D);
+            int v0 = ing.attrs.Get(GameJam.Data.AttrId.V);
 
             // 摆在桌子下面（y = −1.0）：那里什么都没有，特写背景干净，也不会挡到桌上的任何东西
             demoRoot = new GameObject("ProbeDemoCards");
@@ -9204,9 +9204,9 @@ namespace GameJam.EditorTools
             {
                 int[] v = DemoStatValues[i];
 
-                ing.attrs.Set(GameJam.Data.AttrId.Salt,    v[0]);
-                ing.attrs.Set(GameJam.Data.AttrId.Mercury, v[1]);
-                ing.attrs.Set(GameJam.Data.AttrId.Sulfur,  v[2]);
+                ing.attrs.Set(GameJam.Data.AttrId.H,    v[0]);
+                ing.attrs.Set(GameJam.Data.AttrId.D, v[1]);
+                ing.attrs.Set(GameJam.Data.AttrId.V,  v[2]);
 
                 Vector3 home = demoRoot.transform.position + new Vector3((i - 1) * 0.55f, 0f, 0f);
                 PlayCard c = CardFactory.Create(src.card, demoRoot.transform, home, Vector3.zero);
@@ -9217,9 +9217,9 @@ namespace GameJam.EditorTools
             }
 
             // ★ 立刻改回去：这份 attrs 是**游戏正在用的那一份**（手牌那张卡、刀片都指着它）
-            ing.attrs.Set(GameJam.Data.AttrId.Salt,    h0);
-            ing.attrs.Set(GameJam.Data.AttrId.Mercury, d0);
-            ing.attrs.Set(GameJam.Data.AttrId.Sulfur,  v0);
+            ing.attrs.Set(GameJam.Data.AttrId.H,    h0);
+            ing.attrs.Set(GameJam.Data.AttrId.D, d0);
+            ing.attrs.Set(GameJam.Data.AttrId.V,  v0);
         }
 
         private static void DestroyDemoStatCards()
@@ -9390,7 +9390,6 @@ namespace GameJam.EditorTools
             StartupExpect("㊾⓪ 实机打开了卡面「启动」文本（ApplyCardStartupText）",
                           rules.ApplyCardStartupText,
                           "ApplyCardStartupText = " + rules.ApplyCardStartupText +
-                          "｜ConsumeLayerOnActivate = " + rules.ConsumeLayerOnActivate +
                           "（前者关着的话，卡表里 21 张素材卡的「启动」句子一句都不会执行）");
         }
 

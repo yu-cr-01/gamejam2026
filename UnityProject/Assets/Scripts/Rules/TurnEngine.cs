@@ -19,18 +19,6 @@ namespace GameJam.Rules
     public class TurnRules
     {
         /// <summary>
-        /// 【正文自相矛盾，做成开关】启动时要不要消耗 1 层附魔。
-        ///
-        ///   规则表 F：「启动消耗：启动时无论是否发生效果，消耗1层附魔层数」
-        ///   §2.4 / §七-7：「启动时不消耗附魔层数：附魔层数仅在回合结束衰减」
-        ///
-        /// 默认**按规则表 F 实现（true）**。消耗谁：本次**第一个命中规则**的那一类附魔；
-        /// 如果一类都没命中，就从检查顺序（热→冷→酸）里第一个有层的类型里扣 1。
-        /// 催化层永远不在这里消耗（规则表 E：催化层数本身不消耗）。
-        /// </summary>
-        public bool ConsumeLayerOnActivate = true;
-
-        /// <summary>
         /// 【正文没写这一步，但卡表 21 张素材卡都写了「启动」文本】要不要执行卡牌自己的「启动」文本。
         ///
         ///   v3 §四 的启动流程里**没有**"按素材的启动文本结算"这一步 —— 形态变化全由附魔规则表驱动，
@@ -447,7 +435,7 @@ namespace GameJam.Rules
             return r;
         }
 
-        /// <summary>回合结束：所有附魔层数 -1、归零消失；桌面素材保留（§三.6）。</summary>
+        /// <summary>回合结束：附魔层数保留；桌面素材保留（v3.0）。</summary>
         public TurnResult EndTurn(LevelRun state)
         {
             TurnResult r = New(state);
@@ -455,18 +443,10 @@ namespace GameJam.Rules
 
             Log(r, "【回合 " + state.turnIndex + " 结束】");
 
-            // ★ 顺序：**补吞 → 衰减 → 换回合**（用户拍板的顺序，也是唯一说得通的顺序）。
-            //   【为什么补吞必须在衰减之前】献祭效果里有一类是"刀片附带一层**不衰退**的热/冷/酸"
-            //   （火焰/水/熔融铜…），而那层加上去之后如果先跑衰减，刚加的层会当场掉一层 ——
-            //   玩家看到的是"这次献祭白给了"。放在衰减之前，"本回合最后一次启动"拿到的东西
-            //   这一回合就已经到手，衰减从下回合开始算。
+            // ★ 顺序：补吞后换回合。v3.0 层数不会在回合结束衰退。
             ResolvePendingSacrifice(r, state, "回合结束");
 
-            string before = state.blade.layers.Describe();
-            state.blade.layers.DecayTurn();
-            Log(r, "　附魔衰减（每类衰退层 -1、归零消失）：" + before + " → " + state.blade.layers.Describe());
-            Log(r, "　（「不衰退」的层是授予时就带上的修饰，不参与这次衰减）");
-            Log(r, "　冷热冲突已由「后附魔覆盖先附魔」在附魔时处理，回合末无需再抵消");
+            Log(r, "　附魔层数保留（v3.0 不随回合衰退）；冷热冲突在附魔时按覆盖规则处理");
             Log(r, "　桌面素材保留：" + TableText(state));
 
             if (state.turnIndex >= LevelRun.TurnsPerLevel)
@@ -505,9 +485,9 @@ namespace GameJam.Rules
         ///   （EndTurn / EndLevelByChoice / Finish，各自把日志并进自己那份 TurnResult）；
         ///   这个入口是给**外部**那些不经过 EndTurn 的收尾路径用的：
         ///     ① 桌面层（TableRulesV21）在"行动机会用尽"这类时刻要单独确认一次补吞；
-        ///     ② 离线探针里要"手工宣布本回合结束"时 —— 它要的只是吞噬，**不是**附魔衰减。
-        ///   没有它，外部就只能去调 EndTurn，而 EndTurn 会顺手把层数衰减一轮、把回合号 +1，
-        ///   那两件事不属于"补吞"（探针里会把层数与回合断言一起带偏）。
+        ///     ② 离线探针里要"手工宣布本回合结束"时 —— 它要的只是吞噬。
+        ///   没有它，外部就只能去调 EndTurn，而 EndTurn 还会把回合号 +1，
+        ///   这不属于"补吞"（探针里会把回合断言带偏）。
         /// </summary>
         public TurnResult FlushPendingSacrifice(LevelRun state)
         {
@@ -561,7 +541,7 @@ namespace GameJam.Rules
             }
             else
             {
-                round.log.Add("（关卡已结束，跳过回合结束的附魔衰减）");
+                round.log.Add("（关卡已结束）");
             }
 
             round.scoreAfter = state.score;
@@ -805,11 +785,6 @@ namespace GameJam.Rules
             if (!anyTrigger)
                 Log(r, "　（热/冷/酸三种附魔都没有触发规则）");
 
-            // 规则表 F：启动消耗 1 层附魔（正文自相矛盾，见 TurnRules.ConsumeLayerOnActivate）。
-            //   位置与老版**逐字一致**（附魔链末尾）—— 卡面的「消耗所有X层数」已经在 ①b 跑过了，
-            //   所以这里看到的是"卡面用剩下的"层数；卡面写了「不消耗X层数」的类别在这里被跳过。
-            ConsumeActivationLayer(r, state, anyTrigger, triggeredKind, startup);
-
             return removed;
         }
 
@@ -970,8 +945,7 @@ namespace GameJam.Rules
             //   ★ 这不是"猜最后一次"，是两个事实恰好重合：行动机会在整条结算链里只减不增
             //     （没有任何效果会加它，回合开始那一次重置已经走过了），扣到 0 之后 StartBlade
             //     一进门就拒 —— "本回合不会再有启动"在当时就是事实，所以可以当场判定。
-            //     （放在这里也省掉玩家"必须再点一次结束回合才看到卡被吞"的困惑；附魔衰减仍然
-            //       只在 EndTurn 里跑，那一步不属于"补吞"。）
+            //     （放在这里也省掉玩家"必须再点一次结束回合才看到卡被吞"的困惑。）
             if (state.actionPoints <= 0)
                 ResolvePendingSacrifice(r, state, "行动机会用尽");
         }
@@ -980,7 +954,7 @@ namespace GameJam.Rules
         /// 回合真正结束：对**最后登记的那个**待献祭目标执行吞噬（正文 §四.5 / §2.3）。
         ///
         /// 【三种"回合真的结束了"】① 行动机会用尽（StartBlade 登记完当场判定）；
-        ///   ② 玩家点「结束回合」（<see cref="EndTurn"/> 的第一件事，在附魔衰减之前）；
+        ///   ② 玩家点「结束回合」（<see cref="EndTurn"/> 时）；
         ///   ③ 关卡结束（<see cref="EndLevelByChoice"/> 与 <see cref="Finish"/> 里"达到目标分"那一下）。
         ///
         /// 【爆刀为什么不算】爆刀（H≤0）是"关卡当场结束"，正文 §四.5 的吞噬发生在计分之后、
@@ -1609,52 +1583,6 @@ namespace GameJam.Rules
         ///   也就是说：被保护的那一类从"候选"里去掉，还有别的类有层就从别的类扣，
         ///   一类都不剩就本次不消耗（并留一行日志 —— 不然"有热却没消耗"看起来像 F 没跑）。
         ///   （这条口径与「不消耗刀片H」一起列在缺口报告 §3.1，待策划拍板。）
-        /// </summary>
-        private void ConsumeActivationLayer(TurnResult r, LevelRun state, bool anyTrigger, LayerKind triggeredKind,
-                                            StartupPlan startup)
-        {
-            if (!rules.ConsumeLayerOnActivate) return;
-
-            LayerKind k = LayerKind.Catalyst;
-            bool found = false;
-
-            if (anyTrigger && triggeredKind != LayerKind.Catalyst && state.blade.layers.Has(triggeredKind) &&
-                !(startup != null && startup.Protects(triggeredKind)))
-            {
-                k = triggeredKind;
-                found = true;
-            }
-            else
-            {
-                for (int i = 0; i < EnchantRules.MaterialCheckOrder.Length; i++)
-                {
-                    if (!state.blade.layers.Has(EnchantRules.MaterialCheckOrder[i])) continue;
-                    if (startup != null && startup.Protects(EnchantRules.MaterialCheckOrder[i])) continue;
-                    k = EnchantRules.MaterialCheckOrder[i];
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found)
-            {
-                bool protectedSome = false;
-                for (int i = 0; i < EnchantRules.MaterialCheckOrder.Length; i++)
-                    if (state.blade.layers.Has(EnchantRules.MaterialCheckOrder[i]) &&
-                        startup != null && startup.Protects(EnchantRules.MaterialCheckOrder[i])) { protectedSome = true; break; }
-
-                if (protectedSome)
-                    Log(r, "　· 启动消耗附魔：有层数的那几类被卡面「不消耗X层数」豁免了 → 本次不消耗（卡面优先于规则表 F）");
-                else
-                    Log(r, "　· 启动消耗附魔：热/冷/酸都没有层数，没有可消耗的");
-                return;
-            }
-
-            int taken = state.blade.layers.Consume(k, 1);
-            Log(r, "　· 启动消耗附魔（规则表 F，与 §2.4 矛盾，见 TurnRules.ConsumeLayerOnActivate）：" +
-                    LayerLedger.Name(k) + "-" + taken + " → " + state.blade.layers.Describe());
-        }
-
         // ── 条件判定 ──────────────────────────────────────────────────
 
         private bool ConditionHolds(RuleCondition c, LevelRun state, MaterialState self, out string why)

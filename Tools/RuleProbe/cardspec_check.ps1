@@ -49,7 +49,7 @@ $dupId = $all | ForEach-Object { ($_ -split '\|')[1] } | Group-Object | Where-Ob
 foreach ($d in $dupName) { "✗ 重名：$($d.Name) × $($d.Count)"; $bad++ }
 foreach ($d in $dupId) { "✗ id 重复：$($d.Name) × $($d.Count)"; $bad++ }
 
-# ⑤ 形态转换 / D耗尽 产出名必须在卡表里（灰烬这类要单独报）
+# ⑤ 形态转换 / D耗尽产出名必须在卡表里
 $names = @{}
 foreach ($m in $j.materials) { $names[$m.name] = '素材' }
 foreach ($s in $j.spells) { $names[$s.name] = '法术' }

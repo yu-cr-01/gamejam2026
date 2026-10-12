@@ -230,7 +230,7 @@ namespace GameJam.Prototype
 
                 // 模块没有"自己的属性"，印记形状固定给液体形；
                 // 卡面文字已经写明它是模块，形状不用再承担区分职责
-                dominant = AttrId.Mercury;
+                dominant = AttrId.D;
 
                 sub = "【变速模块】\n" + (c.module != null ? c.module.Description() : "");
             }

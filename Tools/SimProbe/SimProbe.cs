@@ -29,9 +29,9 @@ static class SimProbe
     static Ingredient Make(string id, string name, int h, int d, int v)
     {
         AttrSet a = new AttrSet();
-        a.Set(AttrId.Salt, h);
-        a.Set(AttrId.Mercury, d);
-        a.Set(AttrId.Sulfur, v);
+        a.Set(AttrId.H, h);
+        a.Set(AttrId.D, d);
+        a.Set(AttrId.V, v);
         return new Ingredient(id, name, a);
     }
 

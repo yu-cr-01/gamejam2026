@@ -271,7 +271,7 @@ namespace GameJam.Prototype
             ing.note = d.note != null ? d.note : "";
 
             // v3.0 数值：卡表里给了就用（哪怕全是 0，也是"策划明确写了 0"），
-            // 没给这一节才退回旧图鉴带过来的 attrs 换算（H=盐性、V=硫性）
+            // 没给这一节才退回旧图鉴带过来的 H/D/V 值。
             ing.h = d.h;
             ing.d = d.d;
             ing.v = d.v;
@@ -283,8 +283,8 @@ namespace GameJam.Prototype
 
             if (ing.h == 0 && ing.v == 0 && old != null && old.attrs != null)
             {
-                ing.h = old.attrs.Get(AttrId.Salt);
-                ing.v = old.attrs.Get(AttrId.Sulfur);
+                ing.h = old.attrs.Get(AttrId.H);
+                ing.v = old.attrs.Get(AttrId.V);
                 ing.vGrade = "（旧值）";
                 if (string.IsNullOrEmpty(d.rarity)) ing.rarity = RarityOfH(ing.h);
             }

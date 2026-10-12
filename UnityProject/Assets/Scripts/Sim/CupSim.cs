@@ -69,13 +69,13 @@ namespace GameJam.Sim
         public int score;
 
         /// <summary>条件一：哪一项属性</summary>
-        public AttrId attrA = AttrId.Mercury;
+        public AttrId attrA = AttrId.D;
 
         /// <summary>条件一：杯内该项加起来要到多少</summary>
         public int thresholdA = 8;
 
         /// <summary>条件二</summary>
-        public AttrId attrB = AttrId.Salt;
+        public AttrId attrB = AttrId.H;
         public int thresholdB = 5;
 
         /// <summary>温度下限（0 表示不看温度）</summary>
@@ -128,14 +128,14 @@ namespace GameJam.Sim
             // 一相分散到另一相里，正是破壁机干的事
             cached.Add(new ReactionDef(
                 "emulsify", "乳化", 50,
-                AttrId.Mercury, 8, AttrId.Salt, 5, 0f,
+                AttrId.D, 8, AttrId.H, 5, 0f,
                 "乳化！+50",
                 "汞性 ≥ 8 且 盐性 ≥ 5"));
 
             // 融化：温度够高就把固体倾向化掉
             cached.Add(new ReactionDef(
                 "melt", "融化", 20,
-                AttrId.Salt, 4, AttrId.Sulfur, 0, 60f,
+                AttrId.H, 4, AttrId.V, 0, 60f,
                 "融化！+20",
                 "温度 ≥ 60 且 盐性 ≥ 4"));
 
@@ -290,7 +290,7 @@ namespace GameJam.Sim
             p.wear = 0f;
 
             // 硬度取自食材的盐性（固体倾向）—— 和 TurnState.BladeHardness 同一套口径
-            p.hardness = ing.attrs != null ? ing.attrs.Get(AttrId.Salt) : 0f;
+            p.hardness = ing.attrs != null ? ing.attrs.Get(AttrId.H) : 0f;
             p.temp = temp;
 
             // 随机落在杯内，但别贴着圆心（那里是刀片），也别压到别的粒子

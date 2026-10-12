@@ -91,7 +91,7 @@ namespace GameJam.Data
             effects = new EffectGroup();
         }
 
-        /// <summary>链式挂效果：new Spell("harden", "硬化术").With(AttrId.Salt, 10)</summary>
+        /// <summary>链式挂效果：new Spell("harden", "硬化术").With(AttrId.H, 10)</summary>
         public Spell With(AttrId target, EffectOp op, int value)
         {
             // ★ Append 只收 EffectGroup，不收单条 Effect —— 要包一层。
@@ -107,13 +107,13 @@ namespace GameJam.Data
             return With(target, EffectOp.Add, value);
         }
 
-        /// <summary>效果描述，自动生成，例如 "盐性 +10"</summary>
+        /// <summary>效果描述，自动生成，例如 "硬度 +10"</summary>
         public string Description()
         {
             return effects != null ? effects.Describe() : "（无效果）";
         }
 
-        /// <summary>界面上的完整一行，例如 "使刀片 盐性 +10"</summary>
+        /// <summary>界面上的完整一行，例如 "使刀片 硬度 +10"</summary>
         public string FullText()
         {
             string where = target == SpellTarget.Blade ? "使刀片 " : "使 ";
@@ -192,8 +192,8 @@ namespace GameJam.Data
             cached = new System.Collections.Generic.List<Spell>();
 
             // 硬化术：使刀片 H＋10
-            // H 就是盐性（固体倾向），刀片硬度一直走的是这一项
-            cached.Add(new Spell("harden", "硬化术").With(AttrId.Salt, 10));
+            // 刀片硬度使用 H 属性。
+            cached.Add(new Spell("harden", "硬化术").With(AttrId.H, 10));
 
             return cached;
         }

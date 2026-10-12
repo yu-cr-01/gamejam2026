@@ -89,7 +89,7 @@ namespace GameJam.Rules
             {
                 LayerKind k = (LayerKind)i;
                 LayerStack s = layers.Stack(k);
-                b.layers.Add(k, s.decaying);
+                b.layers.Add(k, s.decaying, false);
                 b.layers.Add(k, s.permanent, true);
             }
             return b;

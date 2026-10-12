@@ -155,7 +155,7 @@ namespace GameJam.Prototype
                 Color accent = ProceduralArt.IngredientColor(o.id);
 
                 // 印记形状用牌组的开局刀片决定 —— 它是这副牌的门面
-                AttrId dominant = AttrId.Salt;
+                AttrId dominant = AttrId.H;
                 Ingredient blade = o.deck != null ? o.deck.InitialBlade() : null;
                 if (blade != null) dominant = ProceduralArt.DominantAttr(blade);
 
@@ -233,7 +233,7 @@ namespace GameJam.Prototype
 
                 CardSpot sp = i < spots.Count ? spots[i] : new CardSpot { x = CountToX(i, n), z = RowZ, scale = 1f };
 
-                deckCards.Add(BuildOne(lv.id, lv.name, accent, AttrId.Salt,
+                deckCards.Add(BuildOne(lv.id, lv.name, accent, AttrId.H,
                     // ★ 目标分要跟当前规则模式一致：v2.1 用的是 TableSettings.V21TargetScore（60），
                     //   旧流程才是 levels[].targetScore（1000/1500/2000）。
                     //   卡片上写旧数值、关卡窗口里写新数值，玩家会以为其中一个坏了。

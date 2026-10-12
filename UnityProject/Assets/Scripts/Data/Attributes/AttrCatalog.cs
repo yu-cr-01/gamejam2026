@@ -18,18 +18,18 @@ namespace GameJam.Data
         private static readonly AttrDef[] Defs =
         {
             new AttrDef(
-                AttrId.Salt, "H", "盐性", "固体倾向",
-                "耐久、生命值。H 归零，固态原材变粉末；刀片 H 归零爆刀。",
+                AttrId.H, "H", "硬度", "抗损伤",
+                "素材承受损伤的能力；刀片 H 归零时爆刀。",
                 0, 99),
 
             new AttrDef(
-                AttrId.Mercury, "D", "汞性", "液体倾向",
-                "溶解力、流动性、催化力。D 越高，粉末越快变溶液；溶液润滑刀片、催化粉末。",
+                AttrId.D, "D", "耐久", "可用次数",
+                "素材 D 归零时触发耗尽效果。",
                 0, 99),
 
             new AttrDef(
-                AttrId.Sulfur, "V", "硫性", "气体倾向",
-                "挥发性、膨胀力、压力。V 越高，溶液越快变气体；气体压力削刀片。",
+                AttrId.V, "V", "计分倾向", "启动得分",
+                "每次启动得分 = 目标 V + 刀片 V。",
                 0, 99),
         };
 
@@ -61,7 +61,7 @@ namespace GameJam.Data
             return d != null ? d.letter : "";
         }
 
-        /// <summary>短标签 "H 盐性"。</summary>
+        /// <summary>短标签，例如 "H 硬度"。</summary>
         public static string Label(AttrId id)
         {
             AttrDef d = Get(id);
@@ -71,7 +71,7 @@ namespace GameJam.Data
         /// <summary>按字母代号反查属性 —— 配置表里写 "H"/"D"/"V" 时用得上。</summary>
         public static bool TryParse(string letterOrName, out AttrId id)
         {
-            id = AttrId.Salt;
+            id = AttrId.H;
             if (string.IsNullOrEmpty(letterOrName)) return false;
 
             string key = letterOrName.Trim().ToUpperInvariant();

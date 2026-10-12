@@ -1,0 +1,72 @@
+{
+  "shopCount": 5,
+  "spellCount": 1,
+  "randomCount": 4,
+  "rarityWeights": { "common": 10, "rare": 3, "legendary": 1 },
+  "prices": { "common": 1, "rare": 2, "legendary": 3 },
+  "merchants": [
+    {
+      "id": "salt",
+      "name": "盐之商人",
+      "rollPrompt": "空白卡可是难得的好东西……确定要把它交给我来重抽吗？",
+      "pool": [
+        { "id": "water", "rarity": "common" },
+        { "id": "wood", "rarity": "common" },
+        { "id": "sand", "rarity": "common" },
+        { "id": "ice", "rarity": "common" },
+        { "id": "glass", "rarity": "common" },
+        { "id": "harden", "rarity": "common" },
+        { "id": "frost", "rarity": "common" },
+        { "id": "crystallize", "rarity": "common" },
+        { "id": "salt", "rarity": "rare" },
+        { "id": "spell_scroll", "rarity": "rare" },
+        { "id": "alien_alloy", "rarity": "legendary" }
+      ]
+    },
+    {
+      "id": "sulfur",
+      "name": "硫之商人",
+      "rollPrompt": "这张空白卡看起来挺珍贵的。要现在用掉，换两次重新抽牌的机会吗？",
+      "pool": [
+        { "id": "sulfur", "rarity": "common" },
+        { "id": "sulfur_gas", "rarity": "common" },
+        { "id": "sulfur_liquid", "rarity": "common" },
+        { "id": "leather", "rarity": "common" },
+        { "id": "flame", "rarity": "common" },
+        { "id": "acid_etch", "rarity": "common" },
+        { "id": "white_phosphorus", "rarity": "rare" },
+        { "id": "carbon", "rarity": "rare" },
+        { "id": "copper", "rarity": "rare" },
+        { "id": "iron", "rarity": "rare" },
+        { "id": "sulfur_powder", "rarity": "rare" },
+        { "id": "ember", "rarity": "rare" },
+        { "id": "gold", "rarity": "legendary" }
+      ]
+    },
+    {
+      "id": "mercury",
+      "name": "汞之商人",
+      "rollPrompt": "空白卡，好东西。想清楚了？交给我之后，这家店就能重新抽两次。",
+      "pool": [
+        { "id": "steam", "rarity": "common" },
+        { "id": "copper_solution", "rarity": "common" },
+        { "id": "iron_solution", "rarity": "common" },
+        { "id": "salt_solution", "rarity": "common" },
+        { "id": "acid_etch", "rarity": "common" },
+        { "id": "crystallize", "rarity": "common" },
+        { "id": "mercury", "rarity": "rare" },
+        { "id": "mercury_vapor", "rarity": "rare" },
+        { "id": "solid_mercury", "rarity": "rare" },
+        { "id": "copper_vapor", "rarity": "rare" },
+        { "id": "iron_vapor", "rarity": "rare" },
+        { "id": "molten_copper", "rarity": "rare" },
+        { "id": "molten_iron", "rarity": "rare" },
+        { "id": "molten_glass", "rarity": "rare" },
+        { "id": "catalysis", "rarity": "rare" },
+        { "id": "molten_gold", "rarity": "legendary" },
+        { "id": "gold_vapor", "rarity": "legendary" },
+        { "id": "acid_burst", "rarity": "legendary" }
+      ]
+    }
+  ]
+}

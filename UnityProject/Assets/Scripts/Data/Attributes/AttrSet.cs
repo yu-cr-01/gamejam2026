@@ -110,7 +110,7 @@ namespace GameJam.Data
         }
 
         /// <summary>
-        /// 列出全部属性并带上字母代号，例如 "H 盐性 20 · D 汞性 0 · V 硫性 3"。
+        /// 列出全部属性并带上字母代号，例如 "H 硬度 20 · D 耐久 0 · V 计分倾向 3"。
         /// 三属性体系下界面统一用这个 —— 玩家和策划都按 H/D/V 沟通。
         /// </summary>
         public string DescribeLabeled()
@@ -123,7 +123,7 @@ namespace GameJam.Data
             return parts.Count > 0 ? string.Join(" · ", parts.ToArray()) : "（无属性）";
         }
 
-        /// <summary>只列出非零属性并带字母代号，例如 "H 盐性 20 · V 硫性 3"。</summary>
+        /// <summary>只列出非零属性并带字母代号，例如 "H 硬度 20 · V 计分倾向 3"。</summary>
         public string DescribeLabeledNonZero()
         {
             List<string> parts = new List<string>();

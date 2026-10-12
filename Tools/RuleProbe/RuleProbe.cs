@@ -197,7 +197,7 @@ namespace GameJam.Tools
             else Console.WriteLine("  ✗ " + name + "：" + detail + "　（" + n + " 项断言没过，见末尾清单）");
         }
 
-        /// <summary>场景默认配置：只改正文没写的东西，规则一律按默认（ConsumeLayerOnActivate = true）。</summary>
+        /// <summary>场景默认配置：层数只按明确写出的效果添加或消耗。</summary>
         private static TurnRules ProbeRules()
         {
             return new TurnRules();
@@ -213,7 +213,7 @@ namespace GameJam.Tools
             l.Add(LayerKind.Heat, 2);
             l.Add(LayerKind.Heat, 1, true);
             Check("加层：总层数", 3, l.Count(LayerKind.Heat));
-            Check("加层：不衰退层数", 1, l.Stack(LayerKind.Heat).permanent);
+            Check("v3.0 新加层数全部永久", 3, l.Stack(LayerKind.Heat).permanent);
             Check("加层：有附魔", true, l.Has(LayerKind.Heat));
             Check("加层：没碰过的类别是 0", 0, l.Count(LayerKind.Acid));
         }
@@ -221,7 +221,7 @@ namespace GameJam.Tools
         private static void Layers_ConsumePrefersDecaying()
         {
             LayerLedger l = new LayerLedger();
-            l.Add(LayerKind.Heat, 2);          // 2 层会衰退
+            l.Add(LayerKind.Heat, 2, false);   // 兼容旧存档中的衰退层
             l.Add(LayerKind.Heat, 2, true);    // 2 层不衰退
             int taken = l.Consume(LayerKind.Heat, 1);
 
@@ -244,12 +244,12 @@ namespace GameJam.Tools
         private static void Layers_DecayOnlyDecaying()
         {
             LayerLedger l = new LayerLedger();
-            l.Add(LayerKind.Heat, 3);
+            l.Add(LayerKind.Heat, 3, false);    // 仅用于验证旧存档兼容字段
             l.Add(LayerKind.Heat, 2, true);
 
             l.DecayTurn();
-            Check("回合衰减：衰退层 -1", 2, l.Stack(LayerKind.Heat).decaying);
-            Check("回合衰减：不衰退层不变", 2, l.Stack(LayerKind.Heat).permanent);
+            Check("新规则：回合结束不衰退旧衰退层", 3, l.Stack(LayerKind.Heat).decaying);
+            Check("新规则：新增层数保持永久", 2, l.Stack(LayerKind.Heat).permanent);
         }
 
         private static void Layers_PermanentNeverDecays()
@@ -268,8 +268,7 @@ namespace GameJam.Tools
             l.Add(LayerKind.Acid, 1, true);
 
             l.Double(LayerKind.Acid);
-            Check("翻倍：衰退层 ×2", 4, l.Stack(LayerKind.Acid).decaying);
-            Check("翻倍：不衰退层 ×2", 2, l.Stack(LayerKind.Acid).permanent);
+            Check("翻倍：新规则层数全部保持永久", 6, l.Stack(LayerKind.Acid).permanent);
         }
 
         /// <summary>规则表 F：冷热冲突是"后附魔覆盖先附魔，清空对方全部层数"，不是成对抵消。</summary>
@@ -313,7 +312,7 @@ namespace GameJam.Tools
             LayerLedger l = new LayerLedger();
             l.Add(LayerKind.Heat, 2);
             l.Add(LayerKind.Heat, 1, true);
-            Check("摘要文字", "热×3（含1不衰退）", l.Describe());
+            Check("摘要文字", "热×3", l.Describe());
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -830,7 +829,7 @@ namespace GameJam.Tools
             Check("白磷·燃烧：形态变化不再走 D 耗尽 → 火焰只产出一次", 1, r.ProducedCount("火焰"));
             Check("白磷·燃烧：得分 = 目标V " + ProbeValues(cards, "白磷").V + " + 刀片V 5",
                   ProbeValues(cards, "白磷").V + 5, r.activationScore);
-            Check("白磷·燃烧：启动消耗 1 层附魔（规则表 F）", 0, s.blade.layers.Count(LayerKind.Heat));
+            Check("白磷·燃烧：启动不消耗附魔层数", 1, s.blade.layers.Count(LayerKind.Heat));
             CheckLog("白磷·燃烧：日志有「形态变化」", r, "形态变化");
             CheckLog("白磷·燃烧：日志有「素材结算结束」的顺序说明", r, "不再检查后续附魔");
 
@@ -855,7 +854,7 @@ namespace GameJam.Tools
             Check("水·液体→气态：水蒸气进手牌", 1, r.ProducedCount("水蒸气"));
             CheckKind("水·液体→气态：水蒸气是素材卡", ProduceKind.Material, r.KindOfProduced("水蒸气"));
             Check("水·液体→气态：旧卡移出桌面", true, water.removed);
-            Check("水·液体→气态：热 2 → 启动消耗 1 层 → 1", 1, s.blade.layers.Count(LayerKind.Heat));
+            Check("水·液体→气态：启动后热层数不变", 2, s.blade.layers.Count(LayerKind.Heat));
             Check("水·液体→气态：得分用启动时的原始卡 V（" + ProbeValues(cards, "水").V + " + 5）",
                   ProbeValues(cards, "水").V + 5, r.activationScore);
 
@@ -922,7 +921,7 @@ namespace GameJam.Tools
             Check("顺序②：酸≥2 + 固体 → 目标 H-1（" + gH + "→" + (gH - 1) + "）", gH - 1, glass.H);
             Check("顺序②：仅改属性 → 没有变形（日志说明继续检查下一类）", true, r.LogContains("仅改属性、未发生形态变化"));
             Check("顺序②：D-1（3→2）", 2, glass.D);
-            Check("顺序②：启动消耗 1 层酸（触发的那一类）", 1, s.blade.layers.Count(LayerKind.Acid));
+            Check("顺序②：启动不消耗酸层数", 2, s.blade.layers.Count(LayerKind.Acid));
             Check("顺序③：得分 = 目标V " + gV + " + 刀片V 5 = " + (gV + 5), gV + 5, r.activationScore);
             Check("顺序④：H=5 > 0 未爆刀", false, r.bursted);
             // ★ 吞噬加的是**被吞噬那一刻的 H**：玻璃 v3.0 H=5，被酸蚀先扣 1 → 吞噬时 H=4。
@@ -1068,7 +1067,7 @@ namespace GameJam.Tools
                   true, round.starts[1].LogContains("登记为待献祭目标") && !round.starts[1].LogContains("并入刀片"));
             CheckLog("献祭时机：日志说明并入刀片", round, "并入刀片");
             Check("献祭时机：回合结束后进入第 2 回合", 2, s.turnIndex);
-            Check("献祭时机：回合结束附魔衰减跑过了", true, round.LogContains("附魔衰减"));
+            Check("献祭时机：回合结束明确保留附魔层数", true, round.LogContains("v3.0 不随回合衰退"));
 
             ScenarioEnd("场景7 献祭只在最后一次启动", mark,
                 "白磷不被吞噬；黄金被吞噬 → 刀片 H=" + s.blade.H + " V=" + auV + "，献祭再给 30 分 + 3 张催化术，总分 " + s.score);
@@ -1224,10 +1223,7 @@ namespace GameJam.Tools
             s.blade.layers.Add(LayerKind.Heat, 1);
 
             // 卡表里当前没有"粉末+易燃"的卡，用一张探针合成卡把规则表的这条跑出来。
-            // 这条断言只看爆炸的「刀片热+1」，所以把规则表 F 的"启动消耗 1 层附魔"关掉，
-            // 免得 +1 又被扣掉 1（那条矛盾在场景1/场景4 单独验过了）。
             TurnRules rules = ProbeRules();
-            rules.ConsumeLayerOnActivate = false;
 
             Ingredient powderCard = cards.Synthetic("粉末易燃测试卡", "粉末", new string[] { "粉末", "易燃" });
             MaterialState powder = new MaterialState(powderCard, 3, 2, 1);
@@ -1348,8 +1344,8 @@ namespace GameJam.Tools
             Check("存档：重建那条被动没有报错", "", seedErr);
             Check("存档：被吞噬那张已离场，桌面正好 3 张", 3, s.table.Count);
 
-            // 刀片层数：热 2 衰退 + 热 1 不衰退（★ 两份分开存）
-            s.blade.layers.Add(LayerKind.Heat, 2);
+            // 存档兼容：显式造旧版本的衰退层与 v3.0 永久层
+            s.blade.layers.Add(LayerKind.Heat, 2, false);
             s.blade.layers.Add(LayerKind.Heat, 1, true);
 
             s.turnIndex = 3; s.actionPoints = 2; s.startsThisTurn = 3;
@@ -1436,7 +1432,7 @@ namespace GameJam.Tools
                       built.blade.H * 1000 + built.blade.V);
                 Check("读档：热层衰退份 = 2", 2, built.blade.layers.Stack(LayerKind.Heat).decaying);
                 Check("读档：热层不衰退份 = 1（★ 只存总数就会在这里丢）", 1, built.blade.layers.Stack(LayerKind.Heat).permanent);
-                Check("读档：酸层 = 1（双份计数各归各类）", 1, built.blade.layers.Stack(LayerKind.Acid).decaying);
+                Check("读档：酸层永久计数一致", 2, built.blade.layers.Stack(LayerKind.Acid).permanent);
                 Check("读档：催化层 = 2", 2, built.blade.layers.Count(LayerKind.Catalyst));
 
                 Check("读档：桌面 3 张且顺序不变（级联顺序靠它）", 3, built.table.Count);
@@ -1462,7 +1458,7 @@ namespace GameJam.Tools
                       built.table[0].card.h == 10 && built.table[0].card.d == 20 && built.table[0].card.v == 30);
                 Check("读档：卡面的 attrs 同步成同一组数（属性区与元素皮肤读它）", 30,
                       built.table.Count > 0 && built.table[0].card != null && built.table[0].card.attrs != null
-                          ? built.table[0].card.attrs.Get(AttrId.Sulfur) : -1);
+                          ? built.table[0].card.attrs.Get(AttrId.V) : -1);
 
                 Check("读档：投放区待放置那一张也回来了（下标 / 槽位）", 0 * 100 + 1,
                       built.staged.Count > 0 ? built.staged[0].index * 100 + built.staged[0].slot : -1);
@@ -1680,9 +1676,8 @@ namespace GameJam.Tools
             Check("提前结束回合：更早那一次的目标**没**被吞（还在桌面上）", false, earlier.removed);
             CheckLog("提前结束回合：日志里有「并入刀片」", rEnd, "并入刀片");
             // 顺序：补吞必须在附魔衰减**之前**（否则献祭刚给的"不衰退层"会当场被衰减掉一层）
-            Check("提前结束回合：补吞发生在附魔衰减**之前**",
-                  true, rEnd.LogText().IndexOf("并入刀片") >= 0 &&
-                        rEnd.LogText().IndexOf("并入刀片") < rEnd.LogText().IndexOf("附魔衰减"));
+            Check("提前结束回合：回合末没有附魔衰减",
+                  false, rEnd.LogContains("附魔衰减"));
 
             // ══ ② 手牌空 + 还能启动 → 不许提前吞（旧判据的"早吞"那一档）══
             LevelRun s2 = NewLevel(cards, "铁刀片", 20, 0);
@@ -2351,12 +2346,12 @@ namespace GameJam.Tools
             //        · 规则表接不上 22：v3.0 把"遇热/遇酸"这类**重复的形态转换行**删掉了，
             //          而标签（遇热/金属/可溶/液体…）还在，AuditProducts 就会按标签去要产物；
             //        · v3 失效写法 8：v3.0 把「不消耗刀片H」写回了 8 张卡（引擎按失效处理并打警告）；
-            //        · 可疑产出 1：法术卷轴的形态转换产物「灰烬」不在 v3.0 卡表里（定稿只列了 32 张）。
+            //        · 可疑产出 0：法术卷轴的产物按最新确认改为「碳」。
             //      这四个数一旦变化，说明卡表又被改过 —— 请同步更新 docs/卡牌数值_v3.0_缺口报告.md。
             Check("解析报告：未识别句子数（v3.0 卡表 = 6，见缺口报告）", 6, rep.unrecognized.Count);
             Check("解析报告：规则表接不上的卡（v3.0 卡表 = 22，见缺口报告）", 22, rep.tableGaps.Count);
             Check("解析报告：v3 已失效写法（v3.0 卡表 = 8 张卡的『不消耗刀片H』）", 8, rep.superseded.Count);
-            Check("解析报告：可疑产出（v3.0 卡表 = 1，法术卷轴产出的「灰烬」不在 32 张里）", 1, rep.unknownProducts.Count);
+            Check("解析报告：可疑产出（法术卷轴产物「碳」在卡表中）", 0, rep.unknownProducts.Count);
 
             // 数据侧前几轮修好的写法，**v3.0 定稿又改回去了** —— 逐条按定稿钉住。
             // （这几条以前是"已改掉"，现在反过来：定稿怎么写、卡表就怎么写，
@@ -2981,9 +2976,9 @@ namespace GameJam.Tools
             Check("startup①·水蒸气有热：激活分 = 卡V " + steamV + " + 刀片V 5", steamV + 5, r1a.activationScore);
             Check("startup①·水蒸气有热：规则分 = 激活分（本次得分翻倍）", steamV + 5, r1a.ruleScore);
             Check("startup①·水蒸气有热：本次净得分 = 2 ×（卡V + 刀片V）", 2 * (steamV + 5), r1a.ScoreDelta);
-            Check("startup①·水蒸气有热：卡面「不消耗热层数」→ 规则表 F 不吃热", 2, s1a.blade.layers.Count(LayerKind.Heat));
+            Check("startup①·水蒸气有热：启动不消耗热层", 2, s1a.blade.layers.Count(LayerKind.Heat));
             CheckLog("startup①·水蒸气有热：日志写了得分倍率", r1a, "得分倍率");
-            CheckLog("startup①·水蒸气有热：日志写了「豁免」", r1a, "豁免");
+            Check("startup①·水蒸气有热：没有通用附魔消耗", false, r1a.LogContains("启动消耗附魔"));
 
             LevelRun s1b; MaterialState t1b;
             TurnResult r1b = StartupRun(cards, "水蒸气", 20, 5, null, null, out s1b, out t1b);
@@ -2998,10 +2993,10 @@ namespace GameJam.Tools
             CheckLog("startup②·汞：日志写明卡面优先于 §四.1", r2a, "优先于 §四.1");
             CheckLog("startup②·汞：日志写了加刀片 H+1", r2a, "加刀片 H+1");
 
-            // 反例：卡面没写「不消耗H」的卡照扣（硫磺液：① -1、卡面再 -2）
+            // 反例：卡面额外扣 H 仍生效，但没有规则表里的通用启动扣 H。
             LevelRun s2b; MaterialState t2b;
             TurnResult r2b = StartupRun(cards, "硫磺液", 20, 0, null, null, out s2b, out t2b);
-            Check("startup②反例·硫磺液：没有豁免 → ① 扣 1 + 卡面扣 2 → H=17", 17, s2b.blade.H);
+            Check("startup②反例·硫磺液：启动1H + 卡面额外扣2H → H=17", 17, s2b.blade.H);
             Check("startup②反例·硫磺液：日志里**没有**「刀片 H 不变」那句", false, r2b.LogContains("刀片 H 不变"));
 
             // ── ③ 阈值型「额外消耗H + 得分翻倍」（铜：酸≥3）──────────────────
@@ -3009,7 +3004,7 @@ namespace GameJam.Tools
             TurnResult r3 = StartupRun(cards, "铜", 20, 5,
                 new LayerKind[] { LayerKind.Acid }, new int[] { 3 }, out s3, out t3);
             int copperV = ProbeValues(cards, "铜").V;
-            Check("startup③·铜酸3：① 扣 1 + 卡面额外消耗 1 → H=18", 18, s3.blade.H);
+            Check("startup③·铜酸3：启动1H + 卡面额外消耗1H → H=18", 18, s3.blade.H);
             Check("startup③·铜酸3：得分翻倍（激活 " + (copperV + 5) + " → 净 " + (2 * (copperV + 5)) + "）",
                   2 * (copperV + 5), r3.ScoreDelta);
             Check("startup③·铜酸3：规则表照旧把铜变成「铜溶液」进手牌（卡面效果与规则表各发生一次）",
@@ -3030,8 +3025,8 @@ namespace GameJam.Tools
             Check("startup⑤·熔融玻璃冷2：卡面「不消耗H」→ 刀片 H 不变（20）", 20, s4b.blade.H);
             Check("startup⑤·熔融玻璃冷2：每层 2 分 × **启动时的 2 层** = 4 分（不是被 F 吃完后的 1 层）",
                   4, r4b.ruleScore);
-            Check("startup⑤·熔融玻璃冷2：规则表 F 之后只剩 1 层冷（4 分读的是启动时的层数）",
-                  1, s4b.blade.layers.Count(LayerKind.Cold));
+            Check("startup⑤·熔融玻璃冷2：启动后冷层数保留",
+                  2, s4b.blade.layers.Count(LayerKind.Cold));
 
             // 盐溶液：同样"每有1层冷/热/酸得1分"，用酸层（酸不会触发它的形态变化）
             LevelRun s4c; MaterialState t4c;
@@ -3046,7 +3041,7 @@ namespace GameJam.Tools
                 new LayerKind[] { LayerKind.Cold }, new int[] { 3 }, out s5a, out t5a);
             Check("startup⑥·冰冷3：产出一张「冰霜」", 1, r5a.ProducedCount("冰霜"));
             CheckKind("startup⑥·冰冷3：「冰霜」是法术卡", ProduceKind.Spell, r5a.KindOfProduced("冰霜"));
-            Check("startup⑥·冰冷3：卡面效果发生过之后，规则表 F 才吃掉 1 层冷 → 剩 2", 2,
+            Check("startup⑥·冰冷3：卡面效果不会消耗冷层", 3,
                   s5a.blade.layers.Count(LayerKind.Cold));
 
             // 反例：冷只有 2（阈值 3）→ 不产卡
@@ -3066,12 +3061,12 @@ namespace GameJam.Tools
                   0, r6a.ProducedCount("冰") + r6a.ProducedCount("空白卡"));
             Check("startup⑦·水：卡面「不消耗刀片H」→ 刀片 H 不变（20）", 20, s6a.blade.H);
 
-            // ── ⑧ 层数翻倍（盐：有热 2 → 4，随后规则表 F 再吃 1）─────────────
+            // ── ⑧ 层数翻倍（盐：有热 2 → 4，附魔层不衰退/不因启动消耗）────────
             LevelRun s7; MaterialState t7;
             TurnResult r7 = StartupRun(cards, "盐", 20, 0,
                 new LayerKind[] { LayerKind.Heat }, new int[] { 2 }, out s7, out t7);
             Check("startup⑧·盐有热2：层数翻倍（2 → 4）", true, r7.LogContains("层数翻倍"));
-            Check("startup⑧·盐有热2：翻倍之后规则表 F 再吃 1 层 → 剩 3", 3, s7.blade.layers.Count(LayerKind.Heat));
+            Check("startup⑧·盐有热2：层数翻倍后保留4层", 4, s7.blade.layers.Count(LayerKind.Heat));
 
             // 反例：一层附魔都没有 → 条件不成立、不翻倍
             LevelRun s7b; MaterialState t7b;

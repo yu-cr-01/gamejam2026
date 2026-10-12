@@ -35,6 +35,9 @@ namespace GameJam.Prototype
 
         /// <summary>本关总结算</summary>
         LevelResult,
+
+        /// <summary>回合结束后出现的商店</summary>
+        Shop,
     }
 
     /// <summary>
@@ -102,6 +105,10 @@ namespace GameJam.Prototype
         private Choice activeDeckChoice;
 
         public TablePhase phase = TablePhase.DeckPick;
+
+        /// <summary>v3.0 商店本次访问状态（每回合结束最多进入一次）。</summary>
+        public ShopVisitV30 shopVisit;
+        public bool shopRollConfirmationOpen;
 
         /// <summary>
         /// 已经放进投放区、等玩家按确认的那些牌。
@@ -1453,7 +1460,7 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
-        /// v2.1：结束本回合（附魔衰减）或结束关卡。
+        /// v3.0：结束本回合（附魔层数保留）或结束关卡。
         /// 到一个回合的行动机会用完之后，这是唯一该按的键。
         /// </summary>
         public void EndRoundOrLevel()
@@ -1462,6 +1469,7 @@ namespace GameJam.Prototype
 
             if (rulesV21.levelOver) { phase = TablePhase.LevelEnd; return; }
 
+            int completedTurn = rulesV21.turnIndex;
             rulesV21.EndRound();
 
             if (rulesV21.levelOver)
@@ -1474,12 +1482,110 @@ namespace GameJam.Prototype
             staged.Clear();
             lastPlayed = "";
             notice = "第 " + rulesV21.turnIndex + " 回合开始：行动机会 " + rulesV21.actionPoints + "/" +
-                     GameJam.Rules.LevelRun.ActionPointsPerTurn + "；附魔层数 −1：" +
+                     GameJam.Rules.LevelRun.ActionPointsPerTurn + "；附魔层数保留：" +
                      rulesV21.blade.layers.Describe();
 
             rulesV21.RebuildHand();
             rulesV21.SyncTableVisuals();
             rulesV21.SyncJuicer();
+
+            if (completedTurn >= 1 && completedTurn <= 3)
+            {
+                shopVisit = ShopVisitV30.Begin(completedTurn);
+                if (shopVisit != null)
+                {
+                    shopRollConfirmationOpen = false;
+                    notice = shopVisit.merchant.name + "已到访；当前得分 " + rulesV21.score + "，空白卡 " + rulesV21.blankCount;
+                    phase = TablePhase.Shop;
+                    return;
+                }
+            }
+        }
+
+        public bool BuyShopOffer(int offerIndex)
+        {
+            if (phase != TablePhase.Shop || rulesV21 == null || shopVisit == null ||
+                offerIndex < 0 || offerIndex >= shopVisit.offers.Count) return false;
+
+            ShopOfferV30 offer = shopVisit.offers[offerIndex];
+            if (!shopVisit.CanPayFor(offer, rulesV21.score)) return false;
+
+            if (offer.spell)
+            {
+                Spell spell = CardSpecs.Spell(offer.id);
+                if (spell == null) return false;
+                rulesV21.handSpells.Add(new SpellCard { spell = spell.Clone() });
+            }
+            else
+            {
+                Ingredient material = CardSpecs.Material(offer.id);
+                if (material == null) return false;
+                rulesV21.hand.Add(new MaterialCard
+                {
+                    card = material.Clone(),
+                    H = material.h,
+                    D = material.d,
+                    V = material.v,
+                    source = MaterialCard.ValueSource.CardTable,
+                });
+            }
+
+            rulesV21.score -= offer.price;
+            shopVisit.MarkBought(offer);
+            rulesV21.RebuildHand();
+            rulesV21.SyncTableVisuals();
+            notice = "购买「" + offer.name + "」−" + offer.price + "分，已加入手牌";
+            return true;
+        }
+
+        public void AskShopReroll()
+        {
+            if (phase != TablePhase.Shop || shopVisit == null || shopVisit.blankCardSpent ||
+                shopVisit.rerollsRemaining > 0 || rulesV21 == null || rulesV21.blankCount <= 0) return;
+            shopRollConfirmationOpen = true;
+        }
+
+        public bool ConfirmShopReroll()
+        {
+            if (phase != TablePhase.Shop || shopVisit == null || rulesV21 == null ||
+                !shopRollConfirmationOpen || rulesV21.blankCount <= 0) return false;
+
+            rulesV21.blankCount--;
+            bool rolled = shopVisit.Reroll(true);
+            shopRollConfirmationOpen = false;
+            if (!rolled)
+            {
+                rulesV21.blankCount++;
+                return false;
+            }
+            notice = "消耗1张空白卡，商店已重抽；还可重抽 " + shopVisit.rerollsRemaining + " 次";
+            return true;
+        }
+
+        public bool RerollShopForFree()
+        {
+            if (phase != TablePhase.Shop || shopVisit == null || !shopVisit.blankCardSpent ||
+                shopVisit.rerollsRemaining <= 0) return false;
+            bool rolled = shopVisit.Reroll(false);
+            if (rolled) notice = "商店已重抽；还可重抽 " + shopVisit.rerollsRemaining + " 次";
+            return rolled;
+        }
+
+        public void CancelShopReroll() { shopRollConfirmationOpen = false; }
+
+        public void LeaveShop()
+        {
+            if (phase != TablePhase.Shop || rulesV21 == null) return;
+            shopRollConfirmationOpen = false;
+            shopVisit = null;
+            staged.Clear();
+            lastPlayed = "";
+            phase = TablePhase.Select;
+            rulesV21.SelectNewestTableMaterial();
+            rulesV21.RebuildHand();
+            rulesV21.SyncTableVisuals();
+            rulesV21.SyncJuicer();
+            notice = "离开商店；第 " + rulesV21.turnIndex + " 回合开始";
         }
 
         // ══════════════════════════════════════════════════════════════

@@ -1156,8 +1156,8 @@ namespace GameJam.Rules
                 action = Act(RuleOp.AddLayer, rawSeg, "");
                 action.layers = kinds.ToArray();
                 action.amount = NumBefore(s, "层");
-                action.permanent = s.Contains("不衰退");
-                if (action.permanent) action.note = "不衰退：不随回合衰减，但会被『消耗所有 X 层数』消耗";
+                action.permanent = true;
+                action.note = "v3.0 层数不会随回合或启动衰退；仅显式消耗规则会移除";
                 return true;
             }
 
@@ -1375,7 +1375,12 @@ namespace GameJam.Rules
                 }
                 else
                 {
-                    int shi = s.IndexOf("时，", StringComparison.Ordinal);
+                    // 「同时，」是并列连接词，不是「发生……时」的条件前缀。
+                    // 如果按普通的「时，」拆分，冰霜的「同时，使刀片H+1」会被
+                    // 错误解析成条件「同」+ 动作，整条法术效果因此失效。
+                    int shi = s.StartsWith("同时，", StringComparison.Ordinal)
+                        ? -1
+                        : s.IndexOf("时，", StringComparison.Ordinal);
                     if (shi > 0)
                     {
                         condText = s.Substring(0, shi + 1).Trim();

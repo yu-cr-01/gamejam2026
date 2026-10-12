@@ -243,7 +243,7 @@ namespace GameJam.Data
         /// <summary>刀片实际硬度 —— 走的是效果组合，不是读死字段。</summary>
         public int BladeHardness()
         {
-            return BladeResolvedAttrs().Get(AttrId.Salt);
+            return BladeResolvedAttrs().Get(AttrId.H);
         }
 
         /// <summary>刀片实际属性，带字母标签，例如 "H 盐性 20 · D 汞性 0 · V 硫性 3"。</summary>

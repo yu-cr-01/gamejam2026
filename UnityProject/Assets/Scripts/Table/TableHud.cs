@@ -2220,6 +2220,7 @@ namespace GameJam.Prototype
             {
                 case TablePhase.Simulating:  DrawSimulating();  break;
                 case TablePhase.TurnResult:  DrawTurnResult();  break;
+                case TablePhase.Shop:        DrawShopV30();     break;
                 case TablePhase.LevelEnd:    DrawLevelEnd();    break;
                 case TablePhase.LevelResult: DrawLevelResult(); break;
             }
@@ -2525,6 +2526,94 @@ namespace GameJam.Prototype
             GUILayout.EndArea();
 
             EndPanelFrame(turnResultDrag, box, prevMatrix);
+        }
+
+        private void DrawShopV30()
+        {
+            if (turnLoop == null || turnLoop.rulesV21 == null || turnLoop.shopVisit == null) return;
+            TableRulesV21 rules = turnLoop.rulesV21;
+            ShopVisitV30 shop = turnLoop.shopVisit;
+
+            float w = Mathf.Max(360f, Mathf.Min(940f, Screen.width - 32f));
+            float h = Mathf.Max(300f, Mathf.Min(560f, Screen.height - 32f));
+            Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+            GUI.Box(box, GUIContent.none, panelBoxGlass);
+            GUILayout.BeginArea(new Rect(box.x + 18f, box.y + 14f, w - 36f, h - 28f));
+
+            GUILayout.Label(shop.merchant.name, h1Panel);
+            GUILayout.Label("回合结束商店　得分 " + rules.score + "　空白卡 " + rules.blankCount
+                            + "　每张卡按稀有度定价：普通 1 / 稀有 2 / 传说 3 分", bodyPanel);
+            GUILayout.Space(8f);
+
+            for (int row = 0; row < 2; row++)
+            {
+                GUILayout.BeginHorizontal();
+                int first = row == 0 ? 0 : 3;
+                int count = row == 0 ? 3 : 2;
+                for (int col = 0; col < count; col++)
+                {
+                    int index = first + col;
+                    if (index >= shop.offers.Count) break;
+                    ShopOfferV30 offer = shop.offers[index];
+                    GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
+                    GUILayout.Label(offer.name + (offer.spell ? "　法术" : "　素材"), bodyPanel,
+                                    GUILayout.MinHeight(36f));
+                    GUILayout.Label(RarityLabel(offer.rarity) + "　" + offer.price + " 分", dimPanel);
+
+                    bool wasEnabled = GUI.enabled;
+                    GUI.enabled = shop.CanPayFor(offer, rules.score);
+                    string label = !offer.available ? "属性待定" :
+                                   (offer.bought ? "已购买" : (rules.score < offer.price ? "分数不足" : "购买"));
+                    if (GUILayout.Button(label, btn, GUILayout.Height(34f))) turnLoop.BuyShopOffer(index);
+                    GUI.enabled = wasEnabled;
+                    GUILayout.EndVertical();
+                }
+                GUILayout.EndHorizontal();
+                GUILayout.Space(8f);
+            }
+
+            GUILayout.FlexibleSpace();
+            GUILayout.BeginHorizontal();
+            bool canPay = !shop.blankCardSpent && shop.rerollsRemaining == 0 && rules.blankCount > 0;
+            bool wasGuiEnabled = GUI.enabled;
+            GUI.enabled = canPay;
+            if (GUILayout.Button("消耗空白卡重抽", btn, GUILayout.Height(40f))) turnLoop.AskShopReroll();
+            GUI.enabled = wasGuiEnabled;
+
+            bool canRerollFree = shop.blankCardSpent && shop.rerollsRemaining > 0;
+            GUI.enabled = canRerollFree;
+            if (GUILayout.Button("再次重抽（剩 " + shop.rerollsRemaining + " 次）", btn, GUILayout.Height(40f)))
+                turnLoop.RerollShopForFree();
+            GUI.enabled = wasGuiEnabled;
+
+            if (GUILayout.Button("离开", btn, GUILayout.Height(40f))) turnLoop.LeaveShop();
+            GUILayout.EndHorizontal();
+            GUILayout.EndArea();
+
+            if (turnLoop.shopRollConfirmationOpen) DrawShopRollConfirmation(shop);
+        }
+
+        private void DrawShopRollConfirmation(ShopVisitV30 shop)
+        {
+            Rect box = CenterBox(Mathf.Min(480f, Screen.width - 32f), 220f);
+            GUI.Box(box, GUIContent.none, panelBoxGlass);
+            GUILayout.BeginArea(new Rect(box.x + 24f, box.y + 18f, box.width - 48f, box.height - 36f));
+            GUILayout.Label(shop.merchant.name, h1Panel);
+            GUILayout.Label(shop.merchant.rollPrompt, bodyPanel, GUILayout.MinHeight(70f));
+            GUILayout.FlexibleSpace();
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("确认，消耗空白卡", btn, GUILayout.Height(38f))) turnLoop.ConfirmShopReroll();
+            if (GUILayout.Button("再想想", btn, GUILayout.Height(38f))) turnLoop.CancelShopReroll();
+            GUILayout.EndHorizontal();
+            GUILayout.EndArea();
+        }
+
+        private static string RarityLabel(string rarity)
+        {
+            if (rarity == "common") return "普通";
+            if (rarity == "rare") return "稀有";
+            if (rarity == "legendary") return "传说";
+            return "未知稀有度";
         }
 
         /// <summary>
@@ -2930,7 +3019,7 @@ namespace GameJam.Prototype
 
             // 模块没有"自己的属性"，印记固定给液体形；食材取数值最高的那个
             AttrId dominant = card.IsModule
-                ? AttrId.Mercury
+                ? AttrId.D
                 : ProceduralArt.DominantAttr(card.card.ingredient);
 
             AttrDef domDef = AttrCatalog.Get(dominant);

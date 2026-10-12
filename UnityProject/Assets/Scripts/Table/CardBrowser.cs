@@ -367,10 +367,10 @@ namespace GameJam.Prototype
 
         private static AttrId DominantOfEnchant(string enchant)
         {
-            if (enchant == "热") return AttrId.Sulfur;     // 气/升腾
-            if (enchant == "冷") return AttrId.Mercury;    // 液/凝结
-            if (enchant == "酸") return AttrId.Salt;       // 固/腐蚀
-            return AttrId.Mercury;
+            if (enchant == "热") return AttrId.V;     // 气/升腾
+            if (enchant == "冷") return AttrId.D;    // 液/凝结
+            if (enchant == "酸") return AttrId.H;       // 固/腐蚀
+            return AttrId.D;
         }
 
         // ── 样式 ──────────────────────────────────────────────────────

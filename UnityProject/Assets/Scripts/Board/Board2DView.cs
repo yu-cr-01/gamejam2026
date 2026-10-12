@@ -243,9 +243,9 @@ namespace GameJam.Prototype
         private static int ScoreOf(Ingredient ing)
         {
             if (ing == null) return 0;
-            return ing.attrs.Get(AttrId.Salt) * 8
-                 + ing.attrs.Get(AttrId.Mercury) * 8
-                 + ing.attrs.Get(AttrId.Sulfur) * 8;
+            return ing.attrs.Get(AttrId.H) * 8
+                 + ing.attrs.Get(AttrId.D) * 8
+                 + ing.attrs.Get(AttrId.V) * 8;
         }
 
         private void AdvanceBlend()
@@ -441,12 +441,12 @@ namespace GameJam.Prototype
             for (int i = 0; i < played.Count; i++)
             {
                 if (played[i] == null) continue;
-                h += played[i].attrs.Get(AttrId.Salt);
-                d += played[i].attrs.Get(AttrId.Mercury);
-                v += played[i].attrs.Get(AttrId.Sulfur);
+                h += played[i].attrs.Get(AttrId.H);
+                d += played[i].attrs.Get(AttrId.D);
+                v += played[i].attrs.Get(AttrId.V);
             }
 
-            AttrId[] ids = { AttrId.Salt, AttrId.Mercury, AttrId.Sulfur };
+            AttrId[] ids = { AttrId.H, AttrId.D, AttrId.V };
             int[] vals = { h, d, v };
 
             float cell = r.width / 3f;

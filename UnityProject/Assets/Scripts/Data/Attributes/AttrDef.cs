@@ -11,7 +11,7 @@ namespace GameJam.Data
     /// 【三属性体系下的字段】
     /// 策划表的一行有 4 列：属性(字母) / 炼金名 / 代表 / 作用。
     /// 对应到这里就是 letter / displayName / tendency / description。
-    /// 界面想显示 "H 盐性" 就用 Label，想显示作用就取 description。
+    /// 界面想显示 "H 硬度" 就用 Label，想显示作用就取 description。
     /// </summary>
     [Serializable]
     public class AttrDef
@@ -22,7 +22,7 @@ namespace GameJam.Data
         /// <summary>字母代号，例如 "H" / "D" / "V"</summary>
         public string letter;
 
-        /// <summary>炼金名，例如 "盐性"。界面上主显示就用它。</summary>
+        /// <summary>属性名称，例如 "硬度"。</summary>
         public string displayName;
 
         /// <summary>代表什么倾向，例如 "固体倾向"</summary>
@@ -60,7 +60,7 @@ namespace GameJam.Data
             this.higherIsStronger = higherIsStronger;
         }
 
-        /// <summary>界面用的短标签，例如 "H 盐性"。</summary>
+        /// <summary>界面用的短标签，例如 "H 硬度"。</summary>
         public string Label
         {
             get
@@ -83,7 +83,7 @@ namespace GameJam.Data
             return unit.Length > 0 ? value + unit : value.ToString();
         }
 
-        /// <summary>标签 + 数值，例如 "H 盐性 20"。</summary>
+        /// <summary>标签 + 数值，例如 "H 硬度 20"。</summary>
         public string FormatLabeled(int value)
         {
             return Label + " " + Format(value);

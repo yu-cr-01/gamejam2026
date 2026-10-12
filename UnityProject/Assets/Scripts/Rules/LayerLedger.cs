@@ -20,9 +20,11 @@ namespace GameJam.Rules
     }
 
     /// <summary>
-    /// 一种层数的两份计数：**会衰退的** 和 **不衰退的**。
+    /// 一种层数的两份计数：当前规则下新加层数全部永久；保留旧字段用于兼容存档。
     ///
     /// 【为什么分两份而不是给每层打标记】
+    ///   v3.0 规则里层数不随回合或启动衰退，显式消耗规则会清除层数。
+    ///   decaying 字段只用于读取旧存档，不再产生新的衰退层。
     ///   规则里只出现两种问法：
     ///     「消耗所有热层数」—— 不区分衰退与否，两份一起消耗
     ///     「每回合结束衰减」—— 只动衰退那份
@@ -30,8 +32,7 @@ namespace GameJam.Rules
     ///   不必维护一个逐层的列表（那样每次消耗还要挑层、还要处理顺序）。
     ///
     /// 【消耗顺序】
-    ///   部分消耗（"额外消耗1点"这类）**先吃衰退层**：不衰退层的价值就在于留得住，
-    ///   先吃它等于把"不衰退"这个设计意图吃掉了。
+    ///   兼容旧存档时，部分消耗仍先清旧衰退层。
     ///   整体消耗（"消耗所有X层数"）两份都吃 —— 策划备注里写明了这条。
     /// </summary>
     [Serializable]
@@ -81,8 +82,8 @@ namespace GameJam.Rules
         /// <summary>这类层数"有附魔"吗（规则里的「若刀片有热附魔」）。</summary>
         public bool Has(LayerKind kind) { return stacks[(int)kind].Total > 0; }
 
-        /// <summary>加层。permanent = true 表示这批层数不衰退。</summary>
-        public void Add(LayerKind kind, int amount, bool permanent = false)
+        /// <summary>加层。新规则下默认永久；第三个参数只为兼容旧调用保留。</summary>
+        public void Add(LayerKind kind, int amount, bool permanent = true)
         {
             if (amount <= 0) return;
             LayerStack s = stacks[(int)kind];
@@ -134,13 +135,11 @@ namespace GameJam.Rules
         }
 
         /// <summary>
-        /// 回合结束的衰减：**只掉衰退层，每类掉 1 层**。
-        /// 不衰退层永远不动 —— 这是"不衰退"的全部含义（见策划备注）。
+        /// v3.0 层数不会随回合衰退。该入口保留给旧调用与存档兼容。
         /// </summary>
         public void DecayTurn()
         {
-            for (int i = 0; i < KindCount; i++)
-                if (stacks[i].decaying > 0) stacks[i].decaying--;
+            // Intentionally empty: layer loss is always explicit in v3.0.
         }
 
         /// <summary>
@@ -193,7 +192,6 @@ namespace GameJam.Rules
                 if (s.IsEmpty) continue;
 
                 string t = Name((LayerKind)i) + "×" + s.Total;
-                if (s.permanent > 0) t += "（含" + s.permanent + "不衰退）";
                 parts.Add(t);
             }
             return parts.Count == 0 ? "（无层数）" : string.Join(" ", parts);

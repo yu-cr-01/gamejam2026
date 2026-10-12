@@ -497,9 +497,9 @@ namespace GameJam.Rules
             ing.v = v;
 
             if (ing.attrs == null) ing.attrs = new AttrSet();
-            ing.attrs.Set(AttrId.Salt,    h);
-            ing.attrs.Set(AttrId.Mercury, d);
-            ing.attrs.Set(AttrId.Sulfur,  v);
+            ing.attrs.Set(AttrId.H,    h);
+            ing.attrs.Set(AttrId.D, d);
+            ing.attrs.Set(AttrId.V,  v);
         }
 
         /// <summary>采集一张手牌法术（法术没有 H/D/V，那三个字段留 0）。</summary>
@@ -609,7 +609,7 @@ namespace GameJam.Rules
                 }
 
                 seen[(int)kind] = true;
-                b.blade.layers.Add(kind, l.decaying);            // 衰退那份
+                b.blade.layers.Add(kind, l.decaying, false);     // 旧存档 / 兼容计数
                 b.blade.layers.Add(kind, l.permanent, true);     // 不衰退那份
             }
 

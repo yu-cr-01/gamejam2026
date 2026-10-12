@@ -234,8 +234,8 @@ namespace GameJam.Prototype
 
             switch (ProceduralArt.DominantAttr(ingredient))
             {
-                case AttrId.Salt:    return "ice";         // 固
-                case AttrId.Mercury: return "water";       // 液
+                case AttrId.H:    return "ice";         // 固
+                case AttrId.D: return "water";       // 液
                 default:             return "vagour";      // 气（硫性）
             }
         }

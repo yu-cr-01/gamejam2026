@@ -1017,11 +1017,11 @@ namespace GameJam.Prototype
         // ══════════════════════════════════════════════════════════════
 
         /// <summary>
-        /// 结束本回合：所有附魔层数 −1、归零消失；桌面素材保留（正文 §三.6）。
+        /// 结束本回合：附魔层数保留；桌面素材保留（v3.0）。
         /// 第 4 回合结束时关卡结束（正文 §三.7）。
         ///
-        /// 【顺序：补吞 → 衰减 → 换回合】补吞由引擎的 <see cref="TurnEngine.EndTurn"/> 在衰减**之前**
-        ///   做掉（理由见那里），桌面这一层只需要在结果回来之后把"目标卡可能已经离场"这件事
+        /// 【顺序：补吞 → 换回合】补吞由引擎的 <see cref="TurnEngine.EndTurn"/> 执行，
+        ///   桌面这一层只需要在结果回来之后把"目标卡可能已经离场"这件事
         ///   反映到选中状态上 —— 否则 HUD 会继续指着一张已经并入刀片的卡。
         /// </summary>
         public TurnResult EndRound()
@@ -1031,7 +1031,7 @@ namespace GameJam.Prototype
             TurnResult r = engine.EndTurn(BuildState());
             Absorb(r);
 
-            // 补吞就发生在上面这一下里（引擎先补吞、再衰减）。被吞掉的那张如果是当前启动目标，
+            // 补吞就发生在上面这一下里。被吞掉的那张如果是当前启动目标，
             // 必须当场换一张 —— 留着一个已离场的引用，HUD 的"目标素材"和权威同步的自检都会报它。
             if (selected == null || selected.removed || !selected.OnTable || selected.D <= 0)
             {
@@ -3246,9 +3246,9 @@ namespace GameJam.Prototype
 
             if (!fromCardTable && ing.attrs != null)
             {
-                int ah = ing.attrs.Get(AttrId.Salt);
-                int ad = ing.attrs.Get(AttrId.Mercury);
-                int av = ing.attrs.Get(AttrId.Sulfur);
+                int ah = ing.attrs.Get(AttrId.H);
+                int ad = ing.attrs.Get(AttrId.D);
+                int av = ing.attrs.Get(AttrId.V);
 
                 if (ah != 0 || ad != 0 || av != 0)
                 {
@@ -3283,9 +3283,9 @@ namespace GameJam.Prototype
             // CardFactory 的属性版式读的是 attrs（沿用旧玩法那套），不同步的话
             // 桌上每张卡的属性区都是 "H 0 / D 0 / V 0"，看起来像数据没加载。
             if (ing.attrs == null) ing.attrs = new AttrSet();
-            ing.attrs.Set(AttrId.Salt,    ing.h);
-            ing.attrs.Set(AttrId.Mercury, ing.d);
-            ing.attrs.Set(AttrId.Sulfur,  ing.v);
+            ing.attrs.Set(AttrId.H,    ing.h);
+            ing.attrs.Set(AttrId.D, ing.d);
+            ing.attrs.Set(AttrId.V,  ing.v);
         }
 
         /// <summary>
