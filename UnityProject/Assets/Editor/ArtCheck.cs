@@ -104,6 +104,41 @@ namespace GameJam.EditorTools
             }
 
             sb.AppendLine();
+            sb.AppendLine("===== v3.0 单卡美术覆盖（卡表 31 张素材）");
+            List<Ingredient> v30Materials = CardSpecs.Materials();
+            foreach (Ingredient ing in v30Materials)
+            {
+                if (ing == null) continue;
+                if (!CardArt.IsV30Card(ing.id))
+                {
+                    sb.AppendLine("  [缺映射] " + ing.id + " / " + ing.name);
+                    problems++;
+                    continue;
+                }
+
+                Texture2D face = CardArt.FaceV30(ing);
+                if (face == null)
+                {
+                    sb.AppendLine("  [拼接失败] " + ing.id + " / " + ing.name);
+                    problems++;
+                    continue;
+                }
+
+                sb.AppendLine("  [有] " + ing.id.PadRight(20) + ing.name + "  " + face.width + "x" + face.height);
+                if (!CardArt.HasV30Illustration(ing.id))
+                    sb.AppendLine("       [提醒] 下载包中没有独立插画，当前只显示系列底板与数值牌");
+                try
+                {
+                    string path = System.IO.Path.Combine(dumpDir, "face_v30_" + ing.id + ".png");
+                    System.IO.File.WriteAllBytes(path, face.EncodeToPNG());
+                }
+                catch (System.Exception ex)
+                {
+                    sb.AppendLine("       → v3.0 卡面导出失败：" + ex.Message);
+                }
+            }
+
+            sb.AppendLine();
             sb.AppendLine("===== 破壁机立绘（" + BlenderArt.ArtRoot + "）");
             // 立绘剪影现在走 ArtTextures.Read，不开 Read/Write 也能读 —— 只报告，不算问题
             foreach (string f in JuicerFrames)

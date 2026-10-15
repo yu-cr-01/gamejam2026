@@ -348,6 +348,8 @@ namespace GameJam.Prototype
 
         private Texture2D MaterialFace(Ingredient ing)
         {
+            Texture2D v30 = CardArt.FaceForCard(Card.Of(ing));
+            if (v30 != null) return v30;
             string element = CardArt.ElementOf(ing.id, ing, false);
             if (element != null)
             {

@@ -239,11 +239,22 @@ namespace GameJam.Prototype
                 accent   = ProceduralArt.IngredientColor(c.id);
                 dominant = ProceduralArt.DominantAttr(c.ingredient);
                 statsIng = c.ingredient;
+                if (CardArt.IsV30Card(c.id) && statsIng != null)
+                {
+                    // v3.0 卡面展示卡表 H/D/V；旧图鉴 attrs 仍供旧玩法使用。
+                    statsIng = statsIng.Clone();
+                    statsIng.attrs = new AttrSet();
+                    statsIng.attrs.Set(AttrId.H, statsIng.h);
+                    statsIng.attrs.Set(AttrId.D, statsIng.d);
+                    statsIng.attrs.Set(AttrId.V, statsIng.v);
+                }
                 sub      = (c.ingredient != null && c.ingredient.attrs != null)
                            ? StatsText(c.ingredient) : null;
             }
 
-            PlayCard card = BuildCard(c.name, accent, dominant, sub, statsIng, parent, CardArt.ElementOf(c));
+            Texture2D face = CardArt.FaceForCard(c);
+            bool v30Art = face != null && CardArt.IsV30Card(c.id);
+            PlayCard card = BuildCard(c.name, accent, dominant, sub, statsIng, parent, face, v30Art);
             card.Setup(c, home, euler);
             return card;
         }
@@ -261,7 +272,7 @@ namespace GameJam.Prototype
         /// </summary>
         private static PlayCard BuildCard(string title, Color accent, AttrId dominant,
                                           string subText, Ingredient statsIng,
-                                          Transform parent, string artElement)
+                                          Transform parent, Texture2D preferredFace, bool v30Art)
         {
             // ① 根节点：scale = 1，挂脚本和刚体
             GameObject root = new GameObject("Card_" + title);
@@ -313,7 +324,7 @@ namespace GameJam.Prototype
 
             // 卡面贴图：优先正式美术（CardArt 会把通用卡底 + 元素插画 + 名字牌 + 数值牌拼好），
             // 任何一个切片缺失都会退回程序化卡面，不会画成空白。
-            Texture2D faceTex = CardArt.Face(artElement);
+            Texture2D faceTex = preferredFace;
             bool artFace = faceTex != null;
             if (!artFace) faceTex = ProceduralArt.CardFace(accent, dominant);
 
@@ -332,8 +343,10 @@ namespace GameJam.Prototype
             if (artFace)
             {
                 float y = CardThick * 0.5f + 0.0022f;
-                AddText(root.transform, title, CardArt.NameOnPlate.z, CardArt.NameOnPlateSize,
-                        CardArt.InkOnPlate, y, CardArt.NameOnPlate.x, NameTextObject);
+                Vector3 namePosition = v30Art ? CardArt.V30NameOnPlate : CardArt.NameOnPlate;
+                float nameSize = v30Art ? CardArt.V30NameOnPlateSize : CardArt.NameOnPlateSize;
+                AddText(root.transform, title, namePosition.z, nameSize,
+                        CardArt.InkOnPlate, y, namePosition.x, NameTextObject);
 
                 // 三个数字：H / D / V 分别进 上（菱形）/ 中（圆）/ 下（方）
                 if (statsIng != null && statsIng.attrs != null)

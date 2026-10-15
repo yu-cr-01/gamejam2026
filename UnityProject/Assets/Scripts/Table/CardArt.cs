@@ -36,6 +36,7 @@ namespace GameJam.Prototype
     public static class CardArt
     {
         public const string ArtRoot = "Art/Card/";
+        private const string V30Root = "Art/CardV30/";
 
         /// <summary>效果图参考尺寸 —— 美术出图的坐标系（左上角原点）。</summary>
         private const int RefW = 136;
@@ -209,6 +210,52 @@ namespace GameJam.Prototype
 
         private static readonly Dictionary<string, Texture2D> cache =
             new Dictionary<string, Texture2D>();
+        private static readonly Dictionary<string, Texture2D> v30Cache =
+            new Dictionary<string, Texture2D>();
+
+        private sealed class V30CardArt
+        {
+            public string family;
+            public string backgroundPrefix;
+            public string image;
+            public bool rootImage;
+            public string familyPrefix;
+        }
+
+        private static readonly Dictionary<string, V30CardArt> V30Cards = new Dictionary<string, V30CardArt>
+        {
+            { "alien_alloy",      new V30CardArt { family = "card_common", familyPrefix = "card_common", image = "extraterrestrialalloy.png", rootImage = true } },
+            { "white_phosphorus", new V30CardArt { family = "card_common", familyPrefix = "card_common", image = "whitephosphorus.png", rootImage = true } },
+            { "water",            new V30CardArt { family = "water", familyPrefix = "card_water", image = "water.png" } },
+            { "ice",              new V30CardArt { family = "water", familyPrefix = "card_water", image = "ice.png" } },
+            { "steam",            new V30CardArt { family = "water", familyPrefix = "card_water", image = "vapor.png" } },
+            { "wood",             new V30CardArt { family = "wood", familyPrefix = "card_wood", image = "wood.png" } },
+            { "carbon",           new V30CardArt { family = "wood", familyPrefix = "card_wood", image = "carbon.png" } },
+            { "leather",          new V30CardArt { family = "wood", familyPrefix = "card_wood", image = "LEATHER.png" } },
+            { "spell_scroll",     new V30CardArt { family = "wood", familyPrefix = "card_wood", image = "spellscroll.png" } },
+            { "copper",           new V30CardArt { family = "copper", familyPrefix = "card_copper", image = "card_copper_img.png" } },
+            { "molten_copper",    new V30CardArt { family = "copper", familyPrefix = "card_copper", image = "card_moltencopper_img.png" } },
+            { "copper_solution",  new V30CardArt { family = "copper", familyPrefix = "card_copper", image = "card_coppersolution_img.png" } },
+            { "copper_vapor",     new V30CardArt { family = "copper", familyPrefix = "card_copper", image = "card_coppervapor_img.png" } },
+            { "iron",             new V30CardArt { family = "iron", familyPrefix = "card_iron", image = "" } },
+            { "molten_iron",      new V30CardArt { family = "iron", familyPrefix = "card_iron", image = "molteniron.png" } },
+            { "iron_solution",    new V30CardArt { family = "iron", familyPrefix = "card_iron", image = "ironsolution.png" } },
+            { "iron_vapor",       new V30CardArt { family = "iron", familyPrefix = "card_iron", image = "ironvapor.png" } },
+            { "gold",             new V30CardArt { family = "gold", familyPrefix = "card_gold", image = "card_gold_img.png" } },
+            { "molten_gold",      new V30CardArt { family = "gold", familyPrefix = "card_gold", image = "card_moltengold_img.png" } },
+            { "salt",             new V30CardArt { family = "salt", familyPrefix = "card_salt", image = "card_salt.png" } },
+            { "salt_solution",    new V30CardArt { family = "salt", familyPrefix = "card_salt", image = "card_saltsolution.png" } },
+            { "mercury",          new V30CardArt { family = "mercury", backgroundPrefix = "card_mercury", familyPrefix = "mercury", image = "mercury.png" } },
+            { "mercury_vapor",    new V30CardArt { family = "mercury", backgroundPrefix = "card_mercury", familyPrefix = "mercury", image = "mercuryvapor.png" } },
+            { "solid_mercury",    new V30CardArt { family = "mercury", backgroundPrefix = "card_mercury", familyPrefix = "mercury", image = "solidmercury.png" } },
+            { "sulfur",           new V30CardArt { family = "sulfur", familyPrefix = "card_sulfur", image = "sulfur.png" } },
+            { "sulfur_gas",       new V30CardArt { family = "sulfur", familyPrefix = "card_sulfur", image = "sulfurgas.png" } },
+            { "sulfur_liquid",    new V30CardArt { family = "sulfur", familyPrefix = "card_sulfur", image = "sulfurliquid.png" } },
+            { "sulfur_powder",    new V30CardArt { family = "sulfur", familyPrefix = "card_sulfur", image = "card_sulfurflavour.png" } },
+            { "sand",             new V30CardArt { family = "sand", familyPrefix = "card_sand", image = "sand.png" } },
+            { "molten_glass",     new V30CardArt { family = "sand", familyPrefix = "card_sand", image = "moltenglass.png" } },
+            { "glass",            new V30CardArt { family = "sand", familyPrefix = "card_sand", image = "glass.png" } },
+        };
 
         // ══════════════════════════════════════════════════════════════
         //  对外
@@ -251,6 +298,42 @@ namespace GameJam.Prototype
             return Face(element);
         }
 
+        /// <summary>优先使用 v3.0 单卡插画与系列卡面，缺资源时回退旧物态卡面。</summary>
+        public static Texture2D FaceForCard(Card c)
+        {
+            if (c == null || c.IsModule || c.ingredient == null) return Face(c);
+            Texture2D v30 = FaceV30(c.ingredient);
+            if (v30 != null) return v30;
+            return Face(c);
+        }
+
+        public static Texture2D FaceV30(Ingredient material)
+        {
+            if (material == null || string.IsNullOrEmpty(material.id)) return null;
+            V30CardArt spec;
+            if (!V30Cards.TryGetValue(material.id, out spec)) return null;
+            string key = material.id + "|" + material.rarity;
+            Texture2D cached;
+            if (v30Cache.TryGetValue(key, out cached)) return cached;
+            try { cached = ComposeV30(spec, material.rarity); }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[CardArt] v3.0 卡面拼接失败：" + material.id + " · " + e.Message);
+            }
+            v30Cache[key] = cached;
+            return cached;
+        }
+
+        public static bool IsV30Card(string id) { return !string.IsNullOrEmpty(id) && V30Cards.ContainsKey(id); }
+        public static bool HasV30Illustration(string id)
+        {
+            V30CardArt spec;
+            return !string.IsNullOrEmpty(id) && V30Cards.TryGetValue(id, out spec) && !string.IsNullOrEmpty(spec.image);
+        }
+
+        public static Vector3 V30NameOnPlate { get { return new Vector3(-0.0265f, 0f, 0.129f); } }
+        public const float V30NameOnPlateSize = 0.0105f;
+
         public static Texture2D Face(string element)
         {
             if (string.IsNullOrEmpty(element)) return null;
@@ -278,6 +361,95 @@ namespace GameJam.Prototype
         // ══════════════════════════════════════════════════════════════
         //  拼接
         // ══════════════════════════════════════════════════════════════
+
+        private static Texture2D ComposeV30(V30CardArt spec, string rarity)
+        {
+            string backgroundPrefix = string.IsNullOrEmpty(spec.backgroundPrefix) ? spec.familyPrefix : spec.backgroundPrefix;
+            Texture2D background = LoadV30(spec.family + "/" + backgroundPrefix + "_bg");
+            Texture2D title = LoadV30(spec.family + "/" + spec.familyPrefix + "_text_bg_01_big");
+            Texture2D diamond = LoadV30(spec.family + "/" + spec.familyPrefix + "_text_bg_02");
+            Texture2D circle = LoadV30(spec.family + "/" + spec.familyPrefix + "_text_bg_03");
+            Texture2D square = LoadV30(spec.family + "/" + spec.familyPrefix + "_text_bg_04");
+            if (background == null || title == null || diamond == null || circle == null || square == null)
+                return null;
+
+            string imagePath = spec.rootImage ? spec.image : spec.family + "/" + spec.image;
+            Texture2D illustration = string.IsNullOrEmpty(spec.image) ? null : LoadV30(imagePath);
+            Texture2D frame = LoadV30("card_common/" + RarityFrame(rarity));
+            Color32[] canvas = new Color32[RefW * RefH];
+
+            // 系列底板原图 132x174，卡框原图 148x194；按现有卡面坐标系等比落位。
+            BlitScaled(canvas, background, 2, 4, 132, 174);
+            if (illustration != null)
+                BlitFit(canvas, illustration, 8, 42, 96, 108);
+            Blit(canvas, title, 4, 4, false);
+            Blit(canvas, diamond, 100, 91, false); // H 菱形
+            Blit(canvas, circle, 100, 125, false);  // D 圆形
+            Blit(canvas, square, 96, 148, false);   // V 方形
+            if (frame != null) BlitScaled(canvas, frame, 0, 0, RefW, RefH);
+
+            RectInt outline = OpaqueBounds(canvas);
+            if (outline.width < 8 || outline.height < 8) return null;
+            return ToFaceTexture(canvas, outline);
+        }
+
+        private static string RarityFrame(string rarity)
+        {
+            if (rarity == "传说") return "card_frame_gold_img";
+            if (rarity == "稀有") return "card_frame_sliver_img";
+            return "card_frame_white_img";
+        }
+
+        private static Texture2D LoadV30(string relativePath)
+        {
+            if (relativePath.EndsWith(".png", System.StringComparison.OrdinalIgnoreCase))
+                relativePath = relativePath.Substring(0, relativePath.Length - 4);
+            Texture2D t = Resources.Load<Texture2D>(V30Root + relativePath);
+            if (t == null)
+                Debug.LogWarning("[CardArt] 缺少 v3.0 美术资源：" + V30Root + relativePath);
+            return t;
+        }
+
+        private static void BlitFit(Color32[] dst, Texture2D src, int x, int y, int maxW, int maxH)
+        {
+            if (src == null || src.width <= 0 || src.height <= 0) return;
+            float scale = Mathf.Min((float)maxW / src.width, (float)maxH / src.height);
+            int w = Mathf.Max(1, Mathf.RoundToInt(src.width * scale));
+            int h = Mathf.Max(1, Mathf.RoundToInt(src.height * scale));
+            BlitScaled(dst, src, x + (maxW - w) / 2, y + (maxH - h) / 2, w, h);
+        }
+
+        private static void BlitScaled(Color32[] dst, Texture2D src, int x, int y, int width, int height)
+        {
+            if (src == null || width <= 0 || height <= 0) return;
+            Color32[] pixels = ArtTextures.Read(src);
+            int rowStart = RefH - y - height;
+            for (int ry = 0; ry < height; ry++)
+            {
+                int dy = rowStart + ry;
+                if (dy < 0 || dy >= RefH) continue;
+                int sy = src.height - 1 - Mathf.Clamp(Mathf.FloorToInt((ry + 0.5f) * src.height / height), 0, src.height - 1);
+                for (int rx = 0; rx < width; rx++)
+                {
+                    int dx = x + rx;
+                    if (dx < 0 || dx >= RefW) continue;
+                    int sx = Mathf.Clamp(Mathf.FloorToInt((rx + 0.5f) * src.width / width), 0, src.width - 1);
+                    Color32 sp = pixels[sy * src.width + sx];
+                    if (sp.a == 0) continue;
+                    int di = dy * RefW + dx;
+                    Color32 dp = dst[di];
+                    float sa = sp.a / 255f;
+                    float da = dp.a / 255f;
+                    float oa = sa + da * (1f - sa);
+                    if (oa <= 0f) continue;
+                    dst[di] = new Color32(
+                        (byte)Mathf.Clamp(Mathf.RoundToInt((sp.r * sa + dp.r * da * (1f - sa)) / oa), 0, 255),
+                        (byte)Mathf.Clamp(Mathf.RoundToInt((sp.g * sa + dp.g * da * (1f - sa)) / oa), 0, 255),
+                        (byte)Mathf.Clamp(Mathf.RoundToInt((sp.b * sa + dp.b * da * (1f - sa)) / oa), 0, 255),
+                        (byte)Mathf.Clamp(Mathf.RoundToInt(oa * 255f), 0, 255));
+                }
+            }
+        }
 
         private static Texture2D Compose(string element)
         {
