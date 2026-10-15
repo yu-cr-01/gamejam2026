@@ -95,11 +95,8 @@ namespace GameJam.Prototype
         ///   **永远达不到 1000**：玩家只会看到"4 回合耗尽"，像是规则没生效。
         ///   所以 v2.1 走自己这一个目标分，旧流程继续用 levels[].targetScore，两边互不影响。
         ///
-        /// 【60 是怎么来的 —— 这是占位数，待策划定】
-        ///   正文 §2.6 只说"达到目标分即胜利"，**没有给任何目标分数值**。
-        ///   60 ≈ 一关里正常打完十几次启动的得分（按平均每次 4~6 分估），
-        ///   目的是让第一版**能收关**、能验证"达标结束"这条路径。
-        ///   正式数值请策划连同 §2.2 的 H/D/V 一起定，然后改这里一处即可。
+        /// 【目标分配置】常规关卡的正式目标分由 game_config.json 与 campaign_v1.json 提供；
+        ///   这里仅在旧配置没有有效目标分时作为兜底。
         /// </summary>
         public static int V21TargetScore = 60;
 
@@ -134,14 +131,12 @@ namespace GameJam.Prototype
         /// <summary>
         /// 这一关在当前规则模式下**实际**的目标分 —— 界面上的"目标分"一律走这里。
         ///
-        /// 【为什么要有这个函数，而不是各处直接读 lv.targetScore】
-        ///   3D 关卡卡、关卡窗口、HUD 顶栏三处都要显示目标分。如果一处读旧数值、一处读 v2.1 的 60，
-        ///   同一屏上就会出现"目标分 1000"和"目标分 60"打架（真出现过），玩家只会以为坏了一个。
-        ///   判断逻辑收在这里一处，以后加新模式也只改这里。
+        /// 统一读取各关自己的目标分，旧配置缺少有效值时才回退到默认目标。
         /// </summary>
         public static int LevelTargetScore(GameJam.Data.LevelData level)
         {
-            if (UseRulesV21) return V21TargetScore;            // v2.1 走专用目标分
+            if (UseRulesV21)
+                return level != null && level.targetScore > 0 ? level.targetScore : V21TargetScore;
             return level != null ? level.targetScore : 0;      // 旧流程读关卡自己的数值
         }
 
@@ -149,7 +144,7 @@ namespace GameJam.Prototype
         public static float LookSensitivity = 3.2f;
 
         /// <summary>是否显示左下角的操作提示。</summary>
-        public static bool ShowHints = true;
+        public static bool ShowHints = false;
 
         /// <summary>是否显示物理 / 视角这类调试状态。</summary>
         public static bool ShowDebugInfo = false;
@@ -160,7 +155,7 @@ namespace GameJam.Prototype
             UsePlaceholderCardValues  = true;
             V21TargetScore            = 60;
             LookSensitivity           = 3.2f;
-            ShowHints                 = true;
+            ShowHints                 = false;
             ShowDebugInfo             = false;
         }
     }

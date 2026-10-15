@@ -43,6 +43,13 @@ namespace GameJam.Rules
         /// <summary>【正文没给】卡牌文本写"获得一定分数"时的占位值（汞蒸气 / 熔融玻璃）。</summary>
         public int PlaceholderScorePerLayer = 5;
 
+        /// <summary>关卡启动分倍率，默认 1/1；Boss 关配置为 1/2。</summary>
+        public int ActivationScoreNumerator = 1;
+        public int ActivationScoreDenominator = 1;
+
+        /// <summary>每次真实形态变化额外加的规则分。</summary>
+        public int ShapeChangeScoreBonus;
+
         /// <summary>固定随机种子："变为一张随机法术卡"要可复现，否则日志对不上。</summary>
         public int RandomSeed = 20261006;
 
@@ -688,11 +695,16 @@ namespace GameJam.Rules
             // ── ③ 结算收益 ────────────────────────────────────────────
             int targetV = target.removed ? originalV : target.V;
             int bladeV = state.blade.V;
-            r.activationScore = targetV + bladeV;
+            int rawActivationScore = targetV + bladeV;
+            int denominator = Math.Max(1, rules.ActivationScoreDenominator);
+            r.activationScore = rawActivationScore * Math.Max(0, rules.ActivationScoreNumerator) / denominator;
             state.score += r.activationScore;
 
             Log(r, "③ 结算收益：目标 V=" + targetV + (target.removed ? "（目标已移除 → 用启动时的原始卡 V=" + originalV + "）" : "") +
-                    " + 刀片 V=" + bladeV + " = " + r.activationScore + " 分　→ 总分 " + state.score);
+                    " + 刀片 V=" + bladeV + " = " + rawActivationScore + " 分" +
+                    (denominator != Math.Max(0, rules.ActivationScoreNumerator)
+                        ? "，关卡倍率 " + rules.ActivationScoreNumerator + "/" + denominator + " → " + r.activationScore + " 分"
+                        : "") + "　→ 总分 " + state.score);
 
             // ③b 卡牌自己的「启动」文本里**改本次得分**的那一档 —— 必须等 ③ 把 activationScore
             //   算出来才执行（见 startup ⓪ 的说明）。放在 ④ 之前：这样"得分翻倍"之后再爆刀，
@@ -753,6 +765,12 @@ namespace GameJam.Rules
                 {
                     case EnchantOutcome.FormChange:
                         DoFormChange(r, state, target, m);
+                        if (rules.ShapeChangeScoreBonus > 0)
+                        {
+                            state.score += rules.ShapeChangeScoreBonus;
+                            r.ruleScore += rules.ShapeChangeScoreBonus;
+                            Log(r, "　　Boss 条件：发生形态变化，额外 +" + rules.ShapeChangeScoreBonus + " 分");
+                        }
                         Log(r, "　　（正文 A 节：形态变化 → 素材结算结束，不再检查后续附魔）");
                         removed = true;
                         break;

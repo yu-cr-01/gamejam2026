@@ -90,8 +90,8 @@ namespace GameJam.Prototype
         ///   拟合万一算不出来（点集空着），画面至少还有相机可用。两者同源（同一个 pose），
         ///   所以"兜底"和"开场"永远是一台机位，不会各写一份。
         /// </summary>
-        private static readonly Vector3 TitleEye  = new Vector3(0f, 1.05f, -1.02f);
-        private static readonly Vector3 TitleLook = new Vector3(0f, 0f, 0.10f);
+        private static readonly Vector3 TitleEye  = new Vector3(0.18f, 1.15f, -1.60f);
+        private static readonly Vector3 TitleLook = new Vector3(0.18f, 0.12f, 0.10f);
 
         /// <summary>
         /// 桌面材质里那个"还没贴木纹之前"的染色。
@@ -100,6 +100,7 @@ namespace GameJam.Prototype
         ///   说明为什么它必须浅：深色染色会把木纹贴图的亮度再乘一次，桌面就成了黑的。
         /// </summary>
         private static readonly Color TableColor  = new Color(0.62f, 0.50f, 0.42f);
+        private static readonly Color TableSideColor = new Color(0.17f, 0.105f, 0.064f);
 
         /// <summary>
         /// 卡槽指示块（也就是吸附判定用的"框"）的尺寸。两处共用，别各写一个数。
@@ -318,7 +319,8 @@ namespace GameJam.Prototype
             //   它必须是**独立的**一条：桌面视角会被 ReframeBoardView 按内容重算，
             //   而开场那一屏的构图要和以前一模一样 —— 两条名字分开，"改一条不会顺手改另一条"。
             rig.Register(TitleView, TitleEye, TitleLook);
-            rig.Register(BoardView, TitleEye, TitleLook);
+            rig.Register(BoardView, new Vector3(0f, TitleEye.y, TitleEye.z),
+                                    new Vector3(0f, TitleLook.y, TitleLook.z));
             rig.Register("hand",  new Vector3(0f, 0.52f, -1.00f), new Vector3(0f, 0f, -0.56f));
             rig.Register("top",   new Vector3(0f, 1.55f, 0.02f),  new Vector3(0f, 0f, 0.02f));
 
@@ -327,8 +329,8 @@ namespace GameJam.Prototype
             //   机器一挪、特写还盯着旧坐标的话，"榨汁机特写"就变成拍空气 ——
             //   摆位参数集中在 JuicerAt 一处，这条机位也得跟着它，否则"改一处即可"就不成立。
             //   偏移量是按旧机位 (0.74, 0.20, 0.16) 反推的，所以机器没挪时构图与以前一模一样。
-            rig.Register("juicer", new Vector3(0.30f, 0.46f, -0.42f),
-                                   JuicerAt + new Vector3(0.02f, 0.20f, -0.04f));
+            rig.Register("juicer", JuicerAt + new Vector3(-0.45f, 0.65f, -1.10f),
+                                   JuicerAt + new Vector3(0f, 0.30f, 0f));
 
             // 自由转头的锚点：比"桌面视角"稍微退后一点，
             // 站定了能看全整张桌子，然后**原地转头**看细节（位置不再变）。
@@ -361,6 +363,17 @@ namespace GameJam.Prototype
             fl.color = new Color(0.72f, 0.78f, 0.95f);    // 冷补光，拉开层次
             fl.shadows = LightShadows.None;
 
+            // 固定柔光替代已删除的蜡烛点光，维持左侧量筒和桌面的可读性。
+            GameObject softFill = new GameObject("TableSoftFill");
+            softFill.transform.SetParent(transform, false);
+            softFill.transform.localPosition = new Vector3(-0.65f, 0.85f, -0.10f);
+            Light soft = softFill.AddComponent<Light>();
+            soft.type = LightType.Point;
+            soft.color = new Color(1f, 0.85f, 0.67f);
+            soft.intensity = 1.2f;
+            soft.range = 3.2f;
+            soft.shadows = LightShadows.None;
+
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
             RenderSettings.ambientLight = new Color(0.16f, 0.16f, 0.20f);
         }
@@ -379,24 +392,72 @@ namespace GameJam.Prototype
             tableBounds = new Bounds(table.transform.position, table.transform.localScale);
 
             Renderer r = table.GetComponent<Renderer>();
+            tableRenderer = r;
             if (r != null)
             {
-                // 程序化木纹。立方体顶面的 UV 是 0..1 铺满整面，
-                // 直接贴会被拉成长条，所以给一个接近"每格 0.9 米见方"的平铺次数。
-                Texture2D wood = ProceduralArt.TableSurface();
+                // 桌边保持深胡桃木纯色，桌面上表面使用独立贴图，避免纹理绕边后拉伸。
+                r.material = MakeMaterial(TableSideColor, 0.05f);
+                r.material.mainTexture = null;
+                tableOriginalColor = r.material.color;
+            }
 
-                // ★ 有木纹 → 染色取近白（贴图自己带颜色，染色只负责微调色温）；
-                //   木纹拿不到（程序化美术被换掉 / 出图失败）→ 退回纯色桌面，
-                //   这时 _Color 就是全部反照率，所以用能看清的中间调 TableColor。
-                r.material = MakeMaterial(wood != null ? TableTint : TableColor, 0.05f);
+            Texture2D wood = Resources.Load<Texture2D>("Art/Table/alchemy_workbench_surface");
+            if (wood == null) wood = ProceduralArt.TableSurface();
 
+            GameObject surface = GameObject.CreatePrimitive(PrimitiveType.Plane);
+            surface.name = "TableSurface";
+            surface.transform.SetParent(transform, false);
+            surface.transform.localScale = new Vector3(0.27f, 1f, 0.185f); // Unity Plane 原始尺寸为 10×10
+            surface.transform.localPosition = new Vector3(0f, 0.002f, 0.06f);
+            Collider surfaceCollider = surface.GetComponent<Collider>();
+            if (surfaceCollider != null) surfaceCollider.enabled = false;
+
+            tableTopRenderer = surface.GetComponent<Renderer>();
+            if (tableTopRenderer != null)
+            {
+                tableTopRenderer.material = MakeMaterial(wood != null ? TableTint : TableColor, 0.05f);
                 if (wood != null)
                 {
-                    r.material.mainTexture = wood;
-                    r.material.mainTextureScale = new Vector2(3f, 2.1f);
+                    tableTopRenderer.material.mainTexture = wood;
+                    tableTopRenderer.material.mainTextureScale = Vector2.one;
                 }
+                tableOriginalTexture = tableTopRenderer.material.mainTexture;
+                tableTopOriginalColor = tableTopRenderer.material.color;
+                LogTableMaterialOnce(tableTopRenderer.material, wood);
+            }
+        }
 
-                LogTableMaterialOnce(r.material, wood);
+        /// <summary>隐藏房间只替换桌面底色，离开后还原原木纹。</summary>
+        public void SetHiddenRoomTheme(string roomId)
+        {
+            bool mercury = roomId == "mercury";
+            bool sacrifice = roomId == "sacrifice";
+            if (tableRenderer != null && tableRenderer.material != null)
+            {
+                if (mercury) tableRenderer.material.color = new Color(0.78f, 0.82f, 0.85f);
+                else if (sacrifice) tableRenderer.material.color = new Color(0.19f, 0.19f, 0.21f);
+                else tableRenderer.material.color = tableOriginalColor;
+            }
+
+            if (tableTopRenderer != null && tableTopRenderer.material != null)
+            {
+                Material top = tableTopRenderer.material;
+                if (mercury)
+                {
+                    top.mainTexture = null;
+                    top.color = new Color(0.78f, 0.82f, 0.85f);
+                }
+                else if (sacrifice)
+                {
+                    top.mainTexture = null;
+                    top.color = new Color(0.19f, 0.19f, 0.21f);
+                }
+                else
+                {
+                    top.mainTexture = tableOriginalTexture;
+                    top.mainTextureScale = Vector2.one;
+                    top.color = tableTopOriginalColor;
+                }
             }
         }
 
@@ -513,19 +574,16 @@ namespace GameJam.Prototype
                 Collider c = m.GetComponent<Collider>();
                 if (c != null) c.enabled = false;      // 别挡住卡牌的射线
 
-                // 贴图只在四个角画了 L 形短角标，其余全透明 ——
-                // 比原来那种不透明方块低调得多。
-                // 初始 alpha = 0：平时完全隐形，拿起牌要放的时候才由
-                // TableInteraction 淡入（8 个槽 × 4 个角标常亮的话桌面全是碎线）。
+                // 常显细边框和类别图标；拖动时由 TableInteraction 加亮并提示可否放入。
                 Renderer mr = m.GetComponent<Renderer>();
                 if (mr != null)
                 {
-                    mr.material = CardFactory.MakeUnlit(ProceduralArt.SlotFrame());
+                    mr.material = CardFactory.MakeUnlit(ProceduralArt.SlotFrame(i == TableTurnLoop.SlotSpell ? 1 : 0));
 
                     Color idle = TableInteraction.MarkerIdle;
-                    idle.a = 0f;
+                    idle.a = 0.72f;
                     mr.material.color = idle;
-                    mr.enabled = false;     // 初始隐形，拿起牌时由 TableInteraction 打开
+                    mr.enabled = true;
                 }
                 slotMarkers[i] = mr;
             }
@@ -611,33 +669,47 @@ namespace GameJam.Prototype
         /// </summary>
         public void RefreshSlotLabels()
         {
-            for (int i = slotLabels.Count - 1; i >= 0; i--)
-                if (slotLabels[i] != null) CardFactory.DestroySafe(slotLabels[i]);
+            if(board==null)board=GetComponentInChildren<TableBoard>();
+            if(slotLabelsParent==null&&board!=null)slotLabelsParent=board.transform;
+            if (slotLabelsParent == null || board == null) return;
+            foreach(Transform child in slotLabelsParent.GetComponentsInChildren<Transform>(true))
+            {
+                if(child==slotLabelsParent)continue;
+                if(child.name.StartsWith("SlotLabel")||child.name.StartsWith("SlotCaption"))
+                {child.gameObject.SetActive(false);CardFactory.DestroySafe(child.gameObject);}
+            }
             slotLabels.Clear();
 
             if (slotLabelsParent == null || board == null) return;
 
-            // 顺序跟着槽的下标走：下标 0 在左、1 在右（见 V21SlotNames 的说明）
-            string[] names = TableSettings.UseRulesV21 ? V21SlotNames : LegacySlotNames;
-
-            for (int i = 0; i < board.SlotCount && i < names.Length; i++)
+            // Remove legacy floating labels, including objects left by a scene reload.
+            for (int i = 0; i < board.SlotCount; i++)
             {
-                // 位置走 SlotLabelPosition（渲染和自检共用同一个算式，见那里的说明）
-                Vector3 at = SlotLabelPosition(i);
-
-                GameObject go = new GameObject("SlotLabel" + i);
-                go.transform.SetParent(slotLabelsParent, false);
-                go.transform.position = at;
-
-                // localZ = 0。这几张桌面文字只能落在负半区或原点 ——
-                // 正的 localZ 完全不渲染，原因见 TableChoiceRig 里那段说明。
-                CardFactory.AddText(go.transform, names[i], 0f, 0.0072f,
-                                    new Color(0.60f, 0.56f, 0.50f), 0.0022f);
-                slotLabels.Add(go);
+                GameObject tag = new GameObject("SlotCaption" + i);
+                tag.transform.SetParent(slotLabelsParent, false);
+                tag.transform.position = board.SlotPosition(i) + new Vector3(0f,0.0032f,-SlotSizeZ * 0.34f);
+                GameObject plate = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                plate.name = "CaptionFrame";
+                plate.transform.SetParent(tag.transform,false);
+                plate.transform.localRotation = Quaternion.Euler(90f,0f,0f);
+                plate.transform.localScale = new Vector3(SlotSizeX*0.82f,0.056f,1f);
+                Collider hit = plate.GetComponent<Collider>(); if(hit!=null)hit.enabled=false;
+                Renderer renderer = plate.GetComponent<Renderer>();
+                renderer.sharedMaterial = CardFactory.MakeUnlit(GameUiTheme.Paper);
+                renderer.sortingOrder = -5;
+                CardFactory.AddText(tag.transform,i==TableTurnLoop.SlotMaterial ? "上桌位" : "附魔位",
+                    0f,0.008f,GameUiTheme.Ink,0.0003f,0f,"CaptionText",-4);
+                slotLabels.Add(tag);
             }
         }
 
         // ── 容器 ──────────────────────────────────────────────────────
+        public void SetSlotCaptionsVisible(bool visible)
+        {
+            foreach(GameObject caption in slotLabels)
+                if(caption!=null&&caption.activeSelf!=visible)caption.SetActive(visible);
+        }
+
         private void BuildRoots()
         {
             GameObject go = new GameObject("Cards");
@@ -875,7 +947,8 @@ namespace GameJam.Prototype
             CollectBoardFitPoints(boardFitPoints, handFitPoints);
             if (boardFitPoints.Count == 0) return;
 
-            if (!rig.FramePoints(BoardView, boardFitPoints, BoardViewTiltDeg, BoardViewMargin, false))
+            if (!rig.FramePoints(BoardView, boardFitPoints, BoardViewTiltDeg, BoardViewMargin, false,
+                                 tableBounds.center.x))
             {
                 // 拟合算不出来（点集异常）时保留旧机位，但必须留痕 ——
                 // 静默保留会表现成"取景改了但画面没变"，最难查的那种。
@@ -951,10 +1024,7 @@ namespace GameJam.Prototype
             // ④ 破壁机：玩家要点它启动，整机得在画面里
             AddBoxCorners(all, JuicerFootprint());
 
-            // ⑤ 桌子远沿 —— 只要一个点：它的作用是"画面别只装下玩法内容、把桌子切一半"，
-            //    而桌面是块平板，两个桌角出画不丢任何玩法信息（真要装下 ±1.35 的桌角，
-            //    在竖屏比例下得多退 10%，换来的只是两块空木板）。
-            all.Add(new Vector3(0f, 0f, tableBounds.max.z));
+            // 只拟合可交互内容；远侧空桌边不再把主镜头向后拉，卡面可以显示得更大。
 
             boardFitHandCount = n;
         }
@@ -970,6 +1040,16 @@ namespace GameJam.Prototype
         /// </summary>
         private Bounds JuicerFootprint()
         {
+            if (juicer != null)
+            {
+                Renderer[] parts = juicer.GetComponentsInChildren<Renderer>();
+                if (parts.Length > 0)
+                {
+                    Bounds machineBounds = parts[0].bounds;
+                    for (int i = 1; i < parts.Length; i++) machineBounds.Encapsulate(parts[i].bounds);
+                    return machineBounds;
+                }
+            }
             float w = 0.50f, h = 0.53f;
 
             BlenderArt art = juicer != null ? juicer.GetComponentInChildren<BlenderArt>() : null;
@@ -1019,10 +1099,15 @@ namespace GameJam.Prototype
         }
 
         /// <summary>
-        /// 桌子的世界包围盒 —— 取景只要它的远沿那一个点（近沿在玩家身后，本来就不该进画面）。
-        /// 在 BuildTable 里量一次，免得"桌子挪了 / 放大了"这里还按旧尺寸算。
+        /// 桌子的世界包围盒，用于固定主镜头的水平中轴。
+        /// 在 BuildTable 里量一次，桌边空白不参与玩法取景距离。
         /// </summary>
         private Bounds tableBounds;
+        private Renderer tableRenderer;
+        private Renderer tableTopRenderer;
+        private Texture tableOriginalTexture;
+        private Color tableOriginalColor = Color.white;
+        private Color tableTopOriginalColor = Color.white;
 
         /// <summary>
         /// 「取景」自检：把点集按**桌面视角那个机位**投一遍，量出离画面边最近的余量。

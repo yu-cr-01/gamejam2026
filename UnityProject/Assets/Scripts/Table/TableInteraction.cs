@@ -110,7 +110,7 @@ namespace GameJam.Prototype
         private const float ClickSlack = 8f;
 
         /// <summary>卡槽角标的颜色。贴图只出白色形状，颜色在这里染 —— TableSetup 建槽时也要用。</summary>
-        public static readonly Color MarkerIdle = new Color(0.30f, 0.34f, 0.42f);
+        public static readonly Color MarkerIdle = new Color(0.91f, 0.72f, 0.42f);
         public static readonly Color MarkerHot  = new Color(0.35f, 0.95f, 0.60f);
 
         /// <summary>
@@ -822,10 +822,10 @@ namespace GameJam.Prototype
                 ? board.FindDropTarget(dropAt, snapSlackX, snapSlackZ + snapSlackNearZ)
                 : -1;
 
-            // ★ 角标平时整体隐形，只有拿起牌要放的时候才淡入。
-            //   每个槽是 4 个 L 形角标，8 个槽就是 32 个 —— 常亮的话整张桌子全是碎线，
-            //   比原来那种色块还吵。拖动时才出现，桌面平时是干净的。
-            float targetAlpha = hasCard ? 0.95f : 0f;
+            // 边框常显以替代槽位文字，拿起牌时提高亮度。
+            bool show = turnLoop != null && !turnLoop.IsTitle && !turnLoop.IsLevelSelect && !turnLoop.IsPreparing;
+            if (turnLoop != null && turnLoop.setup != null) turnLoop.setup.SetSlotCaptionsVisible(show);
+            float targetAlpha = show ? (hasCard ? 0.95f : 0.72f) : 0f;
             float k = 1f - Mathf.Exp(-14f * Time.deltaTime);
             markerAlpha = Mathf.Lerp(markerAlpha, targetAlpha, k);
 

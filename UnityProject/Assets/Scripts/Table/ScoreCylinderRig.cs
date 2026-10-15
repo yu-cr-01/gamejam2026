@@ -47,20 +47,20 @@ namespace GameJam.Prototype
     {
         // ── 尺寸（世界单位，桌面顶面 y = 0）──────────────────────────
         /// <summary>筒身半径。比蜡烛（0.030）细一档，"量筒"的细长感靠这个。</summary>
-        private const float TubeR = 0.024f;
+        private const float TubeR = 0.030f;
         /// <summary>筒身底面：坐在底座上，所以从底座的厚度开始。</summary>
         private const float TubeBotY = 0.014f;
         /// <summary>筒身顶面。</summary>
         private const float TubeTopY = 0.190f;
         /// <summary>底座半径 / 厚度。比筒身粗一圈的厚玻璃盘 —— 没有它量筒像根插在桌上的吸管。</summary>
-        private const float FootR = 0.034f;
+        private const float FootR = 0.041f;
         private const float FootH = 0.014f;
 
         /// <summary>口沿：筒口外翻的一圈薄环（只有环，不能是实心盘 —— 见 BuildRingMesh 的注释）。</summary>
-        private const float RimR = 0.0305f;
+        private const float RimR = 0.037f;
 
         /// <summary>液体半径（筒身内壁）。</summary>
-        private const float LiquidR = 0.0215f;
+        private const float LiquidR = 0.027f;
         /// <summary>液面量程的下端 = 刻度上的 0 分。</summary>
         private const float LiquidBotY = 0.018f;
         /// <summary>液面量程的上端 = 刻度上的目标分（满筒）。</summary>
@@ -142,6 +142,7 @@ namespace GameJam.Prototype
             new Color(JuicerRig.GlassColor.r, JuicerRig.GlassColor.g, JuicerRig.GlassColor.b, 0.42f);
 
         private Transform  liquid;          // 液面
+        private TextMesh scoreReadout;
         private Renderer[] tickRenderers;   // 刻度环
         private TextMesh[] tickLabels;      // 刻度数字
         private float[]    tickValues;      // 每道刻度对应的档位（0..1）
@@ -155,6 +156,13 @@ namespace GameJam.Prototype
 
         private float shownLevel;           // 平滑后的液面（0..1）
         private float wantLevel;            // 目标液面
+        private float eruptionStarted = -1f;
+
+        /// <summary>第四回合结算时让量筒液面短暂涌高，再回到真实分数。</summary>
+        public void PlayEruption()
+        {
+            eruptionStarted = Time.time;
+        }
 
         // ══════════════════════════════════════════════════════════════
         //  建
@@ -171,6 +179,7 @@ namespace GameJam.Prototype
         {
             GameObject go = new GameObject("ScoreCylinder");
             if (host != null) go.transform.SetParent(host, false);
+            go.transform.localScale = Vector3.one * 1.30f;
 
             ScoreCylinderRig rig = go.AddComponent<ScoreCylinderRig>();
             rig.BuildParts();
@@ -185,9 +194,15 @@ namespace GameJam.Prototype
             Material glass  = JuicerRig.MakeGlass(TubeGlassColor);
             Material liquidMat = JuicerRig.MakeGlass(JuicerRig.LiquidColor);
 
-            // 底座
-            JuicerRig.Cyl(transform, "Foot", FootR, FootH,
-                          new Vector3(0f, FootH * 0.5f, 0f), glass);
+            // 深木底座和铜金箍边呼应桌面与卡牌的纸金线，量筒看起来像一件小型实验器具。
+            Material wood = JuicerRig.MakeLit(new Color(0.31f, 0.18f, 0.095f), 0.28f, 0.02f);
+            Material brass = JuicerRig.MakeLit(new Color(0.76f, 0.49f, 0.20f), 0.48f, 0.30f);
+            JuicerRig.Cyl(transform, "WoodFoot", FootR + 0.007f, FootH * 0.78f,
+                          new Vector3(0f, FootH * 0.39f, 0f), wood);
+            JuicerRig.Cyl(transform, "FootBrassBand", FootR + 0.004f, 0.003f,
+                          new Vector3(0f, FootH * 0.78f, 0f), brass);
+            JuicerRig.Cyl(transform, "FootTop", FootR * 0.78f, 0.004f,
+                          new Vector3(0f, TubeBotY - 0.002f, 0f), brass);
 
             // 筒身
             float tubeH = TubeTopY - TubeBotY;
@@ -195,7 +210,7 @@ namespace GameJam.Prototype
                           new Vector3(0f, TubeBotY + tubeH * 0.5f, 0f), glass);
 
             // 口沿：一圈薄环（不是实心盘 —— 实心盘会把筒口封成一个盖）
-            AddRing(transform, "Rim", TubeTopY, BuildRingMesh(TubeR + 0.0008f, RimR, 32), glass);
+            AddRing(transform, "Rim", TubeTopY, BuildRingMesh(TubeR + 0.0008f, RimR, 32), brass);
 
             // 液体：和罐子同一招 —— 圆柱本身做满高，靠 scale.y 压出液面，
             // 液面变化只是改一个 scale，不用重建模型（见 ApplyLevel）。
@@ -204,6 +219,28 @@ namespace GameJam.Prototype
             liquid = liq.transform;
 
             BuildTicks();
+
+            // 深色背衬让玻璃轮廓和刻度在亮木桌上也清楚可见。
+            GameObject backing = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            backing.name = "GaugeBacking";
+            backing.transform.SetParent(transform, false);
+            backing.transform.localPosition = new Vector3(0f, 0.105f, 0.033f);
+            backing.transform.localScale = new Vector3(0.075f, 0.19f, 0.008f);
+            backing.GetComponent<Renderer>().sharedMaterial = JuicerRig.MakeLit(new Color(0.08f, 0.16f, 0.14f), 0.2f, 0.1f);
+            Collider backingHit = backing.GetComponent<Collider>();
+            if (backingHit != null) backingHit.enabled = false;
+            scoreReadout = AddTickLabel(transform, "ScoreReadout", new Vector3(0f, 0.015f, -0.060f), "0 / 1000");
+            scoreReadout.anchor = TextAnchor.MiddleCenter;
+            scoreReadout.alignment = TextAlignment.Center;
+            scoreReadout.color = JuicerRig.TickHotColor;
+            GameObject readoutPlate = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            readoutPlate.name = "ScorePlate";
+            readoutPlate.transform.SetParent(transform, false);
+            readoutPlate.transform.localPosition = new Vector3(0f, 0.015f, -0.056f);
+            readoutPlate.transform.localScale = new Vector3(0.10f, 0.026f, 0.004f);
+            readoutPlate.GetComponent<Renderer>().sharedMaterial = wood;
+            Collider plateHit = readoutPlate.GetComponent<Collider>();
+            if (plateHit != null) plateHit.enabled = false;
 
             // ★ 建完必须先把液面压到 0 高度。
             //   Update 只在 |shownLevel − wantLevel| > 0.0005 时才 ApplyLevel，
@@ -403,6 +440,7 @@ namespace GameJam.Prototype
         {
             score  = Mathf.Max(0, newScore);
             target = Mathf.Max(1, newTarget);
+            if (scoreReadout != null) scoreReadout.text = score + " / " + target;
 
             wantLevel = Mathf.Clamp01((float)score / target);
 
@@ -476,16 +514,24 @@ namespace GameJam.Prototype
         {
             if (liquid == null) return;
 
+            float visibleLevel = shownLevel;
+            if (eruptionStarted >= 0f)
+            {
+                float t = (Time.time - eruptionStarted) / 0.9f;
+                if (t >= 1f) eruptionStarted = -1f;
+                else visibleLevel = Mathf.Max(visibleLevel, Mathf.Clamp01(wantLevel + 0.22f * (1f - t)));
+            }
+
             // 0 分就是"一滴都没有"：这么薄的圆盘只剩一个亮橙色的点，
             // 看着像筒底积了一层汁 —— 干脆整块藏起来，空筒就是空的。
-            bool any = shownLevel > 0.002f;
+            bool any = visibleLevel > 0.002f;
             if (liquid.gameObject.activeSelf != any) liquid.gameObject.SetActive(any);
             if (!any) return;
 
             // ★ 和罐子同一套换算：内置圆柱是"半径 0.5、高 2"的，所以
             //   scale.y 要填**半高**、位置 y 要填**底面 + 半高**（圆柱以中心为原点）。
             //   直接把高度填进 scale.y 会得到两倍高、而且从筒子中间往上长。
-            float h = (LiquidTopY - LiquidBotY) * shownLevel;
+            float h = (LiquidTopY - LiquidBotY) * visibleLevel;
             liquid.localScale = new Vector3(LiquidR * 2f, Mathf.Max(0.0001f, h * 0.5f), LiquidR * 2f);
             liquid.localPosition = new Vector3(0f, LiquidBotY + h * 0.5f, 0f);
         }
@@ -501,6 +547,11 @@ namespace GameJam.Prototype
                 shownLevel = Mathf.Lerp(shownLevel, wantLevel, 1f - Mathf.Exp(-6f * Time.deltaTime));
                 ApplyLevel();
                 RefreshTickHighlight();
+            }
+            else if (eruptionStarted >= 0f)
+            {
+                if (Time.time - eruptionStarted >= 0.9f) eruptionStarted = -1f;
+                ApplyLevel();
             }
         }
 

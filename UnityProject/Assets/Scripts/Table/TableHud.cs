@@ -15,7 +15,7 @@ namespace GameJam.Prototype
     ///   右键点一下 → 整块检视面板，把三属性的完整说明都摊开（研究牌的场合）
     /// 两种不会同时出现，检视面板是小信息条的超集。
     /// </summary>
-    public class TableHud : MonoBehaviour
+    public partial class TableHud : MonoBehaviour
     {
         private TableInteraction interaction;
         private TableSetup       setup;
@@ -29,6 +29,7 @@ namespace GameJam.Prototype
         // dim 本身就是浅灰，铺到浅色面板上直接糊掉看不见。
         // 面板统一走"深色底 + 浅色字"，和游戏整体调子也一致。
         private GUIStyle panelBox, panelBoxInner, panelGroup, h1Panel, bodyPanel, dimPanel, btnClose;
+        private static Texture2D bloodDropIcon;
 
         // ── v2.1 面板：半透明底板（用户反馈"回合数 UI 挡住上面那张牌"）──
         // 底透、字不透：只换底板贴图的 alpha，文字样式一个像素都不动。
@@ -65,7 +66,6 @@ namespace GameJam.Prototype
         private readonly PanelDrag levelEndDrag    = new PanelDrag();
         private readonly PanelDrag levelResultDrag = new PanelDrag();
         private readonly PanelDrag reportDrag      = new PanelDrag();
-        private readonly PanelDrag levelWindowDrag = new PanelDrag();
         private readonly PanelDrag deckWindowDrag  = new PanelDrag();
 
         // BeginCenterPanel / EndCenterPanel 之间传状态（End 时才知道面板画在哪、要还原哪个矩阵）
@@ -293,12 +293,7 @@ namespace GameJam.Prototype
         {
             if (cjkFont == null)
             {
-                string[] candidates =
-                {
-                    "Microsoft YaHei", "微软雅黑", "SimHei", "SimSun",
-                    "PingFang SC", "Noto Sans CJK SC", "Arial Unicode MS"
-                };
-                cjkFont = Font.CreateDynamicFontFromOSFont(candidates, 18);
+                cjkFont = GameUiTheme.Font;
             }
 
             if (h1 == null)
@@ -309,15 +304,26 @@ namespace GameJam.Prototype
                 //   22 号的中文就会糊成一团双影（截图放大后非常明显）。
                 //   要拉开层次就加大字号、提亮颜色，别动 Bold。
                 h1   = new GUIStyle(GUI.skin.label)  { fontSize = 23, wordWrap = true };
-                h1.normal.textColor = new Color(0.93f, 0.95f, 0.98f);
+                h1.normal.textColor = new Color(0.96f, 0.89f, 0.74f);
 
                 body = new GUIStyle(GUI.skin.label)  { fontSize = 16, wordWrap = true };
+                body.normal.textColor = new Color(0.88f, 0.84f, 0.75f);
                 dim  = new GUIStyle(GUI.skin.label)  { fontSize = 14, wordWrap = true };
-                dim.normal.textColor = new Color(0.62f, 0.66f, 0.74f);
+                dim.normal.textColor = new Color(0.69f, 0.62f, 0.51f);
 
                 btn   = new GUIStyle(GUI.skin.button) { fontSize = 15 };
+                btn.border = new RectOffset(6, 6, 6, 6);
+                btn.normal.background = ProceduralArt.PanelButtonBackdrop(false, 0);
+                btn.hover.background = ProceduralArt.PanelButtonBackdrop(false, 1);
+                btn.active.background = ProceduralArt.PanelButtonBackdrop(false, 2);
+                btn.normal.textColor = new Color(0.93f, 0.87f, 0.75f);
+                btn.hover.textColor = new Color(1.00f, 0.93f, 0.76f);
+                btn.active.textColor = new Color(1.00f, 0.82f, 0.56f);
                 btnOn = new GUIStyle(btn);
-                btnOn.normal.textColor = new Color(0.35f, 0.95f, 0.60f);
+                btnOn.normal.background = ProceduralArt.PanelButtonBackdrop(true, 0);
+                btnOn.hover.background = ProceduralArt.PanelButtonBackdrop(true, 1);
+                btnOn.active.background = ProceduralArt.PanelButtonBackdrop(true, 2);
+                btnOn.normal.textColor = new Color(1.00f, 0.78f, 0.43f);
 
                 // ── 多行列表行（牌组窗口那几行）──
                 // 【为什么要单独一份】一枚牌组要写四行信息（名称 / 食材 / 模块 / 开局刀片），
@@ -337,7 +343,7 @@ namespace GameJam.Prototype
                     btnRow.font = cjkFont; btnOnRow.font = cjkFont;
                 }
 
-                // ── 面板：深色底 + 浅色字 ──
+                // ── 面板：深青绿底、纸金描边 + 暖纸色文字 ──
                 // border 走 9 宫格，所以底图只有 32×32，拉到多大圆角都不变形。
                 panelBox = new GUIStyle(GUI.skin.box)
                 {
@@ -396,16 +402,22 @@ namespace GameJam.Prototype
                 h1Panel   = new GUIStyle(h1)   { fontSize = 21 };
                 bodyPanel = new GUIStyle(body) { fontSize = 15 };
                 dimPanel  = new GUIStyle(dim)  { fontSize = 13 };
-                h1Panel.normal.textColor   = new Color(0.95f, 0.96f, 0.98f);
-                bodyPanel.normal.textColor = new Color(0.87f, 0.90f, 0.94f);
-                dimPanel.normal.textColor  = new Color(0.62f, 0.68f, 0.77f);
+                h1Panel.normal.textColor   = new Color(0.97f, 0.90f, 0.75f);
+                bodyPanel.normal.textColor = new Color(0.89f, 0.85f, 0.77f);
+                dimPanel.normal.textColor  = new Color(0.70f, 0.63f, 0.53f);
 
                 btnClose = new GUIStyle(GUI.skin.button)
                 {
                     fontSize = 20, fontStyle = FontStyle.Bold,
                     alignment = TextAnchor.MiddleCenter,
-                    padding = new RectOffset(0, 0, 0, 0)
+                    padding = new RectOffset(0, 0, 0, 0),
+                    border = new RectOffset(6, 6, 6, 6)
                 };
+                btnClose.normal.background = ProceduralArt.PanelButtonBackdrop(false, 0);
+                btnClose.hover.background = ProceduralArt.PanelButtonBackdrop(false, 1);
+                btnClose.active.background = ProceduralArt.PanelButtonBackdrop(false, 2);
+                btnClose.normal.textColor = new Color(0.96f, 0.87f, 0.70f);
+                btnClose.hover.textColor = Color.white;
 
                 if (cjkFont != null)
                 {
@@ -653,7 +665,9 @@ namespace GameJam.Prototype
 
         private void OnGUI()
         {
+            GameUiTheme.Apply();
             EnsureStyles();
+            ApplyPaperHudStyles();
             if (setup == null || interaction == null) return;
 
             // 这一趟画了哪些 v2.1 面板（拖动后的真实屏幕矩形）——每趟重记，
@@ -667,13 +681,18 @@ namespace GameJam.Prototype
             //   所以改成这里让位：开着图鉴时这一层什么都不画。
             if (browser != null && browser.IsOpen) return;
 
-            DrawViewButtons();
+            bool campaignDialog = turnLoop != null && turnLoop.phase == TablePhase.CampaignDialog;
+            if (!campaignDialog && (turnLoop == null || turnLoop.phase == TablePhase.Select))
+            {
+                DrawViewButtons();
+                DrawCampaignMeters();
+            }
 
             // 开场 / 开局准备 / 正式回合是先后关系，三种信息栏不会同时出现
             if (turnLoop != null && turnLoop.IsTitle)           DrawTitleOverlay();
             else if (turnLoop != null && turnLoop.IsLevelSelect) DrawLevelSelectPanel();
             else if (turnLoop != null && turnLoop.IsPreparing)   DrawChoicePanel();
-            else
+            else if (!campaignDialog && (turnLoop == null || turnLoop.phase == TablePhase.Select))
             {
                 DrawHints();
                 DrawTurnPanel();
@@ -697,8 +716,11 @@ namespace GameJam.Prototype
             if (deckWindowOpen) DrawDeckWindow();
 
             // 检视面板和划过信息条是同一个位置，二选一
-            if (interaction.Inspected != null) DrawInspectPanel();
-            else                               DrawCardInfo();
+            if (!campaignDialog && (turnLoop == null || !turnLoop.IsPreparing))
+            {
+                if (interaction.Inspected != null) DrawInspectPanel();
+                else DrawCardInfo();
+            }
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -762,90 +784,7 @@ namespace GameJam.Prototype
         /// <summary>关卡窗口：一屏列出全部关卡，点一行选中、按确认进入。</summary>
         private void DrawLevelWindow()
         {
-            if (turnLoop == null || turnLoop.levels == null || turnLoop.levels.Count == 0) return;
-
-            // 尺寸照报告面板那一套：跟着屏幕走，小窗口收缩（列表用滚动区，永远放得下）
-            float w = Mathf.Max(360f, Mathf.Min(620f, Screen.width - 32f));
-            float h = Mathf.Max(220f, Mathf.Min(560f, Screen.height - 32f));
-            Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
-
-            Matrix4x4 prevMatrix = GUI.matrix;
-            GUI.matrix = OffsetMatrix(levelWindowDrag.offset) * prevMatrix;
-
-            GUI.Box(box, GUIContent.none, panelBoxGlass);
-            GUILayout.BeginArea(new Rect(box.x + 14f, box.y + 12f, w - 28f, h - 24f));
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("关　卡", h1Panel, GUILayout.ExpandWidth(true));
-            if (GUILayout.Button("关闭", btn, GUILayout.Width(72f), GUILayout.Height(28f)))
-            {
-                GUI.FocusControl(null);
-                levelWindowOpen = false;
-            }
-            GUILayout.EndHorizontal();
-
-            GUILayout.Label(TableSettings.LevelCardsOnTable
-                                ? "点一行选中它，再按下面的确认键 —— 和点桌上那排关卡卡是同一条路。"
-                                : "点一行选中它，再按下面的确认键 —— 关卡就在这个窗口里选。",
-                            dimPanel);
-            GUILayout.Space(4f);
-
-            levelWindowScroll = GUILayout.BeginScrollView(levelWindowScroll, false, false,
-                                                          GUI.skin.horizontalScrollbar,
-                                                          GUI.skin.verticalScrollbar,
-                                                          scrollGlass,
-                                                          GUILayout.ExpandHeight(true));
-
-            for (int i = 0; i < turnLoop.levels.Count; i++)
-            {
-                LevelData lv = turnLoop.levels[i];
-                if (lv == null) continue;
-
-                int target = TableSettings.UseRulesV21 && TableSettings.V21TargetScore > 0
-                    ? TableSettings.V21TargetScore
-                    : lv.targetScore;
-
-                string row = lv.name + "　　目标分 " + target + "　　" + LevelStatusText(i);
-
-                bool picked = (i == levelWindowPick);
-                if (GUILayout.Button(row, picked ? btnOn : btn, GUILayout.ExpandWidth(true), GUILayout.Height(30f)))
-                {
-                    GUI.FocusControl(null);
-                    PickLevelInWindow(i);
-                }
-            }
-
-            GUILayout.Space(14f);
-            GUILayout.EndScrollView();
-
-            // ── 确认 ──
-            //   必须在关卡界面（LevelSelect）才能确认 —— 打到一半点"进入这一关"
-            //   等于中途换关（规则状态会串）。按钮灰着的时候一定要写清为什么，
-            //   不然玩家只会以为坏了。
-            bool canConfirm = turnLoop.IsLevelSelect && levelWindowPick >= 0;
-
-            GUILayout.Space(4f);
-            GUILayout.BeginHorizontal();
-
-            bool oldEnabled = GUI.enabled;
-            GUI.enabled = canConfirm;
-            if (GUILayout.Button("进入这一关", btn, GUILayout.ExpandWidth(true), GUILayout.Height(38f)))
-            {
-                GUI.FocusControl(null);
-                ConfirmLevelInWindow();
-            }
-            GUI.enabled = oldEnabled;
-            GUILayout.EndHorizontal();
-
-            if (!canConfirm)
-                GUILayout.Label(turnLoop.IsLevelSelect ? "先在上面点一行选一关" 
-                                                       : "现在不在关卡界面 —— 窗口只是查看；"
-                                                         + "回关卡界面（Esc → 退出关卡，或打完这一关）才能进关",
-                                dimPanel);
-
-            GUILayout.EndArea();
-
-            EndPanelFrame(levelWindowDrag, box, prevMatrix);
+            DrawDesignedLevels();
         }
 
         /// <summary>
@@ -949,131 +888,7 @@ namespace GameJam.Prototype
         /// <summary>牌组窗口：一屏列出全部牌组（名称 / 食材 / 模块 / 开局刀片），点一行选中。</summary>
         private void DrawDeckWindow()
         {
-            // CurrentChoice 只认"当前阶段"，退出牌组界面就返回 null ——
-            // 中途从 Esc 菜单开出来看的时候，退回配置里那份候选项。
-            Choice c = turnLoop != null ? turnLoop.CurrentChoice : null;
-            if (c == null && turnLoop != null) c = turnLoop.FindChoice(GameConfig.DeckPickId);
-            if (c == null || c.options == null || c.options.Count == 0) return;
-
-            // 比关卡窗口宽一点：一副牌要写食材 + 模块 + 开局刀片，
-            // 620 宽会在中间折行，6 副牌叠起来就成了一堵字墙。
-            float w = Mathf.Max(420f, Mathf.Min(760f, Screen.width - 32f));
-            float h = Mathf.Max(240f, Mathf.Min(620f, Screen.height - 32f));
-            Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
-
-            Matrix4x4 prevMatrix = GUI.matrix;
-            GUI.matrix = OffsetMatrix(deckWindowDrag.offset) * prevMatrix;
-
-            GUI.Box(box, GUIContent.none, panelBoxGlass);
-            GUILayout.BeginArea(new Rect(box.x + 14f, box.y + 12f, w - 28f, h - 24f));
-
-            TextDto texts = GameConfig.Texts();
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("牌　组", h1Panel, GUILayout.ExpandWidth(true));
-
-            // ★ v2.1 的牌组阶段不给关（理由见 TrackDeckWindow：这一屏除了它没有别的地方能选牌）。
-            //   别的阶段照旧有「关闭」——那时窗口是"查看"，Esc 菜单里随时能再开。
-            bool canClose = !(turnLoop.phase == TablePhase.DeckPick && !TableSettings.DeckCardsOnTable);
-            if (canClose && GUILayout.Button("关闭", btn, GUILayout.Width(72f), GUILayout.Height(28f)))
-            {
-                GUI.FocusControl(null);
-                deckWindowOpen = false;
-            }
-            GUILayout.EndHorizontal();
-
-            GUILayout.Label(TableSettings.DeckCardsOnTable
-                                ? "点一行选中它，再按下面的确认键 —— 和点桌上那排牌组卡是同一条路。"
-                                : "点一行选中它，再按下面的确认键 —— 牌组就在这个窗口里选。",
-                            dimPanel);
-
-            // 已选 / 提示：v2.1 里上面那条小面板整块让开了（见 DrawChoicePanel），
-            // 所以"选了哪一副""这副牌什么路子"这些话全得由窗口自己说清 ——
-            // 旧流程那边小面板照旧在，这里就不重复一遍了（免得同一句话出现两遍）。
-            bool soloUi = !TableSettings.DeckCardsOnTable;
-
-            string picked = "还没选";
-            if (deckWindowPick >= 0 && deckWindowPick < c.options.Count && c.options[deckWindowPick] != null)
-                picked = c.options[deckWindowPick].title;
-
-            if (soloUi)
-            {
-                // ★ 只写"已选"这一句，**不搬运配置里那句 hint**：
-                //   texts.deckHint 是"点击卡片查看详情　｜　每副牌组 = 4 张食材牌 + 1 个变速模块"——
-                //   后半句照样成立（每行都写着食材和模块），前半句在 v2.1 里是**过期的指路**
-                //   （桌上已经没有卡可点）。配置是只读的资源，改不了它，那就别把它当界面文案搬过来。
-                GUILayout.Label("已选牌组：" + picked, bodyPanel);
-            }
-
-            GUILayout.Space(4f);
-
-            deckWindowScroll = GUILayout.BeginScrollView(deckWindowScroll, false, false,
-                                                         GUI.skin.horizontalScrollbar,
-                                                         GUI.skin.verticalScrollbar,
-                                                         scrollGlass,
-                                                         GUILayout.ExpandHeight(true));
-
-            for (int i = 0; i < c.options.Count; i++)
-            {
-                ChoiceOption o = c.options[i];
-                if (o == null) continue;
-
-                bool pickedRow = (i == deckWindowPick);
-
-                // ★ 这几行**不是在这里拼的**：食材 / 模块 / 开局刀片来自 TableChoiceRig
-                //   那三个静态方法（旧流程那排 3D 牌组卡用的是同一份）——
-                //   两处各写一份的话，改一次文案要改两处，而且迟早会走岔。
-                string row = (pickedRow ? "▸ " : "") + "第 " + (i + 1) + " 副　" + o.title + "\n"
-                             + "食材：" + TableChoiceRig.DeckIngredientsLine(o) + "\n"
-                             + TableChoiceRig.DeckModuleLine(o) + "　　"
-                             + TableChoiceRig.DeckBladeLine(o);
-
-                if (GUILayout.Button(row, pickedRow ? btnOnRow : btnRow,
-                                     GUILayout.ExpandWidth(true), GUILayout.Height(66f)))
-                {
-                    GUI.FocusControl(null);
-                    PickDeckInWindow(i);
-                }
-            }
-
-            GUILayout.Space(10f);
-            GUILayout.EndScrollView();
-
-            // ── 确认 ──
-            //   只有真的在牌组阶段（DeckPick）才能确认 —— 别的时候点它等于跳过一个环节
-            //   （刀片核心还没定）。按钮灰着的时候一定要写清为什么。
-            bool canConfirm = turnLoop.phase == TablePhase.DeckPick && deckWindowPick >= 0;
-
-            // 小面板隐去时（v2.1）notice 没有别的地方显示 —— 引擎/流程的提示只能挂在这儿。
-            if (soloUi && !string.IsNullOrEmpty(turnLoop.notice))
-                GUILayout.Label(turnLoop.notice, dimPanel);
-
-            GUILayout.Space(4f);
-            GUILayout.BeginHorizontal();
-
-            string confirmLabel = (texts != null && !string.IsNullOrEmpty(texts.deckConfirm))
-                ? texts.deckConfirm : "确认选择该卡组";
-
-            bool oldEnabled = GUI.enabled;
-            GUI.enabled = canConfirm;
-            if (GUILayout.Button(confirmLabel, btn, GUILayout.ExpandWidth(true), GUILayout.Height(38f)))
-            {
-                GUI.FocusControl(null);
-                ConfirmDeckInWindow();
-            }
-            GUI.enabled = oldEnabled;
-            GUILayout.EndHorizontal();
-
-            if (!canConfirm)
-                GUILayout.Label(turnLoop.phase == TablePhase.DeckPick
-                                    ? "先在上面点一行选一副牌组"
-                                    : "现在不在牌组选择界面 —— 窗口只是查看；"
-                                      + "开局准备时（选完关卡之后）才能定牌组",
-                                dimPanel);
-
-            GUILayout.EndArea();
-
-            EndPanelFrame(deckWindowDrag, box, prevMatrix);
+            DrawArtDecks();
         }
 
         /// <summary>
@@ -1132,122 +947,7 @@ namespace GameJam.Prototype
 
         private void DrawPausePanel()
         {
-            // 312 → 396（多了「关卡」和「卡牌图鉴」）→ 442（再多一个「牌组」）→ 560（再一排「保存 / 读取」）。
-            // ★ 高度必须 = 66（标题）+ N×46（N 行按钮）+ 底下三条说明（20 + 52 + 20，中间那条要能折三行）
-            //   加一项就 +46（并排两项算一行）。第一版只加到 358，最后一个「退出游戏」正好压在下面两行说明上。
-            const float w = 400f, h = 560f;
-            Rect r = CenterBox(w, h);
-            GUI.Box(r, GUIContent.none, panelBox);
-
-            GUI.Label(new Rect(r.x + 22f, r.y + 16f, w - 44f, 34f), "暂　停", h1Panel);
-
-            float by = r.y + 66f;
-            const float bh = 40f;
-            const float gap = 6f;
-
-            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "继续游戏", btn))
-            {
-                GUI.FocusControl(null);
-                turnLoop.paused = false;
-            }
-            by += bh + gap;
-
-            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "设　　置", btn))
-            {
-                GUI.FocusControl(null);
-                turnLoop.settingsOpen = true;
-            }
-            by += bh + gap;
-
-            // ── 存档 / 读档（v2.1，一个存档位）────────────────────────────
-            //   用户点名要的就是这两项，所以并排放一整行（比再占两行更好找）。
-            //   ★ 灰着的时候**必须写清为什么**（见面板底下第二行说明）：
-            //     玩家看到灰按钮的第一反应是"坏了"，而不是"现在不能存"。
-            //   ★ v2.1 才有存档位（旧流程的状态形状完全不同），旧流程下两项都灰。
-            float halfW = (w - 44f - 8f) * 0.5f;
-            bool oldEnabled = GUI.enabled;
-
-            GUI.enabled = turnLoop.CanSave;
-            if (GUI.Button(new Rect(r.x + 22f, by, halfW, bh), "保　　存", btn))
-            {
-                GUI.FocusControl(null);
-                turnLoop.SaveGame();
-                turnLoop.paused = false;   // 收起菜单：结果（已保存 / 为什么存不了）在顶部提示那条上
-            }
-            GUI.enabled = oldEnabled;
-
-            GUI.enabled = TableSaveIO.Exists;
-            if (GUI.Button(new Rect(r.x + 22f + halfW + 8f, by, halfW, bh), "读　　取", btn))
-            {
-                GUI.FocusControl(null);
-                turnLoop.paused = false;   // 读档会重摆整张桌子，菜单挡着看不清
-                turnLoop.ContinueFromSave();
-            }
-            GUI.enabled = oldEnabled;
-            by += bh + gap;
-
-            // ── 关卡窗口 / 牌组窗口 / 卡牌图鉴 ──
-            //   用户原话："最好单独开一个窗口给我显示关卡"、图鉴"入口做明显"。
-            //   三项都做成"从这里开"，不再只靠一个没人知道的快捷键。
-            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh),
-                           levelWindowOpen ? "关卡（已打开）" : "关　　卡", btn))
-            {
-                GUI.FocusControl(null);
-                turnLoop.paused = false;      // 让开位置：窗口是独立一层，别和暂停菜单叠着
-                levelWindowOpen = !levelWindowOpen;
-                if (levelWindowOpen)
-                {
-                    deckWindowOpen  = false;      // 两块内容都钉在正中，同时开会叠在一起
-                    levelWindowPick = turnLoop.levelIndex;
-                }
-            }
-            by += bh + gap;
-
-            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh),
-                           deckWindowOpen ? "牌组（已打开）" : "牌　　组", btn))
-            {
-                GUI.FocusControl(null);
-                turnLoop.paused = false;
-                bool wantOpen = !deckWindowOpen;
-                levelWindowOpen = false;          // 同上：关卡窗口和牌组窗口不同时开
-                SetDeckWindowOpen(wantOpen);
-            }
-            by += bh + gap;
-
-            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "卡牌图鉴（F1）", btn))
-            {
-                GUI.FocusControl(null);
-                turnLoop.paused = false;
-                if (browser != null) browser.Toggle();
-            }
-            by += bh + gap;
-
-            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "退出关卡", btn))
-            {
-                GUI.FocusControl(null);
-                turnLoop.ExitLevel();
-            }
-            by += bh + gap;
-
-            if (GUI.Button(new Rect(r.x + 22f, by, w - 44f, bh), "退出游戏", btn))
-            {
-                GUI.FocusControl(null);
-                turnLoop.QuitGame();
-            }
-
-            // ── 底下三行：刚刚发生了什么 / 存档位现状 / 为什么存不了（或 Esc 提示）──
-            //   notice 那一行放最上面：保存和读档的结果都写在那里，玩家一睁眼就能看到。
-            //   ★ 存档摘要那行给**三行高**（52）：dimPanel 是自动换行的，矮一截就会把
-            //     折下来的第二、三行裁在半路（实测截图里就看到"（第 1 关 · 点火　第 1/4"被切掉）。
-            if (!string.IsNullOrEmpty(turnLoop.notice))
-                GUI.Label(new Rect(r.x + 22f, r.y + h - 118f, w - 44f, 20f), turnLoop.notice, dimPanel);
-
-            GUI.Label(new Rect(r.x + 22f, r.y + h - 96f, w - 44f, 52f),
-                      TableSaveIO.StatusLine(), dimPanel);
-
-            GUI.Label(new Rect(r.x + 22f, r.y + h - 28f, w - 44f, 20f),
-                      turnLoop.CanSave ? "存档 = 覆盖那一个存档位；Esc 也可以直接继续"
-                                       : ("现在不能保存：" + turnLoop.SaveBlockReason), dimPanel);
+            DrawArtPause();
         }
 
         /// <summary>
@@ -1260,86 +960,7 @@ namespace GameJam.Prototype
         /// </summary>
         private void DrawSettingsPanel()
         {
-            const float w = 470f, h = 336f;
-            Rect r = CenterBox(w, h);
-            GUI.Box(r, GUIContent.none, panelBox);
-
-            GUI.Label(new Rect(r.x + 22f, r.y + 16f, w - 44f, 34f), "设　置", h1Panel);
-            GUI.Label(new Rect(r.x + 22f, r.y + 52f, w - 44f, 22f),
-                      "（壳子：结构先立起来，挂上去的值都是生效的）", dimPanel);
-
-            float y = r.y + 88f;
-
-            // ── 规则模式开关 ─────────────────────────────────────────
-            //   ★ 只改"下一关用哪套"，不做中途切换：两套玩法的状态完全不一样
-            //     （v2.1 是 BladeState + 桌面素材，旧流程是 TurnState + 杯内粒子），
-            //     打到一半换引擎只会留下半套脏状态 —— 那比"要多点一次重开"糟糕得多。
-            GUI.Label(new Rect(r.x + 22f, y, 210f, 26f), "规则模式", bodyPanel);
-            if (GUI.Button(new Rect(r.x + 232f, y, 200f, 28f),
-                           TableSettings.UseRulesV21 ? "v2.1 规则（默认）" : "旧流程",
-                           btn))
-            {
-                GUI.FocusControl(null);
-                TableSettings.UseRulesV21 = !TableSettings.UseRulesV21;
-                turnLoop.notice = "规则模式已切成「" + (TableSettings.UseRulesV21 ? "v2.1" : "旧流程") +
-                                  "」—— 退出关卡重进（或重开本关）才生效";
-            }
-            y += 32f;
-
-            GUI.Label(new Rect(r.x + 22f, y, w - 44f, 20f),
-                      "两套玩法状态不通用，所以只对**下一关**生效；中途不换引擎。", dimPanel);
-            y += 26f;
-
-            GUI.Label(new Rect(r.x + 22f, y, 210f, 26f),
-                      "转头灵敏度　" + TableSettings.LookSensitivity.ToString("0.0"), bodyPanel);
-
-            TableSettings.LookSensitivity =
-                GUI.HorizontalSlider(new Rect(r.x + 232f, y + 8f, w - 258f, 20f),
-                                     TableSettings.LookSensitivity, 0.5f, 8f);
-            y += 36f;
-
-            GUI.Label(new Rect(r.x + 22f, y, 210f, 26f), "操作提示", bodyPanel);
-            if (GUI.Button(new Rect(r.x + 232f, y, 110f, 28f),
-                           TableSettings.ShowHints ? "开" : "关", btn))
-            {
-                GUI.FocusControl(null);
-                TableSettings.ShowHints = !TableSettings.ShowHints;
-            }
-            y += 36f;
-
-            GUI.Label(new Rect(r.x + 22f, y, 210f, 26f), "调试信息", bodyPanel);
-            if (GUI.Button(new Rect(r.x + 232f, y, 110f, 28f),
-                           TableSettings.ShowDebugInfo ? "开" : "关", btn))
-            {
-                GUI.FocusControl(null);
-                TableSettings.ShowDebugInfo = !TableSettings.ShowDebugInfo;
-            }
-            y += 36f;
-
-            // ── 占位数值开关 ─────────────────────────────────────────
-            //   卡表里 h/d/v 都是 0 的卡（数值还没定）要不要兜一套临时值。
-            //   关掉之后那些卡的 H 就是 0 —— 刀片选它会一进关卡就爆刀。
-            //   所以这个开关必须有，而且默认开；HUD 上会标明用的是占位数值。
-            GUI.Label(new Rect(r.x + 22f, y, 240f, 26f), "卡表没数值时用占位值", bodyPanel);
-            if (GUI.Button(new Rect(r.x + 232f, y, 110f, 28f),
-                           TableSettings.UsePlaceholderCardValues ? "开" : "关", btn))
-            {
-                GUI.FocusControl(null);
-                TableSettings.UsePlaceholderCardValues = !TableSettings.UsePlaceholderCardValues;
-            }
-            y += 34f;
-
-            if (GUI.Button(new Rect(r.x + 22f, y, 130f, 32f), "恢复默认", btn))
-            {
-                GUI.FocusControl(null);
-                TableSettings.ResetToDefault();
-            }
-
-            if (GUI.Button(new Rect(r.x + w - 152f, y, 130f, 32f), "关　闭", btn))
-            {
-                GUI.FocusControl(null);
-                turnLoop.settingsOpen = false;
-            }
+            DrawArtSettings();
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -1353,46 +974,8 @@ namespace GameJam.Prototype
         /// </summary>
         private void DrawLevelSelectPanel()
         {
-            if (turnLoop == null) return;
-
-            const float w = 660f;
-            const float h = 168f;
-            float x = (Screen.width - w) * 0.5f;
-            const float y = 14f;
-
-            GUI.Box(new Rect(x, y, w, h), GUIContent.none, panelBox);
-
-            GUI.Label(new Rect(x + 18f, y + 8f, w - 36f, 30f), "选择关卡", h1Panel);
-
-            int sel = turnLoop.choiceRig != null ? turnLoop.choiceRig.DeckSelected : -1;
-
-            string picked = "还没选";
-            if (sel >= 0 && sel < turnLoop.levels.Count && turnLoop.levels[sel] != null)
-                picked = turnLoop.levels[sel].name;
-
-            GUI.Label(new Rect(x + 18f, y + 44f, w - 240f, 24f), "已选：" + picked, bodyPanel);
-
-            // ★ 指路的话必须和桌面上真实存在的东西对上：卡已经没有了还写"点桌上的一张卡"，
-            //   玩家只会去一张空桌子上找（见 TableSettings.LevelCardsOnTable）。
-            GUI.Label(new Rect(x + 18f, y + 70f, w - 240f, 44f),
-                      TableSettings.LevelCardsOnTable
-                          ? "点桌上的一张关卡卡选中它，再按确认。\n金色那张是你现在所在的关卡。"
-                          : "在关卡窗口里点一行选中它，再按确认。\n带「▸ 当前关卡」的那一行是你现在所在的关卡。",
-                      dimPanel);
-
-            if (!string.IsNullOrEmpty(turnLoop.notice))
-                GUI.Label(new Rect(x + 18f, y + 120f, w - 240f, 24f), turnLoop.notice, dimPanel);
-
-            bool old = GUI.enabled;
-            GUI.enabled = (sel >= 0);
-
-            if (GUI.Button(new Rect(x + w - 200f, y + 116f, 182f, 38f), "进入这一关", btn))
-            {
-                GUI.FocusControl(null);
-                turnLoop.ConfirmLevelSelect();
-            }
-
-            GUI.enabled = old;
+            // The archive window contains the complete selection and confirmation flow.
+            levelWindowOpen = true;
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -1408,18 +991,7 @@ namespace GameJam.Prototype
         /// </summary>
         private void DrawTitleOverlay()
         {
-            if (turnLoop == null || turnLoop.titleRig == null) return;
-
-            GUI.Label(new Rect(0f, Screen.height * 0.075f, Screen.width, 74f),
-                      "破 壁 机 计 划", titleBig);
-
-            GUI.Label(new Rect(0f, Screen.height * 0.075f + 72f, Screen.width, 30f),
-                      "一台机器，一个人，和一桌不肯认输的材料", titleSub);
-
-            GUI.Label(new Rect(0f, Screen.height - 96f, Screen.width, 30f),
-                      turnLoop.titleRig.IsStarting
-                          ? "启 动 中 …"
-                          : HintForTitle(turnLoop.titleRig), titleHint);
+            DrawDesignedTitle();
         }
 
         /// <summary>
@@ -1577,52 +1149,7 @@ namespace GameJam.Prototype
         /// </summary>
         private void DrawBladePickV21()
         {
-            TableRulesV21 r = turnLoop.rulesV21;
-            if (r == null) return;
-
-            MaterialCard cand = turnLoop.bladeCoreCard != null
-                ? turnLoop.bladeCoreCard
-                : r.CoreCandidate();
-
-            BeginCenterPanel(660f, bladePanelDrag);
-
-            GUILayout.Label("选择你的刀片核心", h1Panel);
-
-            GUILayout.Label("当前候选：" + (cand != null
-                                       ? cand.name + "（H " + cand.H + " · V " + cand.V + "）"
-                                       : "（没有可当核心的素材）"),
-                            bodyPanel);
-
-            GUILayout.Label("初始手牌：素材 " + r.hand.Count + " 张 + 法术 " + r.handSpells.Count + " 张"
-                            + "（正文 §2.6）", bodyPanel);
-
-            GUILayout.Label("点桌上手牌里的一张素材即改选。核心卡的 H/V 就是刀片的初始 H/V，该卡移出手牌。",
-                            dimPanel);
-
-            if (!string.IsNullOrEmpty(turnLoop.notice)) GUILayout.Label(turnLoop.notice, dimPanel);
-
-            GUILayout.Space(6f);
-
-            bool canConfirm = cand != null;
-
-            bool oldEnabled = GUI.enabled;
-            GUI.enabled = canConfirm;
-
-            // 确认键靠右（和旧版一样在右下角），但不再写死横坐标：
-            // 水平 FlexibleSpace 把它顶到右沿，面板多宽都贴边。
-            GUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("确认刀片，进入关卡", btn,
-                                 GUILayout.Width(PanelButtonW(240f)), GUILayout.Height(40f)))
-            {
-                GUI.FocusControl(null);
-                turnLoop.ConfirmBladePick();
-            }
-            GUILayout.EndHorizontal();
-
-            GUI.enabled = oldEnabled;
-
-            EndCenterPanel();
+            DrawArtBladePick();
         }
 
         /// <summary>
@@ -1691,22 +1218,7 @@ namespace GameJam.Prototype
 
         private void DrawViewButtons()
         {
-            const float w = 110f, h = 32f, pad = 8f;
-            float x = Screen.width - w - 16f;
-            float y = 14f;
-
-            GUI.Label(new Rect(x - 96f, y + 6f, 90f, 24f), "视角：", body);
-
-            for (int i = 0; i < TableSetup.ViewNames.Length; i++)
-            {
-                string name = TableSetup.ViewNames[i];
-                bool on = setup.rig != null && setup.rig.CurrentView == name;
-
-                if (GUI.Button(new Rect(x, y, w, h), TableSetup.ViewLabels[i], on ? btnOn : btn))
-                    if (setup.rig != null) setup.rig.GoTo(name);
-
-                y += h + pad;
-            }
+            DrawArtViews();
         }
 
         // ── 左下角：操作提示 ──────────────────────────────────────────
@@ -1721,19 +1233,7 @@ namespace GameJam.Prototype
         //   写死任何一个数都只对一种比例成立 —— 换一种比例手牌又被压住。
         private void DrawHints()
         {
-            if (!TableSettings.ShowHints) { HintBlockScreenRect = new Rect(); return; }   // 设置里关掉 → 整块不画
-
-            const float w = 480f;
-
-            // v2.1 的操作方式完全不同（出牌不消耗行动、启动要点桌面素材、法术是点一下），
-            // 提示必须跟着换 —— 写旧那一套会让玩家一直找不到"怎么启动"。
-            if (turnLoop != null && turnLoop.V21)
-            {
-                DrawHintBlock(w, v21Hints);
-                return;
-            }
-
-            DrawHintBlock(w, legacyHints);
+            DrawArtHints();
         }
 
         /// <summary>
@@ -1984,140 +1484,7 @@ namespace GameJam.Prototype
 
         private void DrawTurnPanelV21()
         {
-            TableRulesV21 r = turnLoop.rulesV21;
-            if (r == null) return;
-
-            // 宽度跟着屏幕收缩：660 是设计宽度（和旧信息栏同宽），
-            // 窗口更窄时按屏幕减 24。少了这个 Min，面板会横着伸出屏幕 ——
-            // 右边那几个按钮既看不见也点不到，文字也会在屏幕外被裁掉。
-            float w = Mathf.Max(260f, Mathf.Min(660f, Screen.width - 24f));
-            float x = (Screen.width - w) * 0.5f;
-            const float y = 14f;
-
-            // ★ 面板高度不再写死（上一版是 const h = 254f + 每行写死 22 像素）。
-            //   "规则模式：v2.1（本分支默认）｜出牌不消耗行动机会，只有「启动破壁机」
-            //   消耗 1 次 + 1 点刀片 H" 这一行在 1280 宽的窗口下就会折成两行，
-            //   写死的 22 像素把第二行直接裁掉 —— 玩家说的"文字显示一半"就是它。
-            //   现在整块交给 GUILayout.BeginVertical(panelGroup)：组的底是
-            //   **内容排完之后**才按组矩形画的，内容多高面板就多高，
-            //   既不裁字、也不会在底部留一块空（先量高度再画底要维护两遍文字，不要）。
-            //
-            // ★ 半透明 + 可拖动：底板换 panelGroupGlass（0.78，能透出后面的牌，
-            //   文字样式没动所以字还是实心的）；整块位移走 GUI.matrix，
-            //   下面这套按内容长高的布局一行都不用改。
-            //   报告面板开着的时候**不接拖动**：它是画在这块上面的（见 OverlayOnTop），
-            //   鼠标点在报告上却把回合面板拖走就太怪了。
-            Matrix4x4 prevMatrix = GUI.matrix;
-            GUI.matrix = OffsetMatrix(turnPanelDrag.offset) * prevMatrix;
-
-            GUILayout.BeginArea(new Rect(x, y, w, Mathf.Max(60f, Screen.height - y - 14f)));
-            GUILayout.BeginVertical(panelGroupGlass);
-
-            // ── ① 模式 + 回合 / 行动机会 / 分数（最关键的一行放最上面）──
-            GUILayout.Label("第 " + r.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel + " 回合"
-                            + "　　行动机会 " + r.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn
-                            + "　　总分 " + r.score + " / " + r.targetScore, h1Panel);
-
-            // ── ② 模式 + 未识别规则警告 ──
-            GUILayout.Label("规则模式：" + (TableSettings.UseRulesV21 ? "v2.1（本分支默认）" : "旧流程")
-                            + "　｜　出牌不消耗行动机会，只有「启动破壁机」消耗 1 次 + 1 点刀片 H",
-                            dimPanel);
-
-            DrawRulesWarning(r);
-
-            // ── ②b 占位数值提示 ──
-            //   卡表里 h/d/v 全 0 的卡会兜一套临时值（否则刀片 H=0、一进关卡就爆刀）。
-            //   必须写出来 —— 不然玩家会把这套临时值当成策划定的数值。
-            string ph = r.PlaceholderWarning();
-            if (!string.IsNullOrEmpty(ph)) GUILayout.Label(ph, dimPanel);
-
-            // ── ③ 刀片（H / V / 四种附魔层数）──
-            GUILayout.Label("刀片：" + (r.blade != null ? r.blade.Describe() : "（无）")
-                            + (r.blade != null && r.blade.V <= 0 ? "　← 得分加成 0（该核心卡的 V 就是 0）" : ""),
-                            bodyPanel);
-
-            GUILayout.Label("附魔层数：" + (r.blade != null ? r.blade.layers.Describe() : "（无）")
-                            + "　　本回合已启动 " + r.startsThisTurn + " 次"
-                            + (r.startsThisTurn > 0 ? "（最后一次启动会触发献祭吞噬）" : ""),
-                            bodyPanel);
-
-            // ── ④ 目标素材 ──
-            GUILayout.Label("启动目标：" + r.TargetText, r.selected != null ? bodyPanel : dimPanel);
-
-            // ── ⑤ 手牌 / 桌面 ──
-            // ★ 刀片卡要单独点名：它和素材卡长得一模一样（同尺寸、同卡面路数，
-            //   盐和水连 H/D/V 都可能完全相同），不点出来玩家就会数出
-            //   "面板写桌面素材 3 张、画面里 4 张卡"。卡上那个「刀片」字样就是它。
-            GUILayout.Label("手牌：素材 " + r.hand.Count + " 张｜法术 " + r.handSpells.Count + " 张"
-                            + "　桌面素材 " + r.LiveTableCount() + " 张"
-                            + (turnLoop.bladeCard != null ? " ＋ 刀片卡 1 张（桌上前方带「刀片」字样的那张）" : "")
-                            + (turnLoop.StagedCount > 0 ? "　待上桌 " + turnLoop.StagedText : ""),
-                            dimPanel);
-
-            bool canActivate = r.CanActivate && r.selected != null && !r.selected.removed;
-
-            // 不能启动的原因直接写出来 —— 按钮灰着却不解释，玩家只会以为是 bug。
-            // ★ 但"原因"必须指向**玩家现在真做得到**的那件事：见 V21BlockHint。
-            if (!canActivate)
-            {
-                Color prev = GUI.color;
-                GUI.color = new Color(1f, 0.62f, 0.42f);
-                GUILayout.Label(V21BlockHint(r), dimPanel);
-                GUI.color = prev;
-            }
-
-            // ── ⑥ 按钮 ──
-            // 四个按钮平分一行：旧版是 x+18 / x+202 / x+364 / x+504 四个**写死的横坐标**，
-            // 面板一窄第四个就压到第三个上面去（挤成一坨没法点）。
-            GUILayout.Space(4f);
-            GUILayout.BeginHorizontal();
-
-            bool oldEnabled = GUI.enabled;
-            GUI.enabled = canActivate;
-
-            if (GUILayout.Button("启动破壁机", btn, GUILayout.ExpandWidth(true), GUILayout.Height(34f)))
-            {
-                GUI.FocusControl(null);
-                turnLoop.ActivateJuicer();
-            }
-
-            GUI.enabled = oldEnabled;
-
-            if (GUILayout.Button(TableSettings.UseRulesV21 ? "上　桌" : "放置到桌面",
-                                 btn, GUILayout.ExpandWidth(true), GUILayout.Height(34f)))
-            {
-                GUI.FocusControl(null);
-                turnLoop.Confirm();     // v2.1 下这一条 = 出牌（不消耗行动机会）
-            }
-
-            if (GUILayout.Button("结束本回合", btn, GUILayout.ExpandWidth(true), GUILayout.Height(34f)))
-            {
-                GUI.FocusControl(null);
-                turnLoop.EndRoundOrLevel();
-            }
-
-            if (GUILayout.Button("自动选目标", btn, GUILayout.ExpandWidth(true), GUILayout.Height(34f)))
-            {
-                GUI.FocusControl(null);
-                turnLoop.SelectNewestTarget();
-            }
-
-            GUILayout.EndHorizontal();
-
-            GUILayout.EndVertical();
-
-            // 组矩形 = 面板这一帧画在哪。★ 必须在 EndArea **之前**取，
-            //   而且它是 Area 内的相对坐标，要加回 Area 自己的原点 (x, y)；
-            //   这一份 rect 是"没加位移"的（和 GUI.matrix 里的鼠标坐标同一套，见 HandlePanelDrag）。
-            Rect panelRect = GUILayoutUtility.GetLastRect();
-            panelRect.x += x;
-            panelRect.y += y;
-
-            GUILayout.EndArea();
-
-            PanelFrameEnd(turnPanelDrag, panelRect);
-
-            GUI.matrix = prevMatrix;
+            DrawArtTurnToolbar();
         }
 
         /// <summary>
@@ -2223,7 +1590,141 @@ namespace GameJam.Prototype
                 case TablePhase.Shop:        DrawShopV30();     break;
                 case TablePhase.LevelEnd:    DrawLevelEnd();    break;
                 case TablePhase.LevelResult: DrawLevelResult(); break;
+                case TablePhase.CampaignDialog: DrawCampaignDialog(); break;
+                case TablePhase.HiddenRoom: DrawHiddenRoom(); break;
             }
+        }
+
+        private void DrawCampaignDialog()
+        {
+            DrawDesignedCampaign();
+        }
+
+        private void DrawHiddenRoom()
+        {
+            if (turnLoop == null) return;
+            float w = Mathf.Min(800f, Screen.width - 32f);
+            float h = Mathf.Min(520f, Screen.height - 32f);
+            Rect box = CenterBox(w, h);
+            GUI.Box(box, GUIContent.none, panelBoxGlass);
+            GUILayout.BeginArea(new Rect(box.x + 22f, box.y + 16f, box.width - 44f, box.height - 32f));
+
+            string title = turnLoop.hiddenRoom == HiddenRoomKindV1.Mercury ? "汞之间" : "献祭房";
+            GUILayout.Label(title, h1Panel);
+            GUILayout.Label(turnLoop.hiddenRoomReflection ?? "", dimPanel, GUILayout.MinHeight(38f));
+
+            if (turnLoop.hiddenRoomStage == HiddenRoomStageV1.MaterialChoice)
+            {
+                GUILayout.Label("桌面上出现三张素材，选择一张带走。", bodyPanel);
+                GUILayout.BeginHorizontal();
+                for (int i = 0; i < turnLoop.hiddenRoomMaterialIds.Count; i++)
+                {
+                    string id = turnLoop.hiddenRoomMaterialIds[i];
+                    GameJam.Data.Ingredient material = CardSpecs.Material(id);
+                    string name = material != null ? material.name : id;
+                    if (GUILayout.Button(name, btn, GUILayout.ExpandWidth(true), GUILayout.Height(86f)))
+                        turnLoop.ChooseHiddenRoomMaterial(i);
+                }
+                GUILayout.EndHorizontal();
+            }
+            else if (turnLoop.hiddenRoomStage == HiddenRoomStageV1.ProfessionChoice)
+            {
+                GUILayout.Label(turnLoop.hiddenRoom == HiddenRoomKindV1.Mercury
+                    ? "再从三项二阶秘职中选择一项；此处取得的职业可重复，且不参与升阶。"
+                    : "选择一项一阶秘职；此处取得的职业可重复，且不参与升阶。", bodyPanel);
+                for (int i = 0; i < turnLoop.hiddenRoomProfessionOffers.Count; i++)
+                {
+                    CampaignProfessionV1 profession = turnLoop.hiddenRoomProfessionOffers[i];
+                    string label = profession.name + (string.IsNullOrEmpty(profession.description)
+                        ? "（效果待补充）" : "\n" + profession.description);
+                    if (GUILayout.Button(label, btn, GUILayout.ExpandWidth(true), GUILayout.MinHeight(62f)))
+                        turnLoop.ChooseHiddenRoomProfession(i);
+                }
+            }
+            else
+            {
+                if (turnLoop.hiddenRoom == HiddenRoomKindV1.Sacrifice)
+                    GUILayout.Label("获得 5 张空白卡，已加入空白卡计数。", bodyPanel);
+                GUILayout.Label(CampaignRulesV1.Config.hiddenRoomNoProfession, dimPanel, GUILayout.MinHeight(84f));
+                GUILayout.FlexibleSpace();
+                if (GUILayout.Button("继续", btn, GUILayout.Height(40f))) turnLoop.ContinueHiddenRoom();
+            }
+
+            GUILayout.EndArea();
+        }
+
+        private void DrawCampaignMeters()
+        {
+            if (turnLoop == null || !turnLoop.ShowCampaignMeters) return;
+
+            float x = Screen.width - 270f;
+            Rect box = new Rect(x, 222f, 252f, 105f);
+            GUI.Box(box, GUIContent.none, panelBoxGlass);
+            DrawBlankIcon(new Rect(x + 13f, box.y + 12f, 14f, 14f));
+            GUI.Label(new Rect(x + 34f, box.y + 8f, 204f, 22f),
+                "空白卡 " + turnLoop.rulesV21.blankCount + "　汞之间 " + CampaignRulesV1.MercuryChance + "%", dimPanel);
+            DrawMeterBar(new Rect(x + 14f, box.y + 35f, 222f, 8f), CampaignRulesV1.MercuryChance, new Color(0.80f, 0.88f, 0.92f));
+
+            DrawBloodDropIcon(new Rect(x + 12f, box.y + 57f, 16f, 18f));
+            GUI.Label(new Rect(x + 34f, box.y + 56f, 204f, 22f),
+                "献祭 H " + CampaignRulesV1.Progress.sacrificedHardness + "　概率 " + CampaignRulesV1.SacrificeChance + "%", dimPanel);
+            DrawMeterBar(new Rect(x + 14f, box.y + 84f, 222f, 8f), CampaignRulesV1.SacrificeChance, new Color(0.66f, 0.36f, 0.38f));
+        }
+
+        private static void DrawBlankIcon(Rect rect)
+        {
+            Color old = GUI.color;
+            GUI.color = new Color(0.92f, 0.95f, 0.98f, 0.95f);
+            const float edge = 2f;
+            GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width, edge), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(rect.x, rect.yMax - edge, rect.width, edge), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(rect.x, rect.y, edge, rect.height), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(rect.xMax - edge, rect.y, edge, rect.height), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(rect.center.x - 0.75f, rect.y + 3f, 1.5f, rect.height - 6f), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(rect.x + 3f, rect.center.y - 0.75f, rect.width - 6f, 1.5f), Texture2D.whiteTexture);
+            GUI.color = old;
+        }
+
+        private static void DrawBloodDropIcon(Rect rect)
+        {
+            Color old = GUI.color;
+            GUI.color = new Color(0.82f, 0.28f, 0.32f, 0.96f);
+            if (bloodDropIcon == null)
+            {
+                const int width = 24;
+                const int height = 30;
+                bloodDropIcon = new Texture2D(width, height, TextureFormat.RGBA32, false);
+                bloodDropIcon.name = "SacrificeBloodDropIcon";
+                bloodDropIcon.hideFlags = HideFlags.HideAndDontSave;
+                bloodDropIcon.filterMode = FilterMode.Bilinear;
+                Color clear = new Color(1f, 1f, 1f, 0f);
+                Color white = Color.white;
+                for (int py = 0; py < height; py++)
+                for (int px = 0; px < width; px++)
+                {
+                    float nx = (px + 0.5f) / width;
+                    float ny = (py + 0.5f) / height;
+                    float dx = nx - 0.5f;
+                    float dy = ny - 0.30f;
+                    bool body = dx * dx + dy * dy <= 0.40f * 0.40f;
+                    bool tip = ny >= 0.40f && ny <= 0.98f &&
+                               Mathf.Abs(dx) <= 0.38f * (0.98f - ny) / 0.58f;
+                    bloodDropIcon.SetPixel(px, py, body || tip ? white : clear);
+                }
+                bloodDropIcon.Apply();
+            }
+            GUI.DrawTexture(rect, bloodDropIcon, ScaleMode.StretchToFill, true);
+            GUI.color = old;
+        }
+
+        private static void DrawMeterBar(Rect rect, int percent, Color fill)
+        {
+            Color old = GUI.color;
+            GUI.color = new Color(0.10f, 0.09f, 0.10f, 0.90f);
+            GUI.DrawTexture(rect, Texture2D.whiteTexture);
+            GUI.color = fill;
+            GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width * Mathf.Clamp01(percent / 100f), rect.height), Texture2D.whiteTexture);
+            GUI.color = old;
         }
 
         private static Rect CenterBox(float w, float h)
@@ -2286,6 +1787,7 @@ namespace GameJam.Prototype
 
         private void DrawLevelEnd()
         {
+            if (turnLoop.V21) { DrawArtLevelEnd(); return; }
             // ── v2.1 分流 ──────────────────────────────────────────────
             //   v2.1 的关卡结束有四个原因（正文 §八），必须写清是哪一个 ——
             //   "爆刀"和"4 回合用完"是两种完全不同的结果，混成一句
@@ -2446,151 +1948,12 @@ namespace GameJam.Prototype
         /// </summary>
         private void DrawTurnResultV21()
         {
-            TableRulesV21 r = turnLoop.rulesV21;
-            if (r == null) return;
-
-            // 尺寸跟着屏幕走：660×560 是设计尺寸，小窗口下按屏幕收缩
-            // （写死的话小窗口里面板比屏幕还大，底部按钮直接跑到屏幕外）
-            float w = Mathf.Max(320f, Mathf.Min(660f, Screen.width - 32f));
-            float h = Mathf.Max(220f, Mathf.Min(560f, Screen.height - 32f));
-            Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
-
-            // 半透明底板 + 可拖动（位移走 GUI.matrix，矩形只有 box 一处要跟着变）
-            Matrix4x4 prevMatrix = GUI.matrix;
-            GUI.matrix = OffsetMatrix(turnResultDrag.offset) * prevMatrix;
-
-            GUI.Box(box, GUIContent.none, panelBoxGlass);
-            GUILayout.BeginArea(new Rect(box.x + 14f, box.y + 12f, w - 28f, h - 24f));
-
-            GUILayout.Label("第 " + r.turnIndex + " 回合" + (r.levelOver ? "（关卡已结束）" : "进行中"), h1Panel);
-
-            GUILayout.Label("总分：" + r.score + " / " + r.targetScore
-                            + "　　刀片：" + (r.blade != null ? r.blade.Describe() : "（无）"), bodyPanel);
-
-            GUILayout.Label("附魔：" + (r.blade != null ? r.blade.layers.Describe() : "（无）")
-                            + "　　行动机会 " + r.actionPoints + "/" + GameJam.Rules.LevelRun.ActionPointsPerTurn,
-                            bodyPanel);
-
-            GUILayout.Label("本次启动：" + (string.IsNullOrEmpty(r.lastSummary) ? "（这一回合还没启动过）" : r.lastSummary),
-                            dimPanel);
-
-            GUILayout.Label("桌面素材：" + r.LiveTableCount() + " 张　剩余手牌：" + r.HandText(), dimPanel);
-
-            // ── 引擎日志尾部（结算顺序照贴，方便一条条对）──
-            // 每行不写死高度：日志是中文长句，折行之后整行都要在（原来写死 20 像素，
-            // 折出来的第二行被裁 —— 对账时最需要看的那半句正好没了）。
-            GUILayout.Space(2f);
-            GUILayout.Label("── 上一次结算的引擎日志 ──", bodyPanel);
-
-            turnResultLogScroll = GUILayout.BeginScrollView(turnResultLogScroll, false, false,
-                                                            GUI.skin.horizontalScrollbar,
-                                                            GUI.skin.verticalScrollbar,
-                                                            scrollGlass,
-                                                            GUILayout.ExpandHeight(true));
-
-            List<string> tail = r.LastLogTail(12);
-            if (tail.Count == 0)
-            {
-                GUILayout.Label("（还没有启动过 —— 点顶栏的「启动破壁机」）", dimPanel);
-            }
-            else
-            {
-                for (int i = 0; i < tail.Count; i++) GUILayout.Label(tail[i], dimPanel);
-            }
-
-            GUILayout.Space(14f);   // 末行别贴着下沿（贴着看着也像被切了）
-
-            GUILayout.EndScrollView();
-
-            // ── 按钮 ──
-            GUILayout.Space(4f);
-            GUILayout.BeginHorizontal();
-
-            bool over = r.levelOver || r.turnIndex >= GameJam.Rules.LevelRun.TurnsPerLevel;
-
-            if (GUILayout.Button(over ? "结束本关" : "下一回合", btn,
-                                 GUILayout.ExpandWidth(true), GUILayout.Height(42f)))
-            {
-                GUI.FocusControl(null);
-                turnLoop.NextTurn();
-            }
-
-            if (GUILayout.Button("继续操作桌面", btn, GUILayout.ExpandWidth(true), GUILayout.Height(42f)))
-            {
-                GUI.FocusControl(null);
-                turnLoop.phase = TablePhase.Select;
-            }
-
-            GUILayout.EndHorizontal();
-
-            GUILayout.EndArea();
-
-            EndPanelFrame(turnResultDrag, box, prevMatrix);
+            DrawArtTurnResult();
         }
 
         private void DrawShopV30()
         {
-            if (turnLoop == null || turnLoop.rulesV21 == null || turnLoop.shopVisit == null) return;
-            TableRulesV21 rules = turnLoop.rulesV21;
-            ShopVisitV30 shop = turnLoop.shopVisit;
-
-            float w = Mathf.Max(360f, Mathf.Min(940f, Screen.width - 32f));
-            float h = Mathf.Max(300f, Mathf.Min(560f, Screen.height - 32f));
-            Rect box = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
-            GUI.Box(box, GUIContent.none, panelBoxGlass);
-            GUILayout.BeginArea(new Rect(box.x + 18f, box.y + 14f, w - 36f, h - 28f));
-
-            GUILayout.Label(shop.merchant.name, h1Panel);
-            GUILayout.Label("回合结束商店　得分 " + rules.score + "　空白卡 " + rules.blankCount
-                            + "　每张卡按稀有度定价：普通 1 / 稀有 2 / 传说 3 分", bodyPanel);
-            GUILayout.Space(8f);
-
-            for (int row = 0; row < 2; row++)
-            {
-                GUILayout.BeginHorizontal();
-                int first = row == 0 ? 0 : 3;
-                int count = row == 0 ? 3 : 2;
-                for (int col = 0; col < count; col++)
-                {
-                    int index = first + col;
-                    if (index >= shop.offers.Count) break;
-                    ShopOfferV30 offer = shop.offers[index];
-                    GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
-                    GUILayout.Label(offer.name + (offer.spell ? "　法术" : "　素材"), bodyPanel,
-                                    GUILayout.MinHeight(36f));
-                    GUILayout.Label(RarityLabel(offer.rarity) + "　" + offer.price + " 分", dimPanel);
-
-                    bool wasEnabled = GUI.enabled;
-                    GUI.enabled = shop.CanPayFor(offer, rules.score);
-                    string label = !offer.available ? "属性待定" :
-                                   (offer.bought ? "已购买" : (rules.score < offer.price ? "分数不足" : "购买"));
-                    if (GUILayout.Button(label, btn, GUILayout.Height(34f))) turnLoop.BuyShopOffer(index);
-                    GUI.enabled = wasEnabled;
-                    GUILayout.EndVertical();
-                }
-                GUILayout.EndHorizontal();
-                GUILayout.Space(8f);
-            }
-
-            GUILayout.FlexibleSpace();
-            GUILayout.BeginHorizontal();
-            bool canPay = !shop.blankCardSpent && shop.rerollsRemaining == 0 && rules.blankCount > 0;
-            bool wasGuiEnabled = GUI.enabled;
-            GUI.enabled = canPay;
-            if (GUILayout.Button("消耗空白卡重抽", btn, GUILayout.Height(40f))) turnLoop.AskShopReroll();
-            GUI.enabled = wasGuiEnabled;
-
-            bool canRerollFree = shop.blankCardSpent && shop.rerollsRemaining > 0;
-            GUI.enabled = canRerollFree;
-            if (GUILayout.Button("再次重抽（剩 " + shop.rerollsRemaining + " 次）", btn, GUILayout.Height(40f)))
-                turnLoop.RerollShopForFree();
-            GUI.enabled = wasGuiEnabled;
-
-            if (GUILayout.Button("离开", btn, GUILayout.Height(40f))) turnLoop.LeaveShop();
-            GUILayout.EndHorizontal();
-            GUILayout.EndArea();
-
-            if (turnLoop.shopRollConfirmationOpen) DrawShopRollConfirmation(shop);
+            DrawArtShop();
         }
 
         private void DrawShopRollConfirmation(ShopVisitV30 shop)
@@ -2606,6 +1969,16 @@ namespace GameJam.Prototype
             if (GUILayout.Button("再想想", btn, GUILayout.Height(38f))) turnLoop.CancelShopReroll();
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
+        }
+
+        private static string ShopGreeting(string merchantId)
+        {
+            string[] greetings = CampaignRulesV1.Config.shopGreetings;
+            if (greetings == null || greetings.Length == 0) return "";
+            if (merchantId == "salt" && greetings.Length > 0) return greetings[0];
+            if (merchantId == "sulfur" && greetings.Length > 1) return greetings[1];
+            if (merchantId == "mercury" && greetings.Length > 2) return greetings[2];
+            return "";
         }
 
         private static string RarityLabel(string rarity)
@@ -2625,53 +1998,7 @@ namespace GameJam.Prototype
         /// </summary>
         private void DrawLevelResultV21()
         {
-            TableRulesV21 r = turnLoop.rulesV21;
-            if (r == null) return;
-
-            BeginCenterPanel(660f, levelResultDrag);
-
-            GUILayout.Label(turnLoop.level.Name + "　总分 " + r.score + " / 目标分 " + r.targetScore
-                            + "　" + (turnLoop.Passed ? "通过" : "未通过"), h1Panel);
-
-            GUILayout.Label("结束原因：" + (string.IsNullOrEmpty(r.endReason) ? "（未记录）" : r.endReason), bodyPanel);
-            GUILayout.Label("刀片：" + (r.blade != null ? r.blade.Describe() : "（无）"), bodyPanel);
-            GUILayout.Label("最终附魔：" + (r.blade != null ? r.blade.layers.Describe() : "（无）"), bodyPanel);
-            GUILayout.Label("打过的回合：" + r.turnIndex + "/" + GameJam.Rules.LevelRun.TurnsPerLevel
-                            + "　桌面残留素材：" + r.LiveTableCount() + " 张", dimPanel);
-
-            // 默认放行要说出来，不然"0 分也算通过"看着像 bug
-            if (turnLoop.level.passByDefault)
-                GUILayout.Label("（Level.passByDefault 还开着：没到目标分也算通过）", dimPanel);
-
-            if (r.warnings.Count > 0)
-                GUILayout.Label("⚠ 本关有 " + r.warnings.Count + " 条引擎警告（卡表缺产物之类），F2 看报告", dimPanel);
-
-            GUILayout.Space(8f);
-
-            string label = turnLoop.Passed
-                ? (turnLoop.HasNextLevel ? "进入下一关" : "已是最后一关")
-                : "重试本关";
-
-            // 两个按钮平分一行：旧版是 x+22 与 x+w-230 两个写死的横坐标，
-            // 面板一窄就在中间叠在一起
-            GUILayout.BeginHorizontal();
-
-            if (GUILayout.Button(label, btn, GUILayout.ExpandWidth(true), GUILayout.Height(40f)))
-            {
-                GUI.FocusControl(null);
-                if (turnLoop.Passed) turnLoop.NextLevel();
-                else                 turnLoop.RestartLevel();
-            }
-
-            if (GUILayout.Button("返回关卡界面", btn, GUILayout.ExpandWidth(true), GUILayout.Height(40f)))
-            {
-                GUI.FocusControl(null);
-                turnLoop.OpenLevelSelect();
-            }
-
-            GUILayout.EndHorizontal();
-
-            EndCenterPanel();
+            DrawArtLevelResult();
         }
 
         /// <summary>

@@ -130,9 +130,11 @@ namespace GameJam.Prototype
         ///
         /// margin 的语义和 <see cref="FrameTableBounds"/> 一致：1.1 = 每个方向至少留 1/1.1 半屏。
         /// go = true 时顺带切过去（重建机位一般不切，见调用点的说明）。
+        /// centerX 指定固定的水平中轴；桌面主镜头使用桌子中轴，避免不对称道具影响构图。
+        /// 固定中轴时直接求透视投影的最近安全距离，并平衡上下留白，得到更近的主镜头。
         /// </summary>
         public bool FramePoints(string name, IList<Vector3> points, float tiltDeg,
-                               float margin = 1.1f, bool go = false)
+                               float margin = 1.1f, bool go = false, float? centerX = null)
         {
             if (cam == null || points == null || points.Count == 0) return false;
 
@@ -145,6 +147,31 @@ namespace GameJam.Prototype
             // 视线方向由俯角唯一决定；相机上方 ⟂ 它，所以"沿 dir 挪"只改距离、不改上下和左右。
             Vector3 dir = new Vector3(0f, Mathf.Sin(tilt), -Mathf.Cos(tilt));   // 注视点 → 相机
             Vector3 up  = new Vector3(0f, Mathf.Cos(tilt), Mathf.Sin(tilt));    // 画面上方
+
+            if (centerX.HasValue)
+            {
+                // 按透视后的上下边界取景，避免世界包围盒中点留下过多空桌面。
+                // camera = right * centerX + up * centerU + dir * distance。
+                // 每个点的深度为 distance - dot(point, dir)，由同一投影直接求最近安全距离。
+                float vertical = limit * halfV, horizontal = limit * halfH;
+                float distance = .05f;
+                float lower = float.MinValue, upper = float.MaxValue;
+                for (int i = 0; i < points.Count; i++)
+                {
+                    float depthOffset = Vector3.Dot(points[i], dir);
+                    float height = Vector3.Dot(points[i], up);
+                    distance = Mathf.Max(distance, depthOffset + .001f,
+                        depthOffset + Mathf.Abs(points[i].x - centerX.Value) / horizontal);
+                    lower = Mathf.Max(lower, height + vertical * depthOffset);
+                    upper = Mathf.Min(upper, height - vertical * depthOffset);
+                }
+                distance = Mathf.Max(distance, (lower - upper) / (2f * vertical)) + .0001f;
+                Vector3 centeredPosition = Vector3.right * centerX.Value
+                    + up * ((lower + upper) * .5f) + dir * distance;
+                Register(name, centeredPosition, centeredPosition - dir);
+                if (go) GoTo(name);
+                return true;
+            }
 
             // ① 居中：点集在"画面右 / 画面上"两个方向上的中值，就是相机在这两个方向上的坐标。
             //    （dir 在 YZ 平面内，所以"画面右"永远是 +X —— 取景不需要跟着转头。）
@@ -162,7 +189,10 @@ namespace GameJam.Prototype
 
             // base 放在 z = 0 平面上，只要它在右 / 上两个方向上的分量对就行：
             //   相机 = base + dir * dist（dir ⟂ up，所以 dist 一变，上下分量不动）。
-            Vector3 basePos = new Vector3((minX + maxX) * 0.5f, (minU + maxU) * 0.5f / up.y, 0f);
+            // 桌面主镜头沿桌子中轴取景，不能被右侧机器等不对称物件拉偏。
+            // 未指定中轴的特写镜头仍按内容居中；距离继续按所有点的透视投影拟合。
+            Vector3 basePos = new Vector3(centerX ?? (minX + maxX) * 0.5f,
+                                         (minU + maxU) * 0.5f / up.y, 0f);
 
             // ② 退后到全部装下：先翻倍找"一定装得下"的上界，再二分收紧
             float lo = 0.05f, hi = 1f;

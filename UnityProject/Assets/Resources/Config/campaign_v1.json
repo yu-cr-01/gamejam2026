@@ -1,0 +1,154 @@
+{
+  "tutorialDecks": [
+    {
+      "id": "tutorial_deck_water",
+      "title": "静水试炼",
+      "subtitle": "水、皮革、铜、白磷、硬化",
+      "materialIds": [
+        "water",
+        "leather",
+        "copper",
+        "white_phosphorus"
+      ],
+      "spellId": "harden"
+    },
+    {
+      "id": "tutorial_deck_alien",
+      "title": "异质回响",
+      "subtitle": "外星合金、水、冰、盐、硬化",
+      "materialIds": [
+        "alien_alloy",
+        "water",
+        "ice",
+        "salt"
+      ],
+      "spellId": "harden"
+    },
+    {
+      "id": "tutorial_deck_sulfur",
+      "title": "燃素之路",
+      "subtitle": "白磷、硫磺、木头、水、硬化",
+      "materialIds": [
+        "white_phosphorus",
+        "sulfur",
+        "wood",
+        "water"
+      ],
+      "spellId": "harden"
+    }
+  ],
+  "levels": [
+    {
+      "id": "mentor",
+      "npcName": "导师",
+      "objective": "为导师提炼 60 分精华",
+      "specialCondition": "无特殊条件",
+      "scoreNumerator": 1,
+      "scoreDenominator": 1,
+      "shapeChangeScoreBonus": 0,
+      "startingSpellIds": [],
+      "startingCold": 0,
+      "intro": "无特殊条件",
+      "taunt": "为导师提炼 60 分精华",
+      "urge": "第 2 回合开始。",
+      "praise": "第 3 回合开始。",
+      "farewell": "第 4 回合开始。"
+    },
+    {
+      "id": "fire_lady",
+      "npcName": "火女",
+      "objective": "为火女提炼 120 分精华",
+      "specialCondition": "开局额外获得 3 张一次性火焰法术",
+      "scoreNumerator": 1,
+      "scoreDenominator": 1,
+      "shapeChangeScoreBonus": 0,
+      "startingSpellIds": [
+        "flame",
+        "flame",
+        "flame"
+      ],
+      "startingCold": 0,
+      "intro": "开局额外获得 3 张一次性火焰法术",
+      "taunt": "为火女提炼 120 分精华",
+      "urge": "第 2 回合开始。",
+      "praise": "第 3 回合开始。",
+      "farewell": "第 4 回合开始。"
+    },
+    {
+      "id": "eyeball_knight",
+      "npcName": "眼球骑士",
+      "objective": "为眼球骑士提炼 180 分精华",
+      "specialCondition": "刀片开局自带 3 层冷附魔",
+      "scoreNumerator": 1,
+      "scoreDenominator": 1,
+      "shapeChangeScoreBonus": 0,
+      "startingSpellIds": [],
+      "startingCold": 3,
+      "intro": "刀片开局自带 3 层冷附魔",
+      "taunt": "为眼球骑士提炼 180 分精华",
+      "urge": "第 2 回合开始。",
+      "praise": "第 3 回合开始。",
+      "farewell": "第 4 回合开始。"
+    },
+    {
+      "id": "mentor_boss",
+      "npcName": "导师·本源形态",
+      "objective": "击败导师，达到 300 分",
+      "specialCondition": "每次启动得分减半；每次形态变化额外 +10 分",
+      "scoreNumerator": 1,
+      "scoreDenominator": 2,
+      "shapeChangeScoreBonus": 10,
+      "startingSpellIds": [],
+      "startingCold": 0,
+      "intro": "每次启动得分减半；每次形态变化额外 +10 分",
+      "taunt": "击败导师，达到 300 分",
+      "urge": "第 2 回合开始。",
+      "praise": "第 3 回合开始。",
+      "farewell": "第 4 回合开始。"
+    }
+  ],
+  "hiddenRooms": {
+    "mercuryBaseChance": 10,
+    "mercuryChancePerBlank": 10,
+    "mercuryChanceCap": 100,
+    "sacrificeChanceCap": 100,
+    "sacrificeBlankReward": 5,
+    "mercuryMaterialIds": [
+      "mercury",
+      "solid_mercury",
+      "mercury_vapor"
+    ],
+    "tierOneProfessions": [],
+    "tierTwoProfessions": []
+  },
+  "tutorialIntro": "选择素材和刀片，启动破壁机得分。",
+  "tableCallouts": [
+    "破壁机：启动反应。",
+    "量杯：显示得分。",
+    "桌面：放置并选择素材。"
+  ],
+  "tutorialPersonality": "先选牌组，再选一张素材作为刀片核心。",
+  "tutorialBlade": "核心卡的 H、V 将成为刀片的初始属性。",
+  "tutorialAttributes": "H：硬度，影响稀有度与刀片耐久。D：素材剩余使用次数。V：分值，启动时将目标与刀片的 V 相加。",
+  "tutorialTarget": "4 个回合内达到 60 分，每回合可启动 5 次。",
+  "tutorialFourthStart": "本回合最后一次启动后，目标若仍有 D，将被吞噬；D 已耗尽则无收益。",
+  "tutorialShopGreeting": "可花费当前分数购买卡牌。",
+  "tutorialPassed": "已达到目标，可进入下一关。",
+  "tutorialFailed": "未达到目标，请重试。",
+  "hiddenRoomNoProfession": "暂无职业奖励，已获得的素材与空白卡会保留。",
+  "mercuryReflections": [
+    "废弃之物也记得曾经完整。",
+    "隐秘的智慧，常藏在被丢弃的东西里。",
+    "真相有时只是另一种精心打磨的形态。"
+  ],
+  "sacrificeReflections": [
+    "等价交换听起来公平，直到你成为被交换的那一部分。",
+    "质量守恒。只是每次都有人假装忘了代价。",
+    "如果什么都不肯失去，炼金术又能改变什么？"
+  ],
+  "shopGreetings": [
+    "盐之商人：选择要购买的卡牌。",
+    "硫之商人：选择要购买的卡牌。",
+    "汞之商人：选择要购买的卡牌。"
+  ]
+}

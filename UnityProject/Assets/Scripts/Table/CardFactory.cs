@@ -1,4 +1,5 @@
 using System.Text;
+using System.Collections.Generic;
 using UnityEngine;
 using GameJam.Data;
 
@@ -12,16 +13,16 @@ namespace GameJam.Prototype
     ///     Card_铁块                根节点，scale = 1
     ///       ├─ Rigidbody           刚体（默认 kinematic）
     ///       ├─ PlayCard            卡牌逻辑
-    ///       ├─ Body               立方体：BoxCollider + 卡牌侧边，比卡面略小
-    ///       ├─ Face               Quad：卡面贴图（圆角、带透明边），贴在 Body 顶面
+    ///       ├─ Body               立方体碰撞体；美术卡会隐藏方块渲染
+    ///       ├─ CardShape          美术卡按透明轮廓挤出的侧壁
+    ///       ├─ Face               Quad：卡面贴图，覆盖在 CardShape 顶面
     ///       ├─ NameText           TextMesh：名字（落在色带上）
     ///       └─ StatsText ×3       TextMesh：H / D / V 三个**数字**，
     ///                             分别落在数值牌上的菱形 / 圆形 / 方形里（见 CardFactory.AddStatNumbers）
     ///
-    /// 【为什么 Body 是立方体而卡面是 Quad】
-    ///   Body 负责"有厚度、能被射线打中"，它的顶面是方的。
-    ///   卡面要圆角就得有透明区域，所以单独用一张带 alpha 的 Quad 盖上去，
-    ///   并且 Body 比卡面小一圈 —— 这样圆角处透出去看到的是桌面，不是方块边。
+    /// 【为什么美术卡要分卡身和卡面】
+    ///   Body 只负责稳定的射线碰撞。透明切角处不能再露出矩形方块，
+    ///   所以 CardShape 用卡面 alpha 生成同轮廓的厚度，Face 负责显示完整美术。
     ///
     /// 【为什么文字挂在根节点上】
     /// Body 是非等比缩放（0.24 / 0.008 / 0.335），文字挂上去会被拉得完全变形。
@@ -40,6 +41,10 @@ namespace GameJam.Prototype
         public const float CardWidth = 0.24f;
         public const float CardThick = 0.008f;
         public const float CardDepth = 0.335f;
+
+        private static Mesh spellScrollMesh;
+        private static Material[] spellScrollMaterials;
+        private static readonly Dictionary<int, Mesh> cardShapeMeshes = new Dictionary<int, Mesh>();
 
         /// <summary>
         /// Body 相对卡面的缩小比例 —— 让圆角真的能透出桌面。
@@ -92,13 +97,7 @@ namespace GameJam.Prototype
         public static Font CjkFont()
         {
             if (cjkFont != null) return cjkFont;
-
-            string[] candidates =
-            {
-                "Microsoft YaHei", "微软雅黑", "SimHei", "SimSun",
-                "PingFang SC", "Noto Sans CJK SC", "Arial Unicode MS"
-            };
-            cjkFont = Font.CreateDynamicFontFromOSFont(candidates, 48);
+            cjkFont = GameUiTheme.Font;
             return cjkFont;
         }
 
@@ -218,6 +217,10 @@ namespace GameJam.Prototype
         {
             if (c == null) return null;
 
+            Spell spell = c.IsModule ? CardSpecs.SpellById(c.id) : null;
+            if (spell != null)
+                return CreateSpellScroll(c, parent, home, euler);
+
             Color  accent;
             AttrId dominant;
             string sub;
@@ -255,6 +258,83 @@ namespace GameJam.Prototype
             Texture2D face = CardArt.FaceForCard(c);
             bool v30Art = face != null && CardArt.IsV30Card(c.id);
             PlayCard card = BuildCard(c.name, accent, dominant, sub, statsIng, parent, face, v30Art);
+            card.Setup(c, home, euler);
+            return card;
+        }
+
+        /// <summary>法术用带厚度的卷轴剪影承载交互，不生成卡身、卡面或属性文字。</summary>
+        private static PlayCard CreateSpellScroll(Card c, Transform parent, Vector3 home, Vector3 euler)
+        {
+            GameObject root = new GameObject("SpellScroll");
+            root.transform.SetParent(parent, false);
+
+            Rigidbody rb = root.AddComponent<Rigidbody>();
+            rb.isKinematic = true;
+            rb.useGravity = false;
+            rb.mass = 0.05f;
+            rb.drag = 0.6f;
+            rb.angularDrag = 0.8f;
+
+            // 射线和拖放仍由 PlayCard / BoxCollider 处理；碰撞盒按槽位大小留少量边距。
+            BoxCollider hitBox = root.AddComponent<BoxCollider>();
+            hitBox.size = new Vector3(0.19f, 0.024f, 0.25f);
+            hitBox.center = new Vector3(0f, 0.012f, 0f);
+
+            PlayCard card = root.AddComponent<PlayCard>();
+            Texture2D scroll = CardArt.SpellScrollIllustration;
+            if (spellScrollMesh == null && scroll != null)
+                spellScrollMesh = BlenderArt.BuildExtrudedCutout(scroll, 72, 1f, "SpellScrollCutout");
+
+            if (scroll != null)
+            {
+                GameObject model;
+                MeshRenderer renderer;
+                if (spellScrollMesh != null)
+                {
+                    model = new GameObject("ScrollModel");
+                    model.transform.SetParent(root.transform, false);
+                    model.transform.localPosition = new Vector3(0f, 0.012f, 0f);
+                    model.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+                    model.transform.localScale = new Vector3(0.17f, 0.22f, 0.014f);
+                    model.AddComponent<MeshFilter>().sharedMesh = spellScrollMesh;
+                    renderer = model.AddComponent<MeshRenderer>();
+                }
+                else
+                {
+                    // 网格生成失败时仍显示透明底卷轴图，不退回卡牌外形。
+                    model = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                    model.name = "ScrollModelFallback";
+                    model.transform.SetParent(root.transform, false);
+                    model.transform.localPosition = new Vector3(0f, 0.012f, 0f);
+                    model.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+                    model.transform.localScale = new Vector3(0.17f, 0.22f, 1f);
+                    Collider fallbackCollider = model.GetComponent<Collider>();
+                    if (fallbackCollider != null) Object.DestroyImmediate(fallbackCollider);
+                    renderer = model.GetComponent<MeshRenderer>();
+                }
+
+                if (spellScrollMaterials == null)
+                {
+                    Material side = MakeUnlit(null);
+                    side.color = new Color(0.40f, 0.27f, 0.15f, 1f);
+                    Material back = MakeUnlit(scroll);
+                    back.color = new Color(0.64f, 0.64f, 0.64f, 1f);
+                    Material front = MakeUnlit(scroll);
+                    spellScrollMaterials = new Material[] { side, back, front };
+                }
+                renderer.sharedMaterials = spellScrollMesh != null
+                    ? spellScrollMaterials
+                    : new Material[] { spellScrollMaterials[2] };
+                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                renderer.receiveShadows = false;
+                card.BindRenderer(null, renderer);
+            }
+            else
+            {
+                Debug.LogWarning("[CardFactory] 缺少法術卷軸美術，法術保留可交互碰撞區：" + c.id);
+                card.BindRenderer(null);
+            }
+
             card.Setup(c, home, euler);
             return card;
         }
@@ -331,6 +411,27 @@ namespace GameJam.Prototype
             if (faceRenderer != null)
                 faceRenderer.material = MakeUnlit(faceTex);
 
+            // 美术卡的透明切角必须同时作用在卡身上。矩形 Cube 即使缩小，角落仍会从透明
+            // 区域露出浅色碎片；这里用卡面 alpha 生成同轮廓的薄壳，Cube 只保留拾取碰撞。
+            Renderer cardBodyRenderer = bodyRenderer;
+            if (artFace)
+            {
+                Mesh shapeMesh = GetCardShapeMesh(faceTex);
+                if (shapeMesh != null)
+                {
+                    bodyRenderer.enabled = false;
+                    cardBodyRenderer = CreateCardShape(root.transform, faceTex, shapeMesh);
+                }
+            }
+            if (bodyRenderer != null && bodyRenderer.enabled)
+            {
+                // 卡图缺失或剪影网格无法生成时，也不保留浅色立方体卡边；碰撞仍由 BoxCollider 提供。
+                bodyRenderer.material = MakeUnlit(null);
+                bodyRenderer.material.color = Color.clear;
+                bodyRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                bodyRenderer.receiveShadows = false;
+            }
+
             // ④ 文字：挂在根节点上（scale=1），避免被 Body 的非等比缩放拉变形
             //
             // 两套版面：
@@ -364,8 +465,45 @@ namespace GameJam.Prototype
             }
 
             // 卡身和卡面都要跟着悬停/拖动变亮，所以两个渲染器都绑上
-            card.BindRenderer(bodyRenderer, faceRenderer);
+            card.BindRenderer(cardBodyRenderer, faceRenderer);
             return card;
+        }
+
+        private static Mesh GetCardShapeMesh(Texture2D faceTex)
+        {
+            if (faceTex == null) return null;
+            int key = faceTex.GetInstanceID();
+            Mesh cached;
+            if (cardShapeMeshes.TryGetValue(key, out cached)) return cached;
+
+            // 高 alpha 阈值让侧壁收在卡面抗锯齿边内，避免从斜角看到壳体越出卡面。
+            Mesh mesh = BlenderArt.BuildExtrudedCutout(faceTex, 128, 1f,
+                "CardShape_" + key, 0.98f);
+            if (mesh != null) cardShapeMeshes[key] = mesh;
+            return mesh;
+        }
+
+        private static MeshRenderer CreateCardShape(Transform parent, Texture2D faceTex, Mesh mesh)
+        {
+            GameObject shape = new GameObject("CardShape");
+            shape.transform.SetParent(parent, false);
+            shape.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            shape.transform.localScale = new Vector3(CardWidth, CardDepth, CardThick);
+
+            shape.AddComponent<MeshFilter>().sharedMesh = mesh;
+
+            Material side = MakeUnlit(null);
+            // 卡片挤出的侧壁保持透明，避免美术卡图轮廓外露出米白色边角。
+            side.color = Color.clear;
+            Material back = MakeUnlit(faceTex);
+            back.color = new Color(0.64f, 0.64f, 0.64f, 1f);
+            Material front = MakeUnlit(null);
+            front.color = new Color(1f, 1f, 1f, 0f);
+            MeshRenderer renderer = shape.AddComponent<MeshRenderer>();
+            renderer.sharedMaterials = new Material[] { side, back, front };
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            return renderer;
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -406,6 +544,7 @@ namespace GameJam.Prototype
         {
             int n = Mathf.Min(AttrCatalog.Count, CardArt.StatSlots.Length);
             GameObject[] numbers = new GameObject[n];
+            Color ink = CardArt.StatInkForCard(ing.id);
 
             for (int i = 0; i < n; i++)
             {
@@ -416,7 +555,9 @@ namespace GameJam.Prototype
                 Vector2 at = CardArt.EffectPxToLocal(CardArt.StatSlots[i].centerPx);
 
                 numbers[i] = AddText(root.transform, value.ToString(), at.y, FallbackStatSize,
-                                     CardArt.InkOnPlate, y, at.x, StatsTextObject);
+                                     ink, y, at.x, StatsTextObject);
+                TextMesh text = numbers[i] != null ? numbers[i].GetComponent<TextMesh>() : null;
+                if (text != null) text.fontStyle = FontStyle.Bold;
             }
 
             // ① 这一帧先试一次。★ 实测：**这一帧几乎总是量不到**（TextMesh 的网格要下一帧才有），

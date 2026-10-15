@@ -58,8 +58,8 @@ namespace GameJam.Prototype
         private static readonly Dictionary<int, Texture2D> faceCache = new Dictionary<int, Texture2D>();
         private static readonly Dictionary<int, Texture2D> emblemCache = new Dictionary<int, Texture2D>();
         private static Texture2D slotFrameTex;
+        private static readonly Texture2D[] slotSymbolFrames = new Texture2D[3];
         private static Texture2D tableTex;
-        private static Texture2D panelTex;
 
         // ══════════════════════════════════════════════════════════════
         //  食材配色
@@ -274,9 +274,10 @@ namespace GameJam.Prototype
         /// 灰蓝（平时）或绿色（悬停到可用槽）。贴图只负责形状和透明度，
         /// 这样"哪一段是角标"和"角标什么颜色"两件事互不干扰。
         /// </summary>
-        public static Texture2D SlotFrame()
+        public static Texture2D SlotFrame(int symbol = 0)
         {
-            if (slotFrameTex != null) return slotFrameTex;
+            symbol = Mathf.Clamp(symbol, 0, 2);
+            if (slotSymbolFrames[symbol] != null) return slotSymbolFrames[symbol];
 
             int W = CardTexW, H = CardTexH;
             Color32[] px = new Color32[W * H];
@@ -305,9 +306,24 @@ namespace GameJam.Prototype
                         bool nearCornerX = Mathf.Abs(pxx) > halfW - bracket;
                         bool nearCornerY = Mathf.Abs(py) > halfH - bracket;
 
-                        if (nearCornerX && nearCornerY)
-                            a = Mathf.Clamp01(stroke - d) * 0.90f;
+                        a = Mathf.Clamp01(stroke - d) * (nearCornerX && nearCornerY ? 1f : 0.7f);
                     }
+
+                    // 中心图形：叶片表示素材，闪电表示法术，四刃表示刀片。
+                    float u = pxx / 38f, v = py / 38f;
+                    bool ink;
+                    if (symbol == 1)
+                        ink = v > -1f && v < 1f && Mathf.Abs(u + v * 0.50f - (v > 0f ? 0.15f : -0.15f)) < 0.18f;
+                    else if (symbol == 2)
+                        ink = (Mathf.Abs(u) < 0.18f && Mathf.Abs(v) < 1f)
+                            || (Mathf.Abs(v) < 0.18f && Mathf.Abs(u) < 1f);
+                    else
+                    {
+                        float leaf = u * u + v * v * 0.56f;
+                        ink = (leaf > 0.68f && leaf < 0.95f && Mathf.Abs(v) < 1.15f)
+                            || (Mathf.Abs(u - v * 0.2f) < 0.06f && Mathf.Abs(v) < 1f);
+                    }
+                    if (ink) a = 0.78f;
 
                     px[y * W + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
                 }
@@ -316,6 +332,7 @@ namespace GameJam.Prototype
             slotFrameTex = NewTex(W, H);
             slotFrameTex.SetPixels32(px);
             slotFrameTex.Apply(true, false);   // true = 生成 mip（见 NewTex 的说明）
+            slotSymbolFrames[symbol] = slotFrameTex;
             return slotFrameTex;
         }
 
@@ -323,7 +340,7 @@ namespace GameJam.Prototype
         //  桌面木纹
         // ══════════════════════════════════════════════════════════════
 
-        /// <summary>程序化木纹：沿 X 拉长的条带 + 两层噪声扰动。</summary>
+        /// <summary>程序化暖木桌面：三块长木板、细木纹和轻微的板缝变化。</summary>
         public static Texture2D TableSurface()
         {
             if (tableTex != null) return tableTex;
@@ -331,25 +348,39 @@ namespace GameJam.Prototype
             const int W = 512, H = 512;
             Color32[] px = new Color32[W * H];
 
-            Color dark  = new Color(0.150f, 0.108f, 0.082f);
-            Color light = new Color(0.252f, 0.190f, 0.142f);
+            Color dark  = new Color(0.205f, 0.125f, 0.073f);
+            Color light = new Color(0.405f, 0.282f, 0.165f);
 
             for (int y = 0; y < H; y++)
             {
                 float v = (float)y / H;
+                float plankV = Mathf.Repeat(v * 3f, 1f);
+                int plank = Mathf.Min(2, (int)(v * 3f));
+                float seam = Mathf.Min(plankV, 1f - plankV);
+                float seamShade = 1f - Mathf.Clamp01((0.010f - seam) * 90f) * 0.34f;
                 for (int x = 0; x < W; x++)
                 {
                     float u = (float)x / W;
 
-                    // 长条纹理：X 方向频率低、Y 方向频率高
-                    float grain = Mathf.PerlinNoise(u * 2.6f, v * 34f);
-                    float fine  = Mathf.PerlinNoise(u * 31f + 7.3f, v * 96f + 2.1f);
-                    float t = Mathf.Clamp01(grain * 0.72f + fine * 0.28f);
+                    // 顺着桌子的长边拉出木纹，板材之间保留细而克制的接缝。
+                    float grain = Mathf.PerlinNoise(u * 3.4f + plank * 2.7f, v * 78f + plank * 11.1f);
+                    float fine  = Mathf.PerlinNoise(u * 150f + plank * 13f, v * 250f + 2.1f);
+                    float wave  = Mathf.Sin((v * 3f + Mathf.Sin(u * 18f + plank) * 0.003f) * Mathf.PI * 2f);
+                    float t = Mathf.Clamp01(grain * 0.76f + fine * 0.18f + wave * 0.035f + 0.02f);
 
-                    // 再叠一层很淡的大块明暗，避免整张桌子一个调子
-                    t *= 0.88f + 0.24f * Mathf.PerlinNoise(u * 1.4f + 19f, v * 1.4f + 5f);
+                    // 三块木板有轻微色差，避免明显的重复贴图感。
+                    t = Mathf.Clamp01(t * (0.94f + plank * 0.035f));
+                    t *= 0.90f + 0.20f * Mathf.PerlinNoise(u * 1.7f + 19f, v * 2.1f + 5f);
 
                     Color c = Color.Lerp(dark, light, Mathf.Clamp01(t));
+                    c *= seamShade;
+
+                    // 少量浅木节：压低对比度，远看仍然是一张安静的桌面。
+                    float knotA = Mathf.Sqrt(Mathf.Pow((u - 0.24f) * 1.5f, 2f) + Mathf.Pow((plankV - 0.31f) * 5.5f, 2f));
+                    float knotB = Mathf.Sqrt(Mathf.Pow((u - 0.73f) * 1.3f, 2f) + Mathf.Pow((plankV - 0.72f) * 5.0f, 2f));
+                    float knot = Mathf.Max(Mathf.Clamp01(1f - knotA) * Mathf.Clamp01(0.5f + 0.5f * Mathf.Sin(knotA * 28f)),
+                                           Mathf.Clamp01(1f - knotB) * Mathf.Clamp01(0.5f + 0.5f * Mathf.Sin(knotB * 25f)));
+                    c = Color.Lerp(c, new Color(0.15f, 0.085f, 0.045f), knot * 0.16f);
                     px[y * W + x] = c;
                 }
             }
@@ -380,35 +411,13 @@ namespace GameJam.Prototype
         /// </summary>
         public static Texture2D PanelBackdrop()
         {
-            if (panelTex != null) return panelTex;
+            return GameUiTheme.Paper;
+        }
 
-            const int S = 32;
-            Color32[] px = new Color32[S * S];
-
-            Color fill = new Color(0.112f, 0.126f, 0.152f);
-            Color edge = new Color(0.400f, 0.455f, 0.545f);
-
-            float half = S * 0.5f;
-
-            for (int y = 0; y < S; y++)
-            {
-                float py = (y + 0.5f) - half;
-                for (int x = 0; x < S; x++)
-                {
-                    float pxx = (x + 0.5f) - half;
-                    float d = RoundRectSDF(pxx, py, half - 0.5f, half - 0.5f, 6f);
-
-                    Color c = (d > -1.3f) ? edge : fill;   // 靠近轮廓的一圈画成描边色
-                    c.a = Mathf.Clamp01(0.5f - d);         // 圆角外自然透明，边缘抗锯齿
-
-                    px[y * S + x] = c;
-                }
-            }
-
-            panelTex = NewTex(S, S);
-            panelTex.SetPixels32(px);
-            panelTex.Apply(true, false);   // true = 生成 mip（见 NewTex 的说明）
-            return panelTex;
+        /// <summary>和卡牌墨绿、纸金配色一致的圆角按钮底图。</summary>
+        public static Texture2D PanelButtonBackdrop(bool selected, int state)
+        {
+            return GameUiTheme.Button(selected,state);
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -442,9 +451,9 @@ namespace GameJam.Prototype
 
                     float t = Mathf.Clamp01(0.72f + (brush - 0.5f) * 0.35f + (broad - 0.5f) * 0.30f);
 
-                    // 冷灰的金属色，整体压暗一点，免得在暗场里太跳
-                    float g = 0.44f + t * 0.30f;
-                    Color c = new Color(g * 0.98f, g, g * 1.04f);
+                    // 暖铜金拉丝：留住金属高光，但避开和卡牌暖纸色冲突的冷蓝灰。
+                    float g = 0.31f + t * 0.34f;
+                    Color c = new Color(g * 1.16f, g * 0.88f, g * 0.58f);
                     c.a = 1f;
                     px[y * S + x] = c;
                 }

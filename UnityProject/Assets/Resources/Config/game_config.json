@@ -90,9 +90,10 @@
   "defaultBladeId": "iron_block",
 
   "levels": [
-    { "id": "level_1", "name": "第 1 关 · 点火", "targetScore": 1000 },
-    { "id": "level_2", "name": "第 2 关 · 萃取", "targetScore": 1500 },
-    { "id": "level_3", "name": "第 3 关 · 破壁", "targetScore": 2000 }
+    { "id": "level_1", "name": "第一关 · 导师", "targetScore": 60 },
+    { "id": "level_2", "name": "第二关 · 火女", "targetScore": 120 },
+    { "id": "level_3", "name": "第三关 · 眼球骑士", "targetScore": 180 },
+    { "id": "level_4", "name": "第四关 · 导师本源形态", "targetScore": 300 }
   ],
 
   "texts": {

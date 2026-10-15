@@ -229,6 +229,16 @@ namespace GameJam.Prototype
         /// </summary>
         public int blankCount;
 
+        /// <summary>回合结束前待献祭素材的当前 H；空引用或已离场时为 0。</summary>
+        public int PendingSacrificeH
+        {
+            get
+            {
+                return hasPendingSacrifice && pendingSacrifice != null && !pendingSacrifice.removed
+                    ? Mathf.Max(0, pendingSacrifice.H) : 0;
+            }
+        }
+
         /// <summary>
         /// 本回合**最后登记的那个待献祭目标**在桌面表 <see cref="table"/> 里的那一张
         /// （null = 没有 / 目标已离场）。与 <see cref="hasPendingSacrifice"/> 配套。
@@ -293,6 +303,9 @@ namespace GameJam.Prototype
         /// 初始化走 <see cref="NewTableRules"/>（实机要打开卡牌「启动」文本，见那里）。
         /// </summary>
         public TurnRules rules = NewTableRules();
+        private int campaignScoreNumerator = 1;
+        private int campaignScoreDenominator = 1;
+        private int campaignShapeChangeBonus;
 
         /// <summary>
         /// 实机（桌面层）用的引擎旋钮：在 <see cref="TurnRules"/> 的默认值之上，
@@ -507,26 +520,17 @@ namespace GameJam.Prototype
             sourceOfState.Clear();
             ClearPendingSacrifice();
 
-            // ★ 目标分：v2.1 用 TableSettings.V21TargetScore，**不用** levelTargetScore。
-            //   传进来的那个值来自 game_config.json 的 levels[].targetScore（1000/1500/2000），
-            //   那是旧流程的口径（旧流程一次杯内模拟能拿几百分）。
-            //   v2.1 每次启动只有「目标 V + 刀片 V」= 几分，一关最多 20 次启动，
-            //   拿 1000 当目标 = 永远达不到 → 玩家只看到"4 回合耗尽"，像是规则没生效。
-            //   所以这里只做一件事：v2.1 走自己的目标分（默认 60，理由见 TableSettings）。
-            //   levelTargetScore 留着不删、也不再参与 v2.1 结算：旧流程的数值一个字都没动。
-            targetScore = TableSettings.V21TargetScore > 0
-                ? TableSettings.V21TargetScore
-                : FallbackTargetScore;
-            if (levelTargetScore > 0 && levelTargetScore != targetScore)
-            {
-                Debug.Log("[V21] 目标分取 v2.1 专用值 " + targetScore +
-                          "（配置里旧流程的 targetScore=" + levelTargetScore + " 不参与 v2.1 结算）");
-            }
+            // 每关按关卡配置取目标分；只在配置漏值时回退到旧的全局默认值。
+            targetScore = levelTargetScore > 0 ? levelTargetScore :
+                          (TableSettings.V21TargetScore > 0 ? TableSettings.V21TargetScore : FallbackTargetScore);
 
             // 规则旋钮每关一份。TargetScore 必须填进去 —— 引擎的 Finish() 靠它判"达到目标分"。
             // ★ 必须走 NewTableRules（不是 new TurnRules）：实机要打开卡牌「启动」文本，见那里。
             rules = NewTableRules();
             rules.TargetScore = targetScore;
+            rules.ActivationScoreNumerator = campaignScoreNumerator;
+            rules.ActivationScoreDenominator = campaignScoreDenominator;
+            rules.ShapeChangeScoreBonus = campaignShapeChangeBonus;
 
             // 引擎的卡表查询：规则文本里写的是**中文卡名**，必须由这里翻回卡对象。
             engine = new TurnEngine(rules, new V21CardLookup());
@@ -568,6 +572,57 @@ namespace GameJam.Prototype
         ///   按 F2 也是一片空白。玩法与存读档本身都没错，但玩家/策划会以为卡表坏了。
         ///   所以"谁需要谁先确保它有"：BeginLevel 与读档落地（CommitSaveState）各叫一次。
         /// </summary>
+        /// <summary>设置当前关卡的战役修正，在 BeginLevel 前调用。</summary>
+        public void ConfigureCampaignModifiers(int scoreNumerator, int scoreDenominator, int shapeChangeBonus)
+        {
+            campaignScoreNumerator = Mathf.Max(0, scoreNumerator);
+            campaignScoreDenominator = Mathf.Max(1, scoreDenominator);
+            campaignShapeChangeBonus = Mathf.Max(0, shapeChangeBonus);
+
+            // 读档不会重建 TurnEngine，因此也要同步已经存在的规则对象。
+            if (rules != null)
+            {
+                rules.ActivationScoreNumerator = campaignScoreNumerator;
+                rules.ActivationScoreDenominator = campaignScoreDenominator;
+                rules.ShapeChangeScoreBonus = campaignShapeChangeBonus;
+            }
+        }
+
+        /// <summary>把隐藏房间选中的素材直接加入手牌，沿用卡表数值和正常视觉重建流程。</summary>
+        public bool AddCampaignMaterial(string materialId)
+        {
+            Ingredient template = CardSpecs.Material(materialId);
+            if (template == null) return false;
+            Ingredient copy = template.Clone();
+            ApplyValues(copy, MaterialCard.ValueSource.CardTable);
+            hand.Add(new MaterialCard
+            {
+                card = copy,
+                H = copy.h,
+                D = copy.d > 0 ? copy.d : DefaultMaterialD,
+                V = copy.v,
+                source = MaterialCard.ValueSource.CardTable,
+            });
+            return true;
+        }
+
+        /// <summary>给开局手牌补充一次性法术。</summary>
+        public bool AddCampaignSpell(string spellId)
+        {
+            Spell template = CardSpecs.Spell(spellId);
+            if (template == null) return false;
+            handSpells.Add(new SpellCard { spell = CloneSpell(template) });
+            return true;
+        }
+
+        /// <summary>奖励空白卡：同时维护计数和可实际打出的空白卡手牌。</summary>
+        public void GrantCampaignBlankCards(int count)
+        {
+            if (count <= 0) return;
+            blankCount += count;
+            for (int i = 0; i < count; i++) AddProducedToHand(LevelSave.BlankCardName);
+        }
+
         public void EnsureReport()
         {
             if (report != null) return;
@@ -1660,8 +1715,8 @@ namespace GameJam.Prototype
             names.Add("刀片卡");
             rects.Add(XZRect.FromCenter(bladeAt, CardFactory.CardWidth, CardFactory.CardDepth));
 
-            names.Add("刀片标记「刀 片」");
-            rects.Add(BladeMarkRect(bladeAt));
+            names.Add("刀片边框");
+            rects.Add(XZRect.FromCenter(bladeAt, 0.28f, 0.385f));
 
             // ② 附魔位的框 + 两块槽名牌（素材框见上面那段说明，不算障碍）
             TableSetup setup = loop != null ? loop.setup : null;
@@ -1680,13 +1735,6 @@ namespace GameJam.Prototype
                     rects.Add(XZRect.FromCenter(board.SlotPosition(i), TableSetup.SlotSizeX, TableSetup.SlotSizeZ));
                 }
 
-                for (int i = 0; i < board.SlotCount; i++)
-                {
-                    string label = (slotNames != null && i < slotNames.Length) ? slotNames[i] : ("槽 " + i);
-                    names.Add("槽名牌 " + label);
-                    rects.Add(XZRect.FromCenter(setup.SlotLabelPosition(i),
-                                                SlotLabelHalfW * 2f, SlotLabelHalfD * 2f));
-                }
             }
 
             // ③ 手牌那一排（前后就是 HandZ ± 卡深一半）

@@ -14,7 +14,7 @@ namespace GameJam.Prototype
     ///   放独立组件还有一个好处：以后真要删掉它，删一个文件 + 一行 AddComponent 就行。
     ///
     /// 【为什么卡面不直接读 PNG】
-    ///   素材用 CardArt（正式美术 + 元素映射），法术没有美术，走 ProceduralArt 的程序化卡面。
+    ///   素材用 CardArt（正式美术 + 元素映射）；法术用程序化文字版式和通用卷轴插画。
     ///   两条路都返回 Texture2D，这里只负责画 —— 美术到位后这里一行都不用改。
     ///
     /// 按键：F1 开关（在 Inspector 里可以改）。**Esc 菜单里也有入口** ——
@@ -99,6 +99,7 @@ namespace GameJam.Prototype
 
         private void OnGUI()
         {
+            GameUiTheme.Apply();
             if (!open) return;
             EnsureStyles();
 
@@ -106,8 +107,8 @@ namespace GameJam.Prototype
 
             // 铺一层底：直接用半透明纯色，比 9 宫格拉伸省事
             Color prev = GUI.color;
-            GUI.color = new Color(0.05f, 0.06f, 0.08f, 0.97f);
-            GUI.DrawTexture(new Rect(0f, 0f, w, h), Texture2D.whiteTexture);
+            GUI.color = Color.white;
+            GameUiTheme.DrawSheet(new Rect(0f, 0f, w, h));
             GUI.color = prev;
 
             // ── 顶栏 ──────────────────────────────────────────────────
@@ -247,7 +248,7 @@ namespace GameJam.Prototype
 
         private void DrawMaterial(Ingredient ing)
         {
-            GUILayout.BeginHorizontal(GUILayout.MinHeight(CardH + RowGap));
+            GUILayout.BeginHorizontal(GUI.skin.box, GUILayout.MinHeight(CardH + RowGap));
 
             Rect r = GUILayoutUtility.GetRect(CardW, CardH, GUILayout.Width(CardW), GUILayout.Height(CardH));
             GUI.DrawTexture(r, MaterialFace(ing), ScaleMode.ScaleToFit);
@@ -287,7 +288,7 @@ namespace GameJam.Prototype
 
         private void DrawSpell(Spell sp)
         {
-            GUILayout.BeginHorizontal(GUILayout.MinHeight(CardH + RowGap));
+            GUILayout.BeginHorizontal(GUI.skin.box, GUILayout.MinHeight(CardH + RowGap));
 
             Rect r = GUILayoutUtility.GetRect(CardW, CardH, GUILayout.Width(CardW), GUILayout.Height(CardH));
             GUI.DrawTexture(r, SpellFace(sp), ScaleMode.ScaleToFit);
@@ -362,17 +363,7 @@ namespace GameJam.Prototype
 
         private Texture2D SpellFace(Spell sp)
         {
-            // 法术没有专属美术 —— 走程序化卡面；附魔类型映射成印记形状，
-            // 这样一眼能分出热/冷/酸（映射只是展示口径，不代表数值）
-            return ProceduralArt.CardFace(ProceduralArt.ModuleColor(sp.id), DominantOfEnchant(sp.enchant));
-        }
-
-        private static AttrId DominantOfEnchant(string enchant)
-        {
-            if (enchant == "热") return AttrId.V;     // 气/升腾
-            if (enchant == "冷") return AttrId.D;    // 液/凝结
-            if (enchant == "酸") return AttrId.H;       // 固/腐蚀
-            return AttrId.D;
+            return CardArt.SpellScrollIllustration;
         }
 
         // ── 样式 ──────────────────────────────────────────────────────
@@ -383,12 +374,7 @@ namespace GameJam.Prototype
 
             if (cjkFont == null)
             {
-                string[] candidates =
-                {
-                    "Microsoft YaHei", "微软雅黑", "SimHei", "SimSun",
-                    "PingFang SC", "Noto Sans CJK SC", "Arial Unicode MS"
-                };
-                cjkFont = Font.CreateDynamicFontFromOSFont(candidates, 18);
+                cjkFont = GameUiTheme.Font;
             }
 
             // ★ 中文不要用 FontStyle.Bold（雅黑没有独立粗体，伪粗体会糊成双影）
@@ -411,6 +397,9 @@ namespace GameJam.Prototype
             {
                 title.font = cjkFont; body.font = cjkFont; dim.font = cjkFont;
                 btn.font = cjkFont; btnOn.font = cjkFont; field.font = cjkFont;
+                GameUiTheme.ButtonStyle(btn); GameUiTheme.ButtonStyle(btnOn, true);
+                GameUiTheme.Text(title, GameUiTheme.Ink); GameUiTheme.Text(body, GameUiTheme.Ink);
+                GameUiTheme.Text(dim, GameUiTheme.Muted); GameUiTheme.Text(field, GameUiTheme.Ink);
             }
         }
     }

@@ -212,6 +212,8 @@ namespace GameJam.Prototype
             new Dictionary<string, Texture2D>();
         private static readonly Dictionary<string, Texture2D> v30Cache =
             new Dictionary<string, Texture2D>();
+        private static readonly Dictionary<string, Color> statInkCache =
+            new Dictionary<string, Color>();
 
         private sealed class V30CardArt
         {
@@ -331,6 +333,54 @@ namespace GameJam.Prototype
             return !string.IsNullOrEmpty(id) && V30Cards.TryGetValue(id, out spec) && !string.IsNullOrEmpty(spec.image);
         }
 
+        /// <summary>
+        /// 数值字色沿用卡牌数值牌的系列色相，再提亮成高对比的彩色墨迹。
+        /// 这样数字会和素材示例里的彩色数值字统一，同时仍能在深色菱形/圆形/方形上读清。
+        /// </summary>
+        public static Color StatInkForCard(string id)
+        {
+            V30CardArt spec;
+            if (string.IsNullOrEmpty(id) || !V30Cards.TryGetValue(id, out spec))
+                return InkOnPlate;
+
+            Color cached;
+            if (statInkCache.TryGetValue(spec.family, out cached)) return cached;
+
+            Color swatch = new Color(0.42f, 0.36f, 0.30f, 1f);
+            Texture2D diamond = LoadV30(spec.family + "/" + spec.familyPrefix + "_text_bg_02");
+            if (diamond != null)
+            {
+                try
+                {
+                    Color32[] pixels = ArtTextures.Read(diamond);
+                    if (pixels != null && pixels.Length == diamond.width * diamond.height)
+                    {
+                        int center = (diamond.height / 2) * diamond.width + diamond.width / 2;
+                        Color32 pixel = pixels[center];
+                        if (pixel.a > 128) swatch = pixel;
+                    }
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogWarning("[CardArt] 数值字色读取失败，使用默认暖色：" + e.Message);
+                }
+            }
+
+            float h, s, v;
+            Color.RGBToHSV(swatch, out h, out s, out v);
+            float inkSaturation = Mathf.Clamp(s * 0.72f, 0.14f, 0.72f);
+            Color ink = Color.HSVToRGB(h, inkSaturation, 0.98f);
+            ink.a = 1f;
+            statInkCache[spec.family] = ink;
+            return ink;
+        }
+
+        /// <summary>飞书卡牌包里的法术卷轴插画，供所有法术卡共用。</summary>
+        public static Texture2D SpellScrollIllustration
+        {
+            get { return LoadV30("wood/spellscroll"); }
+        }
+
         public static Vector3 V30NameOnPlate { get { return new Vector3(-0.0265f, 0f, 0.129f); } }
         public const float V30NameOnPlateSize = 0.0105f;
 
@@ -375,7 +425,10 @@ namespace GameJam.Prototype
 
             string imagePath = spec.rootImage ? spec.image : spec.family + "/" + spec.image;
             Texture2D illustration = string.IsNullOrEmpty(spec.image) ? null : LoadV30(imagePath);
-            Texture2D frame = LoadV30("card_common/" + RarityFrame(rarity));
+            string frameName = RarityFrame(rarity);
+            Texture2D frame = string.IsNullOrEmpty(frameName)
+                ? null
+                : LoadV30("card_common/" + frameName);
             Color32[] canvas = new Color32[RefW * RefH];
 
             // 系列底板原图 132x174，卡框原图 148x194；按现有卡面坐标系等比落位。
@@ -397,7 +450,8 @@ namespace GameJam.Prototype
         {
             if (rarity == "传说") return "card_frame_gold_img";
             if (rarity == "稀有") return "card_frame_sliver_img";
-            return "card_frame_white_img";
+            // 普通卡不叠加白色稀有度外框，保留卡图自身的剪影轮廓。
+            return null;
         }
 
         private static Texture2D LoadV30(string relativePath)

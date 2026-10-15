@@ -139,6 +139,73 @@ namespace GameJam.EditorTools
             }
 
             sb.AppendLine();
+            sb.AppendLine("===== 美术卡身轮廓（卡面透明切角不应露出矩形底块）");
+            if (v30Materials != null && v30Materials.Count > 0 && v30Materials[0] != null)
+            {
+                GameObject holder = new GameObject("[ArtCheckCardShape]");
+                PlayCard cardView = CardFactory.Create(Card.Of(v30Materials[0]), holder.transform,
+                                                       Vector3.zero, Vector3.zero);
+                Transform shape = cardView != null ? cardView.transform.Find("CardShape") : null;
+                MeshFilter shapeFilter = shape != null ? shape.GetComponent<MeshFilter>() : null;
+                Mesh shapeMesh = shapeFilter != null ? shapeFilter.sharedMesh : null;
+                bool hasCollider = cardView != null && cardView.GetComponentInChildren<BoxCollider>() != null;
+                bool hasSideWalls = shapeMesh != null && shapeMesh.vertexCount > 0
+                    && shapeMesh.GetTriangles(0).Length > 0;
+                if (shape != null && hasCollider && hasSideWalls)
+                    sb.AppendLine("  [有] 卡面轮廓薄壳 " + shapeMesh.vertexCount + " 顶点，碰撞体保留");
+                else
+                {
+                    sb.AppendLine("  [缺] 美术卡未生成轮廓薄壳或拾取碰撞体");
+                    problems++;
+                }
+                UnityEngine.Object.DestroyImmediate(holder);
+            }
+            else
+            {
+                sb.AppendLine("  [缺] 没有可用于轮廓检查的素材卡");
+                problems++;
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("===== 法术卷轴模型（单独剪影网格，不生成卡面）");
+            Texture2D spellScroll = CardArt.SpellScrollIllustration;
+            if (spellScroll == null)
+            {
+                sb.AppendLine("  [缺] Art/CardV30/wood/spellscroll");
+                problems++;
+            }
+            else
+            {
+                List<Spell> spells = CardSpecs.Spells();
+                Spell firstSpell = spells != null && spells.Count > 0 ? spells[0] : null;
+                GameObject holder = new GameObject("[ArtCheckSpellScroll]");
+                PlayCard spellView = firstSpell != null
+                    ? CardFactory.Create(Card.Of(TableRulesV21.BuildSpellModule(firstSpell)), holder.transform,
+                                         Vector3.zero, Vector3.zero)
+                    : null;
+                MeshFilter meshFilter = spellView != null ? spellView.GetComponentInChildren<MeshFilter>() : null;
+                Mesh scrollMesh = meshFilter != null ? meshFilter.sharedMesh : null;
+                bool hasCardShape = spellView != null
+                    && (spellView.transform.Find("Body") != null || spellView.transform.Find("Face") != null);
+                bool interactive = spellView != null && spellView.GetComponent<BoxCollider>() != null
+                    && spellView.GetComponentInChildren<MeshRenderer>() != null;
+
+                if (scrollMesh == null || scrollMesh.vertexCount == 0 || scrollMesh.subMeshCount < 3
+                    || hasCardShape || !interactive)
+                {
+                    sb.AppendLine("  [生成失败] 需要有厚度的卷轴网格、可交互碰撞区，且不包含卡身/卡面");
+                    problems++;
+                }
+                else
+                {
+                    sb.AppendLine("  [有] " + spellScroll.width + "x" + spellScroll.height +
+                                  " 插画 → " + scrollMesh.vertexCount + " 顶点 / " + scrollMesh.subMeshCount +
+                                  " 子网格；拖放碰撞正常，无卡身/卡面");
+                }
+                Object.DestroyImmediate(holder);
+            }
+
+            sb.AppendLine();
             sb.AppendLine("===== 破壁机立绘（" + BlenderArt.ArtRoot + "）");
             // 立绘剪影现在走 ArtTextures.Read，不开 Read/Write 也能读 —— 只报告，不算问题
             foreach (string f in JuicerFrames)

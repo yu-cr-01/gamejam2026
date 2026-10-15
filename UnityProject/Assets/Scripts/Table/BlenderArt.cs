@@ -82,8 +82,8 @@ namespace GameJam.Prototype
         public bool faceCamera = false;
 
         // ── "3D 版"：按剪影挤出的厚度 ────────────────────────────────────
-        /// <summary>挤出厚度（世界单位）。0.06 ≈ 机身宽度的 9%，看着像一块厚板而不是纸片。</summary>
-        private const float ThicknessWorld = 0.06f;
+        /// <summary>挤出厚度（世界单位）。侧壁加厚后能读出木刻插画牌的立体边缘。</summary>
+        private const float ThicknessWorld = 0.085f;
 
         /// <summary>剪影网格横向格数（纵向按贴图比例算）。128 格 ≈ 每个格子 4.5 个像素。</summary>
         private const int CutoutCols = 128;
@@ -96,10 +96,10 @@ namespace GameJam.Prototype
         private const float CutoutAlpha = 0.2f;
 
         /// <summary>侧面颜色（深色，模拟厚板的切面）。</summary>
-        private static readonly Color WallColor = new Color(0.16f, 0.17f, 0.19f, 1f);
+        private static readonly Color WallColor = new Color(0.075f, 0.058f, 0.043f, 1f);
 
-        /// <summary>背面染色：同一张图压暗，从背后看是"机器的背面"而不是镜像的正面。</summary>
-        private static readonly Color BackTint = new Color(0.34f, 0.35f, 0.38f, 1f);
+        /// <summary>背面染色：同一张图压成暖棕墨色，从背后看仍像厚纸木刻。</summary>
+        private static readonly Color BackTint = new Color(0.47f, 0.35f, 0.24f, 1f);
 
         private JuicerRig rig;
         private Camera cam;
@@ -253,7 +253,8 @@ namespace GameJam.Prototype
         /// 【为什么阈值取 0.2 而不是 0.5】
         ///   几何略大于可见剪影，边缘由贴图自己的 alpha 收边，格子的锯齿就藏在全透明区域里。
         /// </summary>
-        private static Mesh BuildCutout(Texture2D idle, Texture2D[] moves, int cols, float depth)
+        private static Mesh BuildCutout(Texture2D idle, Texture2D[] moves, int cols, float depth,
+                                        float alphaThreshold = CutoutAlpha)
         {
             int w = idle.width, h = idle.height;
             int rows = Mathf.Max(4, Mathf.RoundToInt(cols * (h / (float)w)));
@@ -274,7 +275,7 @@ namespace GameJam.Prototype
 
                     bool on = false;
                     for (int f = 0; f < frames.Length && !on; f++)
-                        on = frames[f][index].a >= CutoutAlpha * 255f;
+                        on = frames[f][index].a >= alphaThreshold * 255f;
 
                     solid[j * cols + i] = on;
                 }
@@ -350,6 +351,25 @@ namespace GameJam.Prototype
             mesh.RecalculateNormals();
             mesh.RecalculateBounds();
             return mesh;
+        }
+
+        /// <summary>把单张透明插画挤出为有厚度的剪影网格，供桌面小模型复用。</summary>
+        public static Mesh BuildExtrudedCutout(Texture2D image, int cols, float depth, string meshName,
+                                               float alphaThreshold = CutoutAlpha)
+        {
+            if (image == null) return null;
+            try
+            {
+                Mesh mesh = BuildCutout(image, new Texture2D[0], Mathf.Max(8, cols),
+                                        Mathf.Max(0.001f, depth), Mathf.Clamp01(alphaThreshold));
+                if (mesh != null && !string.IsNullOrEmpty(meshName)) mesh.name = meshName;
+                return mesh;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[BlenderArt] 剪影网格生成失败：" + e.Message);
+                return null;
+            }
         }
 
         /// <summary>

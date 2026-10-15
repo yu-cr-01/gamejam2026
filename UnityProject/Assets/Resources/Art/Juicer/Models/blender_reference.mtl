@@ -1,0 +1,42 @@
+newmtl Enamel
+Kd 0.64 0.68 0.7
+d 1
+Ns 50
+illum 2
+map_Kd enamel_brush.png
+newmtl Ink
+Kd 0.038 0.046 0.049
+d 1
+Ns 50
+illum 2
+newmtl Rubber
+Kd 0.055 0.06 0.058
+d 1
+Ns 50
+illum 2
+newmtl Glass
+Kd 0.8 0.69 0.56
+d 0.3
+Ns 50
+illum 2
+map_Kd glass_paper.png
+newmtl Juice
+Kd 0.56 0.035 0.025
+d 1
+Ns 50
+illum 2
+newmtl JuiceTop
+Kd 0.75 0.065 0.035
+d 1
+Ns 50
+illum 2
+newmtl Steel
+Kd 0.57 0.57 0.49
+d 1
+Ns 50
+illum 2
+newmtl GlassEdge
+Kd 0.43 0.56 0.58
+d 1
+Ns 50
+illum 2

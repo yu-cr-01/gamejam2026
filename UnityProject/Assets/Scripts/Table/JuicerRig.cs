@@ -62,13 +62,13 @@ namespace GameJam.Prototype
         // 得分面板从罐子搬到了蜡烛下面的量筒（ScoreCylinderRig），那支量筒要用**同一组**
         // 取色 —— 它俩是同一个东西的前后两版，颜色对不上玩家会以为是两种信息。
         // 所以配色只有这一份定义，量筒那边直接引用，不另抄一套。
-        internal static readonly Color GlassColor   = new Color(0.80f, 0.90f, 0.97f, 0.26f);
-        internal static readonly Color LiquidColor  = new Color(0.98f, 0.62f, 0.18f, 0.86f);
-        internal static readonly Color TickColor    = new Color(0.94f, 0.96f, 0.98f, 0.90f);
-        internal static readonly Color TickHotColor = new Color(1.00f, 0.76f, 0.26f, 1.00f);
-        private static readonly Color RamColor     = new Color(0.80f, 0.83f, 0.88f);
-        private static readonly Color ResidueColor = new Color(0.52f, 0.36f, 0.19f);
-        private static readonly Color BladeColor   = new Color(0.90f, 0.93f, 0.97f);
+        internal static readonly Color GlassColor   = new Color(0.76f, 0.86f, 0.78f, 0.30f);
+        internal static readonly Color LiquidColor  = new Color(0.73f, 0.22f, 0.15f, 0.90f);
+        internal static readonly Color TickColor    = new Color(0.92f, 0.83f, 0.65f, 0.96f);
+        internal static readonly Color TickHotColor = new Color(1.00f, 0.68f, 0.28f, 1.00f);
+        private static readonly Color RamColor     = new Color(0.72f, 0.57f, 0.37f);
+        private static readonly Color ResidueColor = new Color(0.38f, 0.22f, 0.12f);
+        private static readonly Color BladeColor   = new Color(0.91f, 0.83f, 0.65f);
 
         // ── 运行时 ────────────────────────────────────────────────────
         private Transform liquid;          // 液面
@@ -78,6 +78,7 @@ namespace GameJam.Prototype
         private Transform ram;
         private Transform residue;
         private Transform blade;
+        private BlenderModelRig modelRig;
 
         // 程序化机身的两组根节点 —— 有美术立绘时要整组关掉（见 Build 末尾）
         private GameObject frameRoot;
@@ -90,6 +91,8 @@ namespace GameJam.Prototype
         /// 想只盖一半（比如保留刀片挤出来的反馈），把下面关掉、自己 SetActive 对应节点即可。
         /// </summary>
         public const bool HideProceduralMachineWhenArtPresent = true;
+        // 保留原有破壁机素材；不以程序生成的机架替代美术资源。
+        public static bool UseIllustratedMachine = true;
 
         /// <summary>
         /// 是否建榨汁机自己那个液体罐 + 刻度环（旧的得分面板）。
@@ -155,6 +158,9 @@ namespace GameJam.Prototype
             // 罐子 + 刻度环默认不建了（得分面板搬到了量筒，见 ShowJarAndScale 的注释）
             if (ShowJarAndScale) BuildJar();
 
+            modelRig = BlenderModelRig.Attach(this);
+            if (modelRig == null)
+            {
             BuildFrame();
             BuildPress();
 
@@ -167,7 +173,7 @@ namespace GameJam.Prototype
             BlenderArt art = null;
             try
             {
-                art = BlenderArt.Attach(this);
+                if (UseIllustratedMachine) art = BlenderArt.Attach(this);
             }
             catch (System.Exception e)
             {
@@ -178,6 +184,7 @@ namespace GameJam.Prototype
             {
                 if (frameRoot != null) frameRoot.SetActive(false);
                 if (pressRoot != null) pressRoot.SetActive(false);
+            }
             }
 
             // 得分面板：蜡烛下面那支量筒。★ 必须在下面的 SetScore(0, target) **之前**建好，
@@ -302,27 +309,46 @@ namespace GameJam.Prototype
             root.transform.SetParent(transform, false);
             frameRoot = root;
 
-            Material metal = MakeMetal(1.00f);
+            Material enamel = MakeLit(new Color(0.16f, 0.24f, 0.21f), 0.34f, 0.08f);
+            Material brass = MakeLit(new Color(0.72f, 0.46f, 0.20f), 0.48f, 0.28f);
+            Material wood = MakeLit(new Color(0.30f, 0.18f, 0.10f), 0.25f, 0.02f);
 
-            // 四根立柱：从桌面一直顶到顶板，罐子就在它们中间
+            // 木质脚座和铜金压台把这台机器接回桌面与卡牌的暖色调。
+            Cyl(root.transform, "WoodenFoot", PlateR * 1.22f, 0.026f,
+                new Vector3(0f, 0.013f, 0f), wood);
+            Cyl(root.transform, "FootBand", PlateR * 1.24f, 0.004f,
+                new Vector3(0f, 0.025f, 0f), brass);
+
+            // 四根搪瓷立柱：从桌面一直顶到顶板，罐子就在它们中间。
             for (int i = 0; i < 4; i++)
             {
                 float ang = Mathf.Deg2Rad * (45f + i * 90f);
                 Vector3 p = new Vector3(Mathf.Cos(ang) * PostR, TopPlateY * 0.5f, Mathf.Sin(ang) * PostR);
-                Cyl(root.transform, "Post" + i, PostThick, TopPlateY, p, metal);
+                Cyl(root.transform, "Post" + i, PostThick, TopPlateY, p, enamel);
+                Cyl(root.transform, "PostFootTrim" + i, PostThick * 1.45f, 0.009f,
+                    new Vector3(p.x, 0.038f, p.z), brass);
+                Cyl(root.transform, "PostHeadTrim" + i, PostThick * 1.45f, 0.009f,
+                    new Vector3(p.x, TopPlateY - 0.020f, p.z), brass);
             }
 
-            // 模具底板（下压台）
+            // 模具底板采用铜金外圈与深色压面，层次比单片银色圆柱更清楚。
+            Cyl(root.transform, "DieTrim", PlateR * 1.16f, 0.012f,
+                new Vector3(0f, DieTopY - PlateH - 0.006f, 0f), brass);
             Cyl(root.transform, "DiePlate", PlateR, PlateH,
-                new Vector3(0f, DieTopY - PlateH * 0.5f, 0f), metal);
+                new Vector3(0f, DieTopY - PlateH * 0.5f, 0f), enamel);
 
-            // 顶板
+            // 顶板与底板成套，外缘露出一圈铜色。
+            Cyl(root.transform, "TopTrim", PlateR * 1.16f, 0.012f,
+                new Vector3(0f, TopPlateY - 0.002f, 0f), brass);
             Cyl(root.transform, "TopPlate", PlateR, PlateH,
-                new Vector3(0f, TopPlateY + PlateH * 0.5f, 0f), metal);
+                new Vector3(0f, TopPlateY + PlateH * 0.5f, 0f), enamel);
 
-            // 顶上的进料口，说明"东西是从上面进去的"
+            // 顶上的进料口，深色口沿嵌在铜色进料斗里。
             Cyl(root.transform, "Hopper", PlateR * 0.42f, 0.070f,
-                new Vector3(0f, TopPlateY + PlateH + 0.035f, 0f), MakeMetal(0.85f));
+                new Vector3(0f, TopPlateY + PlateH + 0.035f, 0f), brass);
+            Cyl(root.transform, "HopperOpening", PlateR * 0.27f, 0.004f,
+                new Vector3(0f, TopPlateY + PlateH + 0.071f, 0f), wood);
+
         }
 
         // ── 冲压部分 ──────────────────────────────────────────────────
@@ -335,7 +361,7 @@ namespace GameJam.Prototype
 
             // 冲头：挂在顶板下面，靠改 y 上下运动
             GameObject ramGo = Cyl(root.transform, "Ram", RamR, RamH,
-                                   new Vector3(0f, RamRestY, 0f), MakeMetal(1.15f));
+                                   new Vector3(0f, RamRestY, 0f), MakeMetal(0.92f));
             ram = ramGo.transform;
 
             // 残渣：一坨压扁的球，代表榨完汁剩下的渣
@@ -495,6 +521,11 @@ namespace GameJam.Prototype
             if (phase == Phase.Idle) return;
 
             phaseT += Time.deltaTime;
+            if (modelRig != null)
+            {
+                if (phaseT >= 1.4f) { phase = Phase.Idle; phaseT = 0f; }
+                return;
+            }
 
             switch (phase)
             {

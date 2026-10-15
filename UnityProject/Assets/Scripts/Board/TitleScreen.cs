@@ -43,12 +43,7 @@ namespace GameJam.Prototype
         {
             if (cjk == null)
             {
-                string[] candidates =
-                {
-                    "Microsoft YaHei", "微软雅黑", "STKaiti", "KaiTi", "楷体",
-                    "SimHei", "SimSun", "PingFang SC", "Noto Sans CJK SC"
-                };
-                cjk = Font.CreateDynamicFontFromOSFont(candidates, 24);
+                cjk = GameUiTheme.Font;
             }
 
             if (titleStyle != null) return;

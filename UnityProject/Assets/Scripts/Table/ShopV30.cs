@@ -55,7 +55,6 @@ namespace GameJam.Prototype
     {
         public ShopMerchantV30 merchant;
         public readonly List<ShopOfferV30> offers = new List<ShopOfferV30>();
-        private readonly HashSet<string> purchasedIds = new HashSet<string>();
         public bool blankCardSpent;
         public int rerollsRemaining;
 
@@ -104,10 +103,8 @@ namespace GameJam.Prototype
 
         public void MarkBought(ShopOfferV30 offer)
         {
-            if (offer == null || string.IsNullOrEmpty(offer.id)) return;
-            purchasedIds.Add(offer.id);
-            for (int i = 0; i < offers.Count; i++)
-                if (offers[i].id == offer.id) offers[i].bought = true;
+            // 货位是购买单位：同名重复卡可以分别购买，但每个货位只能买一次。
+            if (offer != null) offer.bought = true;
         }
 
         public bool Reroll(bool payBlankCard)
@@ -173,7 +170,7 @@ namespace GameJam.Prototype
                 rarity = item.rarity,
                 spell = isSpell,
                 price = Price(cfg, item.rarity),
-                bought = purchasedIds.Contains(item.id),
+                bought = false,
                 available = available,
             });
         }

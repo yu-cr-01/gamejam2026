@@ -69,9 +69,6 @@ namespace GameJam.Prototype
         public string SaveSummary { get; private set; }
 
         // ── 蜡烛 ──────────────────────────────────────────────────────
-        private Transform   flame;
-        private Light       candleLight;
-        private float       flicker = 1f;
 
         // ── 榨汁机（点它启动）──────────────────────────────────────────
         private GameObject juicerProxy;    // 只在开场存在的点击代理
@@ -98,16 +95,6 @@ namespace GameJam.Prototype
         // 三块木牌靠在近侧，排成一行
         private const float PlaqueZ = -0.24f;
         private const float PlaqueGap = 0.40f;
-
-        // 蜡烛在左后角：不和书、木牌、榨汁机抢位置
-        private static readonly Vector3 CandleAt = new Vector3(-0.80f, 0f, 0.34f);
-
-        // 火苗基准尺寸。
-        //
-        // ★ 必须只在这里写一次：TickCandle 每帧都会拿它重算 localScale，
-        //   如果建模那边另外写一组数，每帧都会被覆盖掉 —— 改了不生效还不知道为什么。
-        private const float FlameW = 0.050f;
-        private const float FlameH = 0.095f;
 
         private static readonly Color WoodDark   = new Color(0.240f, 0.165f, 0.105f);
         private static readonly Color WoodLight  = new Color(0.420f, 0.300f, 0.190f);
@@ -143,14 +130,9 @@ namespace GameJam.Prototype
                 ? "接着上一局打：" + saveSummary
                 : (TableSaveIO.Exists ? "存档读不出来（原因见日志）" : "还没有存档");
 
-            BuildBook();
             // "继续"不加括号说明 —— 括号会让这行字比其他两块长出一截，
             // 而且横排三块的对齐会被撑歪。存档状态改由底部提示行交代。
-            BuildPlaque(IdContinue, "继　　续",       -PlaqueGap, ContinueEnabled);
-            BuildPlaque(IdSettings, "设　　置",        0f,         true);
-            BuildPlaque(IdQuit,     "退　　出",        PlaqueGap,  true);
 
-            BuildCandle();
             BuildJuicerTrigger();
 
             // ★ 最后把机位切到**开场那一屏自己的**那一条（TableSetup.TitleView）。
@@ -206,8 +188,6 @@ namespace GameJam.Prototype
             glowA       = 0f;
 
             Hovered = null;
-            flame = null;
-            candleLight = null;
             startingAt = -1f;
 
             // ★ 离开开场 = 把机位还回**桌面视角**。
@@ -312,8 +292,8 @@ namespace GameJam.Prototype
             //   牌组卡那边踩过：文字放在正的 localZ 上完全不渲染，
             //   同一张卡负半区的几行都正常。根因没查到，先按规律避开。
             float textY = top + 0.004f;
-            CardFactory.AddText(go.transform, "新　游　戏", 0f, 0.0150f, Gold, textY);
-            CardFactory.AddText(go.transform, "翻 开 它",  -0.115f, 0.0068f,
+            CardFactory.AddText(go.transform, "实 验 手 记", 0f, 0.0150f, Gold, textY);
+            CardFactory.AddText(go.transform, "翻 阅 配 方",  -0.115f, 0.0068f,
                                 new Color(0.70f, 0.60f, 0.42f), textY);
 
             MenuItem it = new MenuItem();
@@ -352,82 +332,11 @@ namespace GameJam.Prototype
             items.Add(it);
         }
 
-        // ── 蜡烛 ─────────────────────────────────────────────────────
-
-        /// <summary>
-        /// 蜡烛的根节点名。**摆位（<see cref="CandleAt"/>）和这个名字都只在这里写一次**：
-        /// 量筒得分板（ScoreCylinderRig）靠名字找到蜡烛、跟着它摆；
-        /// 桌面素材级联的布局自检（TableRulesV21.CollectLayoutObstacles）也靠它把蜡烛算成障碍。
-        /// 各抄一份的后果是"蜡烛搬走了、量筒和自检还盯着旧坐标"，而那看起来只是"没对齐"。
-        /// </summary>
+        /// <summary>保留旧标识供量筒和布局探针兼容；场景已不再创建蜡烛。</summary>
         public const string CandleName = "TitleCandle";
-
-        /// <summary>当前那根蜡烛的根节点（整局只有一根，见 BuildCandle 里的说明）。</summary>
-        private GameObject candleRoot;
-
-        private void BuildCandle()
-        {
-            // ★ 建新的之前先把上一根收掉。
-            //
-            // 【为什么要在这里收，而不是在 Clear() 里】
-            //   蜡烛和它的点光是**这一局的照明来源**（进关卡之后桌上还得亮着），
-            //   所以 Clear() 故意不拆它。但每次回开场都会再 Build() 一次 ——
-            //   不在建的时候收，蜡烛就会一根一根叠在同一个坐标上，
-            //   点光也跟着累积（实测：回一趟菜单之后场景里就有 **2 个** CandleLight，
-            //   而且两个都在闪、强度还不同步）。灯一多，Unity 的"每物体光源上限"
-            //   就会开始丢光 —— 桌面变暗/明暗不对这类问题会以"偶发"的形式冒出来。
-            CardFactory.DestroySafe(candleRoot);
-            candleRoot = null;
-
-            GameObject go = NewRoot(CandleName, CandleAt);
-            candleRoot = go;
-
-            // 蜡身
-            Cyl(go.transform, "Wax", 0.030f, 0.170f, new Vector3(0f, 0.085f, 0f),
-                new Color(0.870f, 0.830f, 0.730f));
-
-            // 顶面稍微亮一点，看着像有烛泪积在上面
-            Cyl(go.transform, "WaxTop", 0.032f, 0.010f, new Vector3(0f, 0.174f, 0f),
-                new Color(0.930f, 0.900f, 0.820f));
-
-            // 烛芯
-            Cyl(go.transform, "Wick", 0.0035f, 0.020f, new Vector3(0f, 0.188f, 0f),
-                new Color(0.140f, 0.110f, 0.080f));
-
-            // 火苗：一张永远朝着相机的面片
-            GameObject f = GameObject.CreatePrimitive(PrimitiveType.Quad);
-            f.name = "Flame";
-            f.transform.SetParent(go.transform, false);
-            f.transform.localPosition = new Vector3(0f, 0.228f, 0f);
-            f.transform.localScale    = new Vector3(FlameW, FlameH, 1f);
-
-            Collider fc = f.GetComponent<Collider>();
-            if (fc != null) fc.enabled = false;      // 别挡住菜单的射线
-
-            Renderer fr = f.GetComponent<Renderer>();
-            if (fr != null) fr.material = CardFactory.MakeUnlit(ProceduralArt.Flame());
-            flame = f.transform;
-
-            // 点光源：整张桌子的暖色都从这儿来
-            GameObject lg = new GameObject("CandleLight");
-            lg.transform.SetParent(go.transform, false);
-            lg.transform.localPosition = new Vector3(0f, 0.235f, 0f);
-
-            candleLight = lg.AddComponent<Light>();
-            candleLight.type      = LightType.Point;
-            candleLight.color     = new Color(1.00f, 0.72f, 0.38f);
-            candleLight.range     = 3.2f;
-            candleLight.intensity = 1.6f;
-            candleLight.shadows   = LightShadows.None;   // 点光阴影很贵，这个尺寸看不出来
-        }
-
-        // ══════════════════════════════════════════════════════════════
-        //  输入 + 烛光
-        // ══════════════════════════════════════════════════════════════
 
         void Update()
         {
-            TickCandle();
 
             if (loop == null || loop.phase != TablePhase.Title) return;
             if (cam == null) return;
@@ -454,6 +363,7 @@ namespace GameJam.Prototype
             }
 
             Ray ray = cam.ScreenPointToRay(Input.mousePosition);
+            if (TableHud.MenuPointerBlocked) { Hovered = null; Animate(); return; }
             Hovered = HitItem(ray);
 
             if (Input.GetMouseButtonDown(0) && !string.IsNullOrEmpty(Hovered))
@@ -469,28 +379,6 @@ namespace GameJam.Prototype
         /// 每帧重抽会变成刺眼的噪点闪烁，叠起来才有"呼吸"感。
         /// 和 2D 那版用的是同一组频率，两边看起来才是同一根蜡烛。
         /// </summary>
-        private void TickCandle()
-        {
-            float t = Time.time;
-            flicker = 0.82f
-                    + 0.10f * Mathf.Sin(t * 3.1f)
-                    + 0.06f * Mathf.Sin(t * 7.7f + 1.3f)
-                    + 0.04f * Mathf.Sin(t * 13.9f + 2.7f);
-
-            if (candleLight != null) candleLight.intensity = 2.4f * flicker;
-
-            if (flame == null) return;
-
-            // 宽高各自抖、频率不同，火苗才会"扭"而不是整体缩放
-            float fh = (0.93f + 0.10f * Mathf.Sin(t * 5.3f));
-            float fw = (0.92f + 0.13f * Mathf.Sin(t * 8.1f + 0.9f));
-            flame.localScale = new Vector3(FlameW * fw, FlameH * fh, 1f);
-
-            // 火苗永远正对相机 —— 侧看时不能变成一张纸片
-            if (cam != null)
-                flame.rotation = Quaternion.LookRotation(flame.position - cam.transform.position);
-        }
-
         /// <summary>
         /// 射线打到哪一项（返回 id，没打到返回 null）。
         ///
@@ -592,6 +480,12 @@ namespace GameJam.Prototype
         }
 
         /// <summary>点了某一项。</summary>
+        public void ActivateMenu(string id)
+        {
+            if (loop == null || loop.phase != TablePhase.Title || IsStarting) return;
+            Activate(id);
+        }
+
         private void Activate(string id)
         {
             for (int i = 0; i < items.Count; i++)

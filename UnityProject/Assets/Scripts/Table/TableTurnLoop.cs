@@ -38,7 +38,16 @@ namespace GameJam.Prototype
 
         /// <summary>回合结束后出现的商店</summary>
         Shop,
+
+        /// <summary>教程说明或 NPC 对话。暂停主流程直到玩家继续。</summary>
+        CampaignDialog,
+
+        /// <summary>关卡结算后触发的隐藏房间。</summary>
+        HiddenRoom,
     }
+
+    public enum HiddenRoomKindV1 { None, Mercury, Sacrifice }
+    public enum HiddenRoomStageV1 { MaterialChoice, ProfessionChoice, ProfessionDataMissing }
 
     /// <summary>
     /// 3D 桌面上的回合循环 —— 这一份才是"玩法"在桌面上跑起来的驱动源。
@@ -109,6 +118,55 @@ namespace GameJam.Prototype
         /// <summary>v3.0 商店本次访问状态（每回合结束最多进入一次）。</summary>
         public ShopVisitV30 shopVisit;
         public bool shopRollConfirmationOpen;
+
+        public bool tutorialActive;
+        public bool TutorialCompleted { get { return CampaignRulesV1.Progress.tutorialCompleted; } }
+        public bool HasCampaignOverlay { get { return phase == TablePhase.CampaignDialog; } }
+        public bool IsHiddenRoom { get { return phase == TablePhase.HiddenRoom; } }
+        public string campaignOverlayTitle = "";
+        public string campaignOverlayText = "";
+        public string[] campaignOverlayCallouts;
+        public bool campaignOverlayIsInfographic;
+        public HiddenRoomKindV1 hiddenRoom = HiddenRoomKindV1.None;
+        public HiddenRoomStageV1 hiddenRoomStage;
+        public List<string> hiddenRoomMaterialIds = new List<string>();
+        public List<CampaignProfessionV1> hiddenRoomProfessionOffers = new List<CampaignProfessionV1>();
+        public string hiddenRoomReflection = "";
+        public bool regularTauntPlayed;
+        public bool hiddenRoomsRolledForLevel;
+        public bool tutorialWrapPending;
+        public bool tutorialWrapPassed;
+
+        private enum CampaignAction
+        {
+            None,
+            TutorialIntro,
+            TutorialInfographic,
+            TutorialPersonality,
+            TutorialStartDeck,
+            TutorialBlade,
+            TutorialAttributes,
+            TutorialTarget,
+            TutorialFourthStart,
+            TutorialShop,
+            TutorialFinish,
+            LevelBriefing,
+            NpcIntro,
+            Taunt,
+            Urge,
+            Praise,
+            Farewell,
+        }
+
+        private CampaignAction campaignAction;
+        private TablePhase campaignReturnPhase;
+        private bool tutorialDeckPending;
+        private bool tutorialFourthStartShown;
+        private bool tutorialTargetPending;
+        private readonly List<HiddenRoomKindV1> hiddenRoomQueue = new List<HiddenRoomKindV1>();
+        private TablePhase hiddenRoomReturnPhase = TablePhase.LevelResult;
+        private int mercuryReflectionIndex;
+        private int sacrificeReflectionIndex;
 
         /// <summary>
         /// 已经放进投放区、等玩家按确认的那些牌。
@@ -199,6 +257,21 @@ namespace GameJam.Prototype
         /// <summary>停在场界面。</summary>
         public bool IsTitle { get { return phase == TablePhase.Title; } }
 
+        /// <summary>仅在本关进行、商店或结算时显示跨关隐藏房概率栏。</summary>
+        public bool ShowCampaignMeters
+        {
+            get
+            {
+                if (!V21) return false;
+                if (phase == TablePhase.Select || phase == TablePhase.Shop ||
+                    phase == TablePhase.LevelEnd || phase == TablePhase.LevelResult ||
+                    phase == TablePhase.HiddenRoom) return true;
+                return phase == TablePhase.CampaignDialog &&
+                    (campaignReturnPhase == TablePhase.Select || campaignReturnPhase == TablePhase.Shop ||
+                     campaignReturnPhase == TablePhase.LevelEnd);
+            }
+        }
+
         /// <summary>停在关卡界面。</summary>
         public bool IsLevelSelect { get { return phase == TablePhase.LevelSelect; } }
 
@@ -266,7 +339,228 @@ namespace GameJam.Prototype
 
             if (titleRig != null) titleRig.Clear();
 
+            if (V21 && !CampaignRulesV1.Progress.tutorialCompleted)
+            {
+                tutorialActive = true;
+                tutorialDeckPending = true;
+                levelIndex = 0;
+                ShowCampaignDialog("导师", CampaignRulesV1.Config.tutorialIntro,
+                    CampaignAction.TutorialIntro, TablePhase.Title);
+                return;
+            }
+
             OpenLevelSelect();
+        }
+
+        private void ShowCampaignDialog(string title, string body, CampaignAction action,
+                                        TablePhase returnPhase, bool infographic = false,
+                                        string[] callouts = null)
+        {
+            campaignOverlayTitle = string.IsNullOrEmpty(title) ? "导师" : title;
+            campaignOverlayText = body ?? "";
+            campaignAction = action;
+            campaignReturnPhase = returnPhase;
+            campaignOverlayIsInfographic = infographic;
+            campaignOverlayCallouts = callouts;
+            phase = TablePhase.CampaignDialog;
+        }
+
+        public void ContinueCampaignDialog()
+        {
+            if (phase != TablePhase.CampaignDialog) return;
+            CampaignAction action = campaignAction;
+            campaignAction = CampaignAction.None;
+            campaignOverlayCallouts = null;
+            campaignOverlayIsInfographic = false;
+
+            switch (action)
+            {
+                case CampaignAction.TutorialIntro:
+                    ShowCampaignDialog("桌面导览", "先认清这张桌子上的三处关键位置。",
+                        CampaignAction.TutorialInfographic, TablePhase.Title, true,
+                        CampaignRulesV1.Config.tableCallouts);
+                    return;
+                case CampaignAction.TutorialInfographic:
+                    ShowCampaignDialog("导师", CampaignRulesV1.Config.tutorialPersonality,
+                        CampaignAction.TutorialPersonality, TablePhase.Title);
+                    return;
+                case CampaignAction.TutorialPersonality:
+                    BeginTutorialDeckPick();
+                    return;
+                case CampaignAction.TutorialBlade:
+                    phase = TablePhase.BladePick;
+                    return;
+                case CampaignAction.TutorialAttributes:
+                    tutorialTargetPending = true;
+                    phase = TablePhase.Select;
+                    return;
+                case CampaignAction.TutorialTarget:
+                    phase = TablePhase.Select;
+                    return;
+                case CampaignAction.TutorialFourthStart:
+                case CampaignAction.TutorialShop:
+                case CampaignAction.NpcIntro:
+                case CampaignAction.Taunt:
+                case CampaignAction.Urge:
+                case CampaignAction.Praise:
+                case CampaignAction.Farewell:
+                    phase = campaignReturnPhase;
+                    return;
+                case CampaignAction.LevelBriefing:
+                    ShowNpcIntro();
+                    return;
+                case CampaignAction.TutorialFinish:
+                    CampaignRulesV1.Progress.tutorialCompleted = true;
+                    CampaignRulesV1.SaveProgress();
+                    tutorialActive = false;
+                    tutorialDeckPending = false;
+                    NextLevel();
+                    return;
+                default:
+                    phase = campaignReturnPhase;
+                    return;
+            }
+        }
+
+        private void BeginTutorialDeckPick()
+        {
+            GameConfig.EnsureLoaded();
+            levels = GameConfig.Levels();
+            if (levels.Count == 0) levels.Add(GameConfig.Level());
+            levelIndex = 0;
+            level = new Level(levels[0]);
+            tutorialDeckPending = true;
+            StartDeckPick();
+        }
+
+        private void ShowLevelBriefing()
+        {
+            CampaignLevelV1 content = CampaignRulesV1.Level(levelIndex);
+            if (content == null) return;
+            string body = (string.IsNullOrEmpty(content.objective) ? "目標分 " + level.TargetScore : content.objective)
+                        + "\n特殊條件：" + (string.IsNullOrEmpty(content.specialCondition) ? "無" : content.specialCondition);
+            ShowCampaignDialog("关卡简报", body, CampaignAction.LevelBriefing, TablePhase.Select, true,
+                new[] { "目标：" + level.TargetScore + " 分", "特殊条件：" + (content.specialCondition ?? "无") });
+        }
+
+        private void ShowNpcIntro()
+        {
+            CampaignLevelV1 content = CampaignRulesV1.Level(levelIndex);
+            if (content == null) { phase = TablePhase.Select; return; }
+            ShowCampaignDialog(content.npcName, content.intro, CampaignAction.NpcIntro, TablePhase.Select);
+        }
+
+        public void ChooseHiddenRoomMaterial(int optionIndex)
+        {
+            if (phase != TablePhase.HiddenRoom || hiddenRoom != HiddenRoomKindV1.Mercury ||
+                hiddenRoomStage != HiddenRoomStageV1.MaterialChoice ||
+                optionIndex < 0 || optionIndex >= hiddenRoomMaterialIds.Count || rulesV21 == null) return;
+
+            string id = hiddenRoomMaterialIds[optionIndex];
+            if (!rulesV21.AddCampaignMaterial(id)) return;
+            rulesV21.RebuildHand();
+            rulesV21.SyncTableVisuals();
+            PrepareHiddenRoomProfessionChoice(2);
+        }
+
+        public void ChooseHiddenRoomProfession(int optionIndex)
+        {
+            if (phase != TablePhase.HiddenRoom || hiddenRoomStage != HiddenRoomStageV1.ProfessionChoice ||
+                optionIndex < 0 || optionIndex >= hiddenRoomProfessionOffers.Count) return;
+            CampaignRulesV1.RecordSpecialProfession(hiddenRoomProfessionOffers[optionIndex]);
+            FinishHiddenRoom();
+        }
+
+        public void ContinueHiddenRoom()
+        {
+            if (phase != TablePhase.HiddenRoom || hiddenRoomStage != HiddenRoomStageV1.ProfessionDataMissing) return;
+            FinishHiddenRoom();
+        }
+
+        private void PrepareHiddenRoomProfessionChoice(int tier)
+        {
+            hiddenRoomProfessionOffers = CampaignRulesV1.DrawProfessions(tier, 3);
+            hiddenRoomStage = hiddenRoomProfessionOffers.Count > 0
+                ? HiddenRoomStageV1.ProfessionChoice
+                : HiddenRoomStageV1.ProfessionDataMissing;
+        }
+
+        private void EnterNextHiddenRoom()
+        {
+            if (hiddenRoomQueue.Count == 0)
+            {
+                hiddenRoom = HiddenRoomKindV1.None;
+                if (setup != null) setup.SetHiddenRoomTheme("");
+                if (tutorialWrapPending) ShowTutorialWrapUp();
+                else phase = hiddenRoomReturnPhase;
+                return;
+            }
+
+            hiddenRoom = hiddenRoomQueue[0];
+            hiddenRoomQueue.RemoveAt(0);
+            if (hiddenRoom == HiddenRoomKindV1.Mercury)
+                hiddenRoomReflection = NextReflection(CampaignRulesV1.Config.mercuryReflections, ref mercuryReflectionIndex);
+            else
+                hiddenRoomReflection = NextReflection(CampaignRulesV1.Config.sacrificeReflections, ref sacrificeReflectionIndex);
+            if (setup != null) setup.SetHiddenRoomTheme(hiddenRoom == HiddenRoomKindV1.Mercury ? "mercury" : "sacrifice");
+
+            if (hiddenRoom == HiddenRoomKindV1.Mercury)
+            {
+                hiddenRoomMaterialIds = CampaignRulesV1.MercuryMaterialIds();
+                hiddenRoomStage = HiddenRoomStageV1.MaterialChoice;
+            }
+            else
+            {
+                CampaignHiddenRoomsV1 roomConfig = CampaignRulesV1.Config.hiddenRooms;
+                int reward = roomConfig != null ? roomConfig.sacrificeBlankReward : 5;
+                if (rulesV21 != null)
+                {
+                    rulesV21.GrantCampaignBlankCards(reward);
+                    CampaignRulesV1.RecordBlankCards(reward);
+                    rulesV21.RebuildHand();
+                    rulesV21.SyncTableVisuals();
+                }
+                PrepareHiddenRoomProfessionChoice(1);
+            }
+            phase = TablePhase.HiddenRoom;
+        }
+
+        private void FinishHiddenRoom()
+        {
+            hiddenRoomProfessionOffers.Clear();
+            hiddenRoomMaterialIds.Clear();
+            hiddenRoom = HiddenRoomKindV1.None;
+            EnterNextHiddenRoom();
+        }
+
+        private static string NextReflection(string[] lines, ref int index)
+        {
+            if (lines == null || lines.Length == 0) return "";
+            string result = lines[index % lines.Length];
+            index = (index + 1) % lines.Length;
+            return result;
+        }
+
+        private void RollHiddenRoomsAfterLevel()
+        {
+            if (hiddenRoomsRolledForLevel) return;
+            hiddenRoomsRolledForLevel = true;
+            hiddenRoomQueue.Clear();
+            if (CampaignRulesV1.RollMercuryRoom()) hiddenRoomQueue.Add(HiddenRoomKindV1.Mercury);
+            if (CampaignRulesV1.RollSacrificeRoom()) hiddenRoomQueue.Add(HiddenRoomKindV1.Sacrifice);
+            hiddenRoomReturnPhase = TablePhase.LevelResult;
+            if (hiddenRoomQueue.Count > 0) EnterNextHiddenRoom();
+            else if (tutorialWrapPending) ShowTutorialWrapUp();
+            else phase = TablePhase.LevelResult;
+        }
+
+        private void ShowTutorialWrapUp()
+        {
+            tutorialWrapPending = false;
+            string text = tutorialWrapPassed
+                ? CampaignRulesV1.Config.tutorialPassed
+                : CampaignRulesV1.Config.tutorialFailed;
+            ShowCampaignDialog("导师", text, CampaignAction.TutorialFinish, TablePhase.LevelResult);
         }
 
         /// <summary>
@@ -452,8 +746,10 @@ namespace GameJam.Prototype
             // 刀片卡同理（它不在 tableCards 里，V21ClearTable 管不到它）
             KillBladeCard();
 
-            Choice deckChoice = FindChoice(GameConfig.DeckPickId);
-            activeDeckChoice = MakeDeckChoiceForCurrentRules(deckChoice);
+            Choice deckChoice = tutorialDeckPending
+                ? CampaignRulesV1.TutorialDeckChoice()
+                : FindChoice(GameConfig.DeckPickId);
+            activeDeckChoice = tutorialDeckPending ? deckChoice : MakeDeckChoiceForCurrentRules(deckChoice);
             deckChoice = activeDeckChoice;
 
             if (deckChoice != null && deckChoice.OptionCount > 0 && choiceRig != null)
@@ -549,8 +845,23 @@ namespace GameJam.Prototype
             if (V21)
             {
                 // 发初始手牌：4 素材 + 1 法术（正文 §2.6 / §八），并建出卡表解析报告
+                CampaignLevelV1 campaignLevel = CampaignRulesV1.Level(levelIndex);
+                rulesV21.ConfigureCampaignModifiers(
+                    campaignLevel != null ? campaignLevel.scoreNumerator : 1,
+                    campaignLevel != null ? campaignLevel.scoreDenominator : 1,
+                    campaignLevel != null ? campaignLevel.shapeChangeScoreBonus : 0);
                 rulesV21.BeginLevel(deck, level != null ? level.TargetScore : 0);
+                if (level != null) level.passByDefault = false;
+                if (campaignLevel != null && campaignLevel.startingSpellIds != null)
+                {
+                    for (int i = 0; i < campaignLevel.startingSpellIds.Length; i++)
+                        rulesV21.AddCampaignSpell(campaignLevel.startingSpellIds[i]);
+                    rulesV21.RebuildHand();
+                }
                 staged.Clear();
+                regularTauntPlayed = false;
+                tutorialFourthStartShown = false;
+                hiddenRoomsRolledForLevel = false;
             }
 
             // ★ 两个槽的名字跟规则模式走（v2.1 = 上桌位 / 附魔位，旧流程 = 素材槽 / 法术槽）。
@@ -587,9 +898,13 @@ namespace GameJam.Prototype
 
             choiceRig.ClearDeckCards();
             StartLevelWith(o.deck);
+            tutorialDeckPending = false;
 
             notice = "牌组已定：" + o.deck.name;
             phase  = TablePhase.BladePick;
+            if (tutorialActive)
+                ShowCampaignDialog("导师", CampaignRulesV1.Config.tutorialBlade,
+                    CampaignAction.TutorialBlade, TablePhase.BladePick);
         }
 
         /// <summary>按下「确认刀片，进入关卡」。</summary>
@@ -620,6 +935,10 @@ namespace GameJam.Prototype
 
                 rulesV21.StartFirstTurn();
 
+                CampaignLevelV1 campaignLevel = CampaignRulesV1.Level(levelIndex);
+                if (campaignLevel != null && campaignLevel.startingCold > 0)
+                    rulesV21.blade.layers.Add(LayerKind.Cold, campaignLevel.startingCold, true);
+
                 // 刀片是这一局的**友方单位**，整局都坐在桌面中心（和旧流程同一条理由）
                 BuildBladeCard();
 
@@ -638,6 +957,12 @@ namespace GameJam.Prototype
 
                 phase = TablePhase.Select;
                 SyncJuicer();
+                if (tutorialActive)
+                    ShowCampaignDialog("导师", CampaignRulesV1.Config.tutorialAttributes,
+                        CampaignAction.TutorialAttributes, TablePhase.Select, true,
+                        new[] { "H：硬度 / 稀有度与刀片耐久", "D：耐久 / 可启动次数", "V：分值 / 目标与刀片相加" });
+                else
+                    ShowLevelBriefing();
                 return;
             }
 
@@ -734,8 +1059,17 @@ namespace GameJam.Prototype
         {
             if (card == null) return;
 
-            CardFactory.AddText(card.transform, "刀 片", -0.225f, 0.0105f,
-                                new Color(0.98f, 0.76f, 0.32f), 0.002f);
+            GameObject marker = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            marker.name = "BladeFrame";
+            marker.transform.SetParent(card.transform, false);
+            marker.transform.localPosition = new Vector3(0f, -0.001f, 0f);
+            marker.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            marker.transform.localScale = new Vector3(0.28f, 0.385f, 1f);
+            Collider hit = marker.GetComponent<Collider>();
+            if (hit != null) hit.enabled = false;
+            Material mat = CardFactory.MakeUnlit(ProceduralArt.SlotFrame(2));
+            mat.color = new Color(0.98f, 0.76f, 0.32f);
+            marker.GetComponent<Renderer>().sharedMaterial = mat;
         }
 
         /// <summary>
@@ -1402,6 +1736,12 @@ namespace GameJam.Prototype
             lastPlayed = "1 张素材上桌";
             notice = "上桌：" + st.name + "（已自动选为启动目标）　出牌不消耗行动机会，还剩 "
                      + rulesV21.actionPoints + " 次 —— 点「启动破壁机」才消耗";
+            if (tutorialActive && tutorialTargetPending)
+            {
+                tutorialTargetPending = false;
+                ShowCampaignDialog("导师", CampaignRulesV1.Config.tutorialTarget,
+                    CampaignAction.TutorialTarget, TablePhase.Select);
+            }
             return true;
         }
 
@@ -1424,6 +1764,8 @@ namespace GameJam.Prototype
                 return;
             }
 
+            int blankCardsBefore = rulesV21.blankCount;
+            MaterialState startedMaterial = rulesV21.selected;
             GameJam.Rules.TurnResult r = rulesV21.TryActivate(rulesV21.selected);
             if (r == null) return;
 
@@ -1443,6 +1785,33 @@ namespace GameJam.Prototype
             }
 
             notice = line;
+
+            int newBlankCards = rulesV21.blankCount - blankCardsBefore;
+            if (newBlankCards > 0) CampaignRulesV1.RecordBlankCards(newBlankCards);
+            if (startedMaterial != null && r.LogContains("并入刀片"))
+                CampaignRulesV1.RecordSacrifice(Mathf.Max(0, startedMaterial.H));
+
+            if (tutorialActive && !tutorialFourthStartShown && rulesV21.turnIndex == 1 &&
+                rulesV21.startsThisTurn == 4 && !rulesV21.levelOver)
+            {
+                tutorialFourthStartShown = true;
+                ShowCampaignDialog("导师", CampaignRulesV1.Config.tutorialFourthStart,
+                    CampaignAction.TutorialFourthStart, TablePhase.Select);
+                return;
+            }
+
+            if (!tutorialActive && !regularTauntPlayed && rulesV21.turnIndex == 1 &&
+                rulesV21.startsThisTurn == 1 && !rulesV21.levelOver)
+            {
+                CampaignLevelV1 campaignLevel = CampaignRulesV1.Level(levelIndex);
+                if (campaignLevel != null && !string.IsNullOrEmpty(campaignLevel.taunt))
+                {
+                    regularTauntPlayed = true;
+                    ShowCampaignDialog(campaignLevel.npcName, campaignLevel.taunt,
+                        CampaignAction.Taunt, TablePhase.Select);
+                    return;
+                }
+            }
 
             // 爆刀 / 达标 → 直接进关卡结束（不再等回合一格一格走）
             if (rulesV21.levelOver) phase = TablePhase.LevelEnd;
@@ -1470,12 +1839,30 @@ namespace GameJam.Prototype
             if (rulesV21.levelOver) { phase = TablePhase.LevelEnd; return; }
 
             int completedTurn = rulesV21.turnIndex;
-            rulesV21.EndRound();
+            int sacrificeH = rulesV21.PendingSacrificeH;
+            int blankCardsBeforeEnd = rulesV21.blankCount;
+            GameJam.Rules.TurnResult endedTurn = rulesV21.EndRound();
+
+            int endRoundBlanks = rulesV21.blankCount - blankCardsBeforeEnd;
+            if (endRoundBlanks > 0) CampaignRulesV1.RecordBlankCards(endRoundBlanks);
+
+            // 只有最后一次启动的素材实际并入刀片，才计入献祭房概率。
+            if (sacrificeH > 0 && endedTurn != null && endedTurn.LogContains("并入刀片"))
+                CampaignRulesV1.RecordSacrifice(sacrificeH);
 
             if (rulesV21.levelOver)
             {
                 notice = "4 回合已用尽 → 关卡结束，最终分数 " + rulesV21.score;
-                phase = TablePhase.LevelEnd;
+                CampaignLevelV1 campaignLevel = CampaignRulesV1.Level(levelIndex);
+                if (!tutorialActive && completedTurn >= 4 && campaignLevel != null &&
+                    !string.IsNullOrEmpty(campaignLevel.farewell))
+                {
+                    if (juicer != null && juicer.scoreBoard != null) juicer.scoreBoard.PlayEruption();
+                    ShowCampaignDialog(campaignLevel.npcName, campaignLevel.farewell,
+                        CampaignAction.Farewell, TablePhase.LevelEnd);
+                }
+                else
+                    phase = TablePhase.LevelEnd;
                 return;
             }
 
@@ -1497,6 +1884,9 @@ namespace GameJam.Prototype
                     shopRollConfirmationOpen = false;
                     notice = shopVisit.merchant.name + "已到访；当前得分 " + rulesV21.score + "，空白卡 " + rulesV21.blankCount;
                     phase = TablePhase.Shop;
+                    if (tutorialActive && completedTurn == 1)
+                        ShowCampaignDialog(shopVisit.merchant.name, CampaignRulesV1.Config.tutorialShopGreeting,
+                            CampaignAction.TutorialShop, TablePhase.Shop);
                     return;
                 }
             }
@@ -1531,6 +1921,7 @@ namespace GameJam.Prototype
             }
 
             rulesV21.score -= offer.price;
+            rulesV21.SyncJuicer();
             shopVisit.MarkBought(offer);
             rulesV21.RebuildHand();
             rulesV21.SyncTableVisuals();
@@ -1586,6 +1977,17 @@ namespace GameJam.Prototype
             rulesV21.SyncTableVisuals();
             rulesV21.SyncJuicer();
             notice = "离开商店；第 " + rulesV21.turnIndex + " 回合开始";
+
+            if (!tutorialActive && (rulesV21.turnIndex == 2 || rulesV21.turnIndex == 3))
+            {
+                CampaignLevelV1 content = CampaignRulesV1.Level(levelIndex);
+                string text = content != null
+                    ? (rulesV21.turnIndex == 2 ? content.urge : content.praise) : "";
+                if (!string.IsNullOrEmpty(text))
+                    ShowCampaignDialog(content.npcName, text,
+                        rulesV21.turnIndex == 2 ? CampaignAction.Urge : CampaignAction.Praise,
+                        TablePhase.Select);
+            }
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -1904,6 +2306,11 @@ namespace GameJam.Prototype
 
             // ── ③ 到这里才动现场：这一关按存档重开（旧状态机的壳），再把规则状态覆盖上去 ──
             levelIndex = idx;
+            CampaignLevelV1 campaignLevel = CampaignRulesV1.Level(levelIndex);
+            rulesV21.ConfigureCampaignModifiers(
+                campaignLevel != null ? campaignLevel.scoreNumerator : 1,
+                campaignLevel != null ? campaignLevel.scoreDenominator : 1,
+                campaignLevel != null ? campaignLevel.shapeChangeScoreBonus : 0);
             level = new Level(levels[idx]);
             level.Begin(deck, GameConfig.DefaultBlade());
 
@@ -2115,12 +2522,34 @@ namespace GameJam.Prototype
         /// <summary>关卡结束 → 总结算。到这里才真正判定这一关过没过。</summary>
         public void ShowLevelResult()
         {
+            if (V21 && rulesV21 != null && level != null)
+            {
+                level.passByDefault = false;
+                level.turn.score = rulesV21.score;
+                level.turn.targetScore = rulesV21.targetScore;
+            }
             if (level != null) level.Finish();
-            phase = TablePhase.LevelResult;
+
+            if (tutorialActive)
+            {
+                tutorialWrapPassed = rulesV21 != null && rulesV21.score >= rulesV21.targetScore;
+                tutorialWrapPending = true;
+                RollHiddenRoomsAfterLevel();
+                return;
+            }
+
+            RollHiddenRoomsAfterLevel();
         }
 
         /// <summary>本关是否达标。判定在 Level 里，这里只是转发。</summary>
-        public bool Passed { get { return level != null && level.IsCleared; } }
+        public bool Passed
+        {
+            get
+            {
+                if (V21 && rulesV21 != null) return rulesV21.score >= rulesV21.targetScore;
+                return level != null && level.IsCleared;
+            }
+        }
 
         /// <summary>
         /// 把得分推给罐子的液面。
